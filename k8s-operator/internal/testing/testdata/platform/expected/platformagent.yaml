@@ -233,6 +233,7 @@ data:
       - session_otel_bridge
       - tool_call_audit
       - incident_context
+      - bootstrap_onboarding
     terminal:
       backend: local
       cwd: /opt/data
@@ -385,7 +386,7 @@ spec:
   template:
     metadata:
       annotations:
-        kubeagents.x-k8s.io/config-hash: d408fc4f9e050ce857dc760e62825902903f4120d11c040717f4f79786ec1ace
+        kubeagents.x-k8s.io/config-hash: cd78fa32a6e3f78611e8ab4ebe539e8f6daa08246f9b1b9c211c6f581c720ad9
         kubeagents.x-k8s.io/fluent-bit-config-hash: 50923ab88e1741b0729c37837bc1c3869161e3161402494a4ee64cda3a2cfab3
         kubeagents.x-k8s.io/proxy-policy-hash: db64678068cfed7481ee3b503145c688a2b49257e8e534565333c172185a750d
         kubeagents.x-k8s.io/settings-config-hash: 9db5b5cb5fb8ec46b1a0572ef34ef27e0ed44dc1f787a4a76bdd75f43934c8b9

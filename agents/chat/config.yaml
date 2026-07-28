@@ -131,9 +131,12 @@ memory:
 
 # Chat ingress plugins live with the front door (session_store persists the
 # gateway session; the otel bridge and tool-call audit ride along).
+# bootstrap_onboarding hooks pre_llm_call on the first human turn, so it must sit
+# on the profile that actually receives chat ingress — not on the platform specialist.
 plugins:
   enabled:
     - hermes_otel
     - session_store
     - session_otel_bridge
     - tool_call_audit
+    - bootstrap_onboarding

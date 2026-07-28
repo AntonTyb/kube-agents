@@ -266,8 +266,10 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent) string {
 	// Execution & Display UX configuration
 	cfg.Approvals.CronMode = "approve"
 	cfg.Web.Backend = "ddgs"
-	// Enable incident_context plugin by default to parse and rewrite GChat/Slack threaded incident replies
-	cfg.Plugins.Enabled = []string{"hermes_otel", "session_store", "session_otel_bridge", "tool_call_audit", "incident_context"}
+	// Enable incident_context plugin by default to parse and rewrite GChat/Slack threaded incident replies.
+	// bootstrap_onboarding rides on the default profile because it hooks pre_llm_call on the first
+	// human turn — chat ingress lands here, not on the platform specialist.
+	cfg.Plugins.Enabled = []string{"hermes_otel", "session_store", "session_otel_bridge", "tool_call_audit", "incident_context", "bootstrap_onboarding"}
 	cfg.Display.Platforms = map[string]map[string]any{}
 	cfg.Memory.MemoryEnabled = false
 	cfg.Memory.Provider = "multiuser_memory"
