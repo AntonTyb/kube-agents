@@ -2,18 +2,22 @@
 
 This directory contains the automation scripts for provisioning and tearing down the GCP and GKE infrastructure required by the `kube-agents` platform agent and operator.
 
+> **This page is the canonical description of what each script does.** `INSTALL.md`, the operator
+> README, and the documentation site all link here rather than restating the steps. If you change a
+> script's behaviour, update it here — and nowhere else.
+
 ## Architecture & Configuration Flow
 
-All scripts are modular and idempotent. They share a single configuration state stored in a local [vars.sh](vars.sh) file (which is git-ignored).
+All scripts are modular and idempotent. They share a single configuration state stored in a local `vars.sh` file (which is git-ignored).
 
 When any script is run:
 
-1. It checks if [vars.sh](vars.sh) exists.
-2. If any required variables are missing, the script prompts the user for them, exports them, and appends them to [vars.sh](vars.sh).
-3. If they are already defined in [vars.sh](vars.sh), the script sources them and runs non-interactively.
+1. It checks if `vars.sh` exists.
+2. If any required variables are missing, the script prompts the user for them, exports them, and appends them to `vars.sh`.
+3. If they are already defined in `vars.sh`, the script sources them and runs non-interactively.
 
 > [!NOTE]
-> Because the provisioning scripts persist configuration state in [vars.sh](vars.sh), running the script again will reuse the same options selected on the first run. If you want to change configuration variables, manually edit [vars.sh](vars.sh) or perform a teardown first.
+> Because the provisioning scripts persist configuration state in `vars.sh`, running the script again will reuse the same options selected on the first run. If you want to change configuration variables, manually edit `vars.sh` or perform a teardown first.
 
 ---
 
@@ -30,7 +34,7 @@ When any script is run:
    - Sets up initial project configs.
    - Enables GKE Service API (`container.googleapis.com`).
    - Provisions a GKE Standard Cluster with Workload Identity enabled.
-   - Points `kubectl` credentials to the new cluster and creates the target namespace.
+   - Points `kubectl` credentials to the new cluster. (The target namespace is created later, by the operator deploy in step 03.)
 2. **[provision_02_gvisor_nodepool.sh](provision_02_gvisor_nodepool.sh)**
    - Provisions a dedicated GKE Sandbox (gVisor) node pool (defaults to `gvisor-pool`, configurable via `GVISOR_POOL_NAME`). Executed automatically if `ENABLE_GVISOR=true`.
 3. **[provision_03_gcp_gke_operator.sh](provision_03_gcp_gke_operator.sh)**
