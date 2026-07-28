@@ -2,6 +2,14 @@ import json
 import logging
 from typing import Any, Dict
 
+try:
+    from ...plugins.common.redactor import AuditRedactor, SecurityAuditViolationError
+except (ImportError, ValueError):
+    from agents.platform.defaults.plugins.common.redactor import (
+        AuditRedactor,
+        SecurityAuditViolationError,
+    )
+
 logger = logging.getLogger("hermes.hook.chat_message_audit")
 
 _TEXT_LOG_LIMIT = 4000
@@ -9,6 +17,7 @@ _TEXT_LOG_LIMIT = 4000
 
 def _truncate(value: Any) -> str:
     text = str(value or "")
+    text = AuditRedactor.redact_text(text)
     if len(text) > _TEXT_LOG_LIMIT:
         return text[:_TEXT_LOG_LIMIT] + "...(truncated)"
     return text
@@ -34,6 +43,9 @@ def _emit(audit_event: str, context: Dict[str, Any]) -> None:
 
 
 async def handle(event_type: str, context: Dict[str, Any]) -> None:
+    AuditRedactor.check_security_violations(context)
+    if isinstance(context, dict):
+        AuditRedactor.redact_in_place(context)
     try:
         if event_type == "agent:start":
             _emit("chat_message_start", context)
@@ -41,7 +53,10 @@ async def handle(event_type: str, context: Dict[str, Any]) -> None:
             _emit("chat_message_end", context)
         elif event_type == "agent:step":
             _emit("chat_message_step", context)
+    except SecurityAuditViolationError:
+        raise
     except Exception as exc:
         logger.error(
             "Error in chat_message_audit handler for %s: %s", event_type, exc, exc_info=True
         )
+        raise

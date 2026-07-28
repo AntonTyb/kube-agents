@@ -338,6 +338,11 @@ spec:
                 secretKeyRef:
                   key: api-key
                   name: platformagent-secrets
+            - name: SESSION_KV_SALT
+              valueFrom:
+                secretKeyRef:
+                  key: salt
+                  name: platformagent-secrets
             - name: GOOGLE_CHAT_PROJECT_ID
               value: kube-agents-gkedemos
             - name: GOOGLE_CHAT_SUBSCRIPTION_NAME
@@ -389,6 +394,16 @@ spec:
               value: /opt/data/home
             - name: SESSION_KV_DB_PATH
               value: /var/lib/kube-agents/session/session_kv.db
+            - name: API_SERVER_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: api-key
+                  name: platformagent-secrets
+            - name: SESSION_KV_SALT
+              valueFrom:
+                secretKeyRef:
+                  key: salt
+                  name: platformagent-secrets
           image: ghcr.io/gke-labs/kube-agents/platform-agent:latest
           imagePullPolicy: IfNotPresent
           name: platform-agent-dashboard

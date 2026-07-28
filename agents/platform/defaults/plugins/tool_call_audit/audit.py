@@ -2,12 +2,21 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
+try:
+    from ..common.redactor import AuditRedactor, SecurityAuditViolationError
+except (ImportError, ValueError):
+    from agents.platform.defaults.plugins.common.redactor import (
+        AuditRedactor,
+        SecurityAuditViolationError,
+    )
+
 logger = logging.getLogger("hermes.plugin.tool_call_audit")
 
 _PAYLOAD_LOG_LIMIT = 2000
 
 
 def _serialize(value: Any) -> str:
+    value = AuditRedactor.redact(value)
     if isinstance(value, str):
         if len(value) > _PAYLOAD_LOG_LIMIT:
             return value[:_PAYLOAD_LOG_LIMIT] + "...(truncated)"
@@ -32,13 +41,19 @@ def log_pre_tool_call(
     task_id: str = "",
     **kwargs: Any,
 ) -> None:
+    AuditRedactor.check_security_violations(args)
+    if isinstance(args, dict):
+        AuditRedactor.redact_in_place(args)
     try:
         _emit(
             "tool_call_start",
             {"tool_name": tool_name, "task_id": task_id, "args": _serialize(args or {})},
         )
+    except SecurityAuditViolationError:
+        raise
     except Exception as exc:
         logger.error("Error in tool_call_audit pre_tool_call hook: %s", exc, exc_info=True)
+        raise
 
 
 def log_post_tool_call(
@@ -48,6 +63,9 @@ def log_post_tool_call(
     task_id: str = "",
     **kwargs: Any,
 ) -> None:
+    AuditRedactor.check_security_violations(result)
+    if isinstance(result, dict):
+        AuditRedactor.redact_in_place(result)
     try:
         _emit(
             "tool_call_end",
@@ -58,8 +76,11 @@ def log_post_tool_call(
                 "result": _serialize(result),
             },
         )
+    except SecurityAuditViolationError:
+        raise
     except Exception as exc:
         logger.error("Error in tool_call_audit post_tool_call hook: %s", exc, exc_info=True)
+        raise
 
 
 def log_pre_approval_request(
@@ -69,18 +90,23 @@ def log_pre_approval_request(
     surface: str = "",
     **kwargs: Any,
 ) -> None:
+    AuditRedactor.check_security_violations(command)
+    AuditRedactor.check_security_violations(description)
     try:
         _emit(
             "approval_request",
             {
                 "surface": surface,
                 "pattern_key": pattern_key,
-                "description": description,
+                "description": _serialize(description),
                 "command": _serialize(command),
             },
         )
+    except SecurityAuditViolationError:
+        raise
     except Exception as exc:
         logger.error("Error in tool_call_audit pre_approval_request hook: %s", exc, exc_info=True)
+        raise
 
 
 def log_post_approval_response(
@@ -91,6 +117,8 @@ def log_post_approval_response(
     choice: str = "",
     **kwargs: Any,
 ) -> None:
+    AuditRedactor.check_security_violations(command)
+    AuditRedactor.check_security_violations(description)
     try:
         _emit(
             "approval_response",
@@ -98,12 +126,15 @@ def log_post_approval_response(
                 "surface": surface,
                 "pattern_key": pattern_key,
                 "choice": choice,
-                "description": description,
+                "description": _serialize(description),
                 "command": _serialize(command),
             },
         )
+    except SecurityAuditViolationError:
+        raise
     except Exception as exc:
         logger.error("Error in tool_call_audit post_approval_response hook: %s", exc, exc_info=True)
+        raise
 
 
 def log_pre_gateway_dispatch(
@@ -112,6 +143,8 @@ def log_pre_gateway_dispatch(
     session_store: Any = None,
     **kwargs: Any,
 ) -> None:
+    text = getattr(event, "text", "") or ""
+    AuditRedactor.check_security_violations(text)
     try:
         source = getattr(event, "source", None)
         session_id = ""
@@ -122,7 +155,6 @@ def log_pre_gateway_dispatch(
             except Exception:
                 pass
 
-        text = getattr(event, "text", "") or ""
         platform = ""
         user_id = ""
         if source is not None:
@@ -139,6 +171,8 @@ def log_pre_gateway_dispatch(
                 "text": _serialize(text),
             },
         )
+    except SecurityAuditViolationError:
+        raise
     except Exception as exc:
         logger.error("Error in tool_call_audit pre_gateway_dispatch hook: %s", exc, exc_info=True)
-
+        raise

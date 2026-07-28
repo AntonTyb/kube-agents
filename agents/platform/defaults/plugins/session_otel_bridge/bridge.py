@@ -5,7 +5,16 @@ from inspect import Signature, signature
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from hermes_plugins.hermes_otel.tracer import get_tracer
+try:
+    from hermes_plugins.hermes_otel.tracer import get_tracer
+except ImportError:
+    def get_tracer() -> Any:
+        return None
+
+try:
+    from ..common.redactor import AuditRedactor
+except (ImportError, ValueError):
+    from agents.platform.defaults.plugins.common.redactor import AuditRedactor
 
 DEFAULT_SESSION_KV_DB_PATH = "/var/lib/kube-agents/session/session_kv.db"
 
@@ -79,7 +88,14 @@ class OtelSessionBridge:
             return {}
 
         platform = metadata.get("platform") or ""
-        sender_id = metadata.get("user_id") or metadata.get("user_email") or ""
+        sender_id = (
+            metadata.get("user_email_hash")
+            or metadata.get("user_id")
+            or metadata.get("user_email")
+            or ""
+        )
+        if "@" in str(sender_id):
+            sender_id = AuditRedactor.hmac_hash(str(sender_id))
         user_id = sender_id
         if user_id and platform and ":" not in str(user_id):
             user_id = f"{platform}:{user_id}"

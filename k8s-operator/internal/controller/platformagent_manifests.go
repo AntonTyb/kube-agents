@@ -381,6 +381,15 @@ func buildDeployment(agent *agentv1alpha1.PlatformAgent, configHash, fluentBitHa
 					SecretKeyRef: agent.Spec.Harness.Hermes.ApiServerSecretRef,
 				},
 			})
+			envVars = append(envVars, corev1.EnvVar{
+				Name: "SESSION_KV_SALT",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: agent.Spec.Harness.Hermes.ApiServerSecretRef.LocalObjectReference,
+						Key:                  "salt",
+					},
+				},
+			})
 		}
 	}
 
@@ -611,6 +620,12 @@ func buildBaseContainers(image string, pullPolicy corev1.PullPolicy, envVars []c
 				Name:  "SESSION_KV_DB_PATH",
 				Value: sessionKVDBPath,
 			},
+		}
+
+		for _, ev := range envVars {
+			if ev.Name == "API_SERVER_KEY" || ev.Name == "SESSION_KV_SALT" {
+				dashboardEnvVars = append(dashboardEnvVars, ev)
+			}
 		}
 
 		dashboardVolumeMounts := []corev1.VolumeMount{
