@@ -17,6 +17,12 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+	"unicode"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -177,6 +183,7 @@ type IntegrationSpec struct {
 // GitHubSpec contains the configuration for the GitHub integration.
 type GitHubSpec struct {
 	// GitRepo is the target GitOps repository URL for the agent environment.
+	// +kubebuilder:validation:MaxLength=2048
 	// +optional
 	GitRepo string `json:"gitRepo,omitempty"`
 }
@@ -245,4 +252,55 @@ type AgentStatus struct {
 	// StorageStatus tracks PVC binding state.
 	// +optional
 	StorageStatus StorageStatus `json:"storageStatus,omitempty"`
+}
+
+// scpRegex validates SCP-style SSH Git URLs (e.g., git@github.com:owner/repo.git).
+// Compiled at package level to avoid re-compilation overhead on every validation invocation.
+var scpRegex = regexp.MustCompile(`^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(\.git)?$`)
+
+// ValidateGitRepoURL verifies that a GitRepo string is a valid Git repository URL
+// and contains no control characters or newline injections (PI-004).
+func ValidateGitRepoURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return nil
+	}
+
+	if len(trimmed) > 2048 {
+		return fmt.Errorf("gitRepo URL exceeds maximum length of 2048 characters")
+	}
+
+	// Disallow newlines and control characters (unicode.IsControl includes \r and \n)
+	for _, r := range trimmed {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("gitRepo URL contains invalid control characters or newlines")
+		}
+	}
+
+	// Disallow whitespace within URL
+	if strings.ContainsAny(trimmed, " \t") {
+		return fmt.Errorf("gitRepo URL contains whitespace")
+	}
+
+	// Check SCP-style SSH format: git@host:owner/repo.git
+	if scpRegex.MatchString(trimmed) {
+		return nil
+	}
+
+	// Parse standard URIs
+	u, err := url.ParseRequestURI(trimmed)
+	if err != nil {
+		return fmt.Errorf("invalid URL structure: %w", err)
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "git" && scheme != "ssh" {
+		return fmt.Errorf("unsupported URL scheme %q; must be http, https, git, or ssh", u.Scheme)
+	}
+
+	if u.Host == "" {
+		return fmt.Errorf("gitRepo URL missing host")
+	}
+
+	return nil
 }

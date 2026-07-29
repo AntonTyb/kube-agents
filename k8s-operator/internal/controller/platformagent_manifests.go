@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
 
 	agentv1alpha1 "github.com/gke-labs/kube-agents/k8s-operator/api/v1alpha1"
@@ -59,11 +60,16 @@ func buildConfigMap(agent *agentv1alpha1.PlatformAgent) *corev1.ConfigMap {
 func buildSettingsConfigMap(agent *agentv1alpha1.PlatformAgent) *corev1.ConfigMap {
 	gitRepo := ""
 	if agent.Spec.Integration != nil && agent.Spec.Integration.GitHub != nil {
-		gitRepo = agent.Spec.Integration.GitHub.GitRepo
+		gitRepo = strings.TrimSpace(agent.Spec.Integration.GitHub.GitRepo)
 	}
-	if gitRepo == "" {
+
+	if err := agentv1alpha1.ValidateGitRepoURL(gitRepo); err != nil {
+		logf.Log.WithName("platformagent-manifests").Info("Invalid gitRepo URL in PlatformAgent spec, defaulting SETTINGS.md to None", "err", err, "gitRepo", gitRepo)
+		gitRepo = "None"
+	} else if gitRepo == "" {
 		gitRepo = "None"
 	}
+
 	settingsContent := fmt.Sprintf("# GKE Scope Configuration\n- **Git Repo:** %s\n", gitRepo)
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{
@@ -523,8 +529,8 @@ func buildDeployment(agent *agentv1alpha1.PlatformAgent, configHash, fluentBitHa
 				Spec: corev1.PodSpec{
 					ShareProcessNamespace: shareProcessNamespace,
 					RuntimeClassName:      runtimeClassName,
-					InitContainers:     initContainers,
-					ServiceAccountName: saName,
+					InitContainers:        initContainers,
+					ServiceAccountName:    saName,
 					SecurityContext: &corev1.PodSecurityContext{
 						FSGroup: &fsGroup,
 						// UID 10000 matches canonical 'hermes' runtime user in upstream image (NousResearch/hermes-agent Dockerfile line 92)
