@@ -70,7 +70,8 @@ Rules:
   `k8s-operator/scripts/common.sh`, the Go version in `k8s-operator/go.mod`.
 
 Run `make docs-check` before pushing. It verifies generated regions are current, relative links
-resolve, and identifiers match their source — the same three checks CI runs.
+resolve, identifiers match their source, and every Markdown document has an entry in the
+documentation map (`docs/README.md`) — the same four checks CI runs.
 
 ## Pull Request Hygiene
 
@@ -81,6 +82,11 @@ resolve, and identifiers match their source — the same three checks CI runs.
 - Push PR branches to a fork, not to the upstream repository.
 - Use `.github/PULL_REQUEST_TEMPLATE.md` for PR body structure and level of
   detail. Do not use `--fill` with `gh pr create` as it bypasses the template.
+- **Docs-drift review before opening a PR:** run the `review-docs-drift` skill
+  (`.agents/skills/review-docs-drift/SKILL.md`) against your branch diff and address its
+  Blocking findings. This is a required pre-PR step for AI agents working in this repository;
+  `make docs-check` enforces only the mechanical subset (generated regions, links, terminology,
+  map coverage), while the skill also verifies that doc prose still matches the source.
 - **Local Validation Checks:** Before committing, try to run checks locally to avoid CI failures:
   - **Formatting:** Run `npx prettier --write <files>` on changed Markdown, JSON, or YAML files. You can check all files using `npx prettier --check .` (note: this may check files outside your PR scope).
   - **Docker Build:** Validate the agent runner Dockerfile by building it locally (e.g., `docker build -f deploy/docker/Dockerfile --target platform .`).
