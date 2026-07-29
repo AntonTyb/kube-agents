@@ -148,16 +148,16 @@ if [ -f "$TARGET_DIR/scripts/session_kv_server.py" ]; then
     PYTHONPATH="$TARGET_DIR/scripts" "$INSTALL_DIR/.venv/bin/python3" -m uvicorn scripts.session_kv_server:app --app-dir "$TARGET_DIR" --host 0.0.0.0 --port 8699 >"$TARGET_DIR/logs/session_kv_server.log" 2>&1 &
 fi
 
-# 5.5. Initialize default GKE context for the container to the host cluster
-if [ -n "$GKE_CLUSTER_NAME" ] && [ -n "$GKE_LOCATION" ]; then
-    echo "Configuring default kubectl context to host cluster: $GKE_CLUSTER_NAME ($GKE_LOCATION)..."
-    gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --location="$GKE_LOCATION" ${GOOGLE_CHAT_PROJECT_ID:+--project="$GOOGLE_CHAT_PROJECT_ID"} >/dev/null 2>&1 || true
-    # Backup static context configuration specifically for the event-watcher sidecar
-    if [ -f "$HOME/.kube/config" ]; then
-        cp "$HOME/.kube/config" "$HOME/.kube/watcher.config.tmp" && mv "$HOME/.kube/watcher.config.tmp" "$HOME/.kube/watcher.config"
-    fi
-fi
-
+# 5.5. The default kubectl context is NOT established here. `gcloud` in this
+# container is the credential-proxy shim, so get-credentials would execute in
+# the sidecar and write the sidecar's kubeconfig, not ours — and it is rejected
+# outright, because this script runs from a working directory outside
+# CREDENTIAL_PROXY_WORKSPACE_ROOT. The sidecar bootstraps its own context from
+# CREDENTIAL_PROXY_BOOTSTRAP_COMMAND (see buildCredentialProxyEnv in the
+# operator), which runs inside the workspace root before the proxy serves any
+# request. The event-watcher does not need a copy either: it reads
+# /var/run/event-watcher/watcher.config and falls back to its in-cluster config
+# when that file is absent, which it always is.
 
 # 6. Execute primary process
 exec "$@"

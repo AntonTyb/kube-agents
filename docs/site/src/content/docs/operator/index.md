@@ -51,6 +51,7 @@ spec:
   harness:
     clusterName: cluster-a
     location: us-central1-a
+    projectId: example-project
     hermes:
       dashboardEnabled: true
       pluginsDebug: false
@@ -68,6 +69,10 @@ spec:
     googleChat:
       # subscription config...
 ```
+
+`harness.clusterName`, `harness.location`, and `harness.projectId` are all required. The credential
+proxy only bootstraps a kubectl context when it has the complete triple; leave any one out and every
+`kubectl` call the agent makes resolves to `localhost:8080` instead of a cluster.
 
 Full walkthrough: [PlatformAgent CRD](/kube-agents/operator/platformagent-crd/).
 

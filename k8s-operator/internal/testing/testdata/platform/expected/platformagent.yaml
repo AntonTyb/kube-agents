@@ -423,10 +423,16 @@ spec:
               value: http/protobuf
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: service.namespace=kubeagents-system,k8s.namespace.name=kubeagents-system,kubeagents.agent_type=platform,kubeagents.agent_name=platformagent
+            - name: GKE_PROJECT_ID
+              value: example-project
             - name: GKE_CLUSTER_NAME
               value: cluster-a
             - name: GKE_LOCATION
               value: us-central1-a
+            - name: GCP_PROJECT_ID
+              value: example-project
+            - name: KUBE_CONTEXT_NAME
+              value: gke_example-project_us-central1-a_cluster-a
             - name: KUBE_DEFAULT_NAMESPACE
               value: kubeagents-system
             - name: GOOGLE_CHAT_RELAY_URL
@@ -610,6 +616,22 @@ spec:
                 secretKeyRef:
                   key: api-key
                   name: platformagent-secrets
+            - name: GKE_PROJECT_ID
+              value: example-project
+            - name: GKE_CLUSTER_NAME
+              value: cluster-a
+            - name: GKE_LOCATION
+              value: us-central1-a
+            - name: KUBE_CONTEXT_NAME
+              value: gke_example-project_us-central1-a_cluster-a
+            - name: KUBE_DEFAULT_NAMESPACE
+              value: kubeagents-system
+            - name: CREDENTIAL_PROXY_BOOTSTRAP_COMMAND
+              value: |-
+                gcloud config set project "$GKE_PROJECT_ID" >/dev/null &&
+                gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --location "$GKE_LOCATION" --project "$GKE_PROJECT_ID" &&
+                kubectl config use-context "$KUBE_CONTEXT_NAME" >/dev/null &&
+                kubectl config set-context "$KUBE_CONTEXT_NAME" --namespace="$KUBE_DEFAULT_NAMESPACE" >/dev/null
             - name: GOOGLE_CHAT_PROJECT_ID
               value: kube-agents-gkedemos
             - name: GOOGLE_CHAT_SUBSCRIPTION_NAME
