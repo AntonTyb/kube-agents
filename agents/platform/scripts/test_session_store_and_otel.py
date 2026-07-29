@@ -13,10 +13,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from agents.platform.defaults.plugins.common.redactor import AuditRedactor
-from agents.platform.defaults.plugins.session_otel_bridge.bridge import (
+from agents.chat.defaults.plugins.session_otel_bridge.bridge import (
     OtelSessionBridge,
 )
-from agents.platform.defaults.plugins.session_store.store import (
+from agents.chat.defaults.plugins.session_store.store import (
     SessionMetadata,
     SessionMetadataStore,
 )

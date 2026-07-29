@@ -9,9 +9,9 @@ from pathlib import Path
 # Add repo root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from agents.platform.defaults.hooks.chat_message_audit.handler import handle as chat_handle
+from agents.chat.defaults.hooks.chat_message_audit.handler import handle as chat_handle
 from agents.platform.defaults.plugins.common.redactor import SecurityAuditViolationError
-from agents.platform.defaults.plugins.tool_call_audit.audit import (
+from agents.chat.defaults.plugins.tool_call_audit.audit import (
     log_post_tool_call,
     log_pre_tool_call,
 )
