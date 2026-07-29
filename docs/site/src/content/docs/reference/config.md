@@ -49,7 +49,6 @@ platform_toolsets:
 memory:
   memory_enabled: false
   user_profile_enabled: false
-  provider: multiuser_memory
 
 plugins:
   enabled:
@@ -82,7 +81,9 @@ Both include the same MCP servers plus their respective Hermes-native tools (`he
 
 ### `memory`
 
-Explicitly disabled — the Platform Agent doesn't retain per-user memory across sessions. Every conversation starts fresh. The `multiuser_memory` provider name is set for future use.
+Explicitly disabled — the Platform Agent doesn't retain memory across sessions. Every conversation starts fresh.
+
+No memory provider is configured either. The `multiuser_memory` provider scopes its store by the sender's gateway identity, and the Platform Agent is reached through the kanban dispatcher, which spawns workers with no human identity attached — so per-user memory only makes sense on the [Chat Agent](/kube-agents/concepts/chatops/), the profile that actually receives chat ingress. The Chat Agent records each user's durable facts and resolves them into concrete values before delegating, so the Platform Agent gets what it needs inline in the card body.
 
 ### `plugins`
 

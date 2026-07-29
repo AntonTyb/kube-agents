@@ -77,9 +77,12 @@ fi
 #     hermes_otel). Without syncing it, an image that changes the platform's
 #     toolsets or plugins has no effect on any existing deployment.
 #   - A cluster config.yaml is identity-stamped at scaffold time with that
-#     cluster's name and pinned KUBECONFIG, so it is runtime state. Overwriting
-#     it from the template would strip the very scoping that isolates the agent
-#     to one cluster.
+#     cluster's `cluster_identity` block (project/cluster/location), so it is
+#     runtime state. Overwriting it from the template would strip the record
+#     cluster_agent_reconcile.py matches a profile to its cluster by, and the
+#     reconciler would then scaffold a duplicate profile it can never prune.
+#     (KUBECONFIG is not in this file — it is pinned in the profile's .env by
+#     cluster_agent_profile.py:_pin_kubeconfig_env.)
 #
 # Profile identity is NOT at risk either way: `hermes profile create` records the
 # name and description in profiles/<name>/profile.yaml, a separate file that no
@@ -97,6 +100,25 @@ if [ -d "$CLUSTER_TEMPLATE" ]; then
         for f in SOUL.md AGENTS.md CAPABILITIES.md; do
             [ -f "$CLUSTER_TEMPLATE/$f" ] && cp -f "$CLUSTER_TEMPLATE/$f" "$d/$f" 2>/dev/null || true
         done
+        # Targeted self-heal: drop `memory.provider` from cluster configs already
+        # on the PVC. The template no longer sets it (multiuser_memory scopes by
+        # gateway user identity, which a dispatcher-spawned worker never has), but
+        # cluster config.yaml is NOT force-synced above — it is identity-stamped
+        # with `cluster_identity`, the record cluster_agent_reconcile.py reads to
+        # match a profile to its cluster. (KUBECONFIG is pinned separately, in the
+        # profile's .env by cluster_agent_profile.py:_pin_kubeconfig_env.) So
+        # remove just this one key and leave everything else, rather than
+        # overwriting the file.
+        #
+        # The rewrite goes through a temp file and os.replace: a torn write here
+        # would drop `cluster_identity`, and reconcile then treats the profile as
+        # unidentifiable — it scaffolds a duplicate AND stops pruning the orphan.
+        # Errors are reported, not swallowed: a silent no-op is the exact failure
+        # mode this whole change exists to fix.
+        if [ -f "$d/config.yaml" ] && [ -w "$d/config.yaml" ]; then
+            "$INSTALL_DIR/.venv/bin/python3" -c "import os, sys, yaml, pathlib; p = pathlib.Path(sys.argv[1]); c = yaml.safe_load(p.read_text()) or {}; m = c.get('memory'); sys.exit(0) if not isinstance(m, dict) or 'provider' not in m else None; m.pop('provider'); t = p.with_name(p.name + '.tmp'); t.write_text(yaml.safe_dump(c)); os.replace(t, p)" "$d/config.yaml" \
+                || echo "WARN: failed to strip memory.provider from $d/config.yaml; this cluster agent keeps an inert provider" >&2
+        fi
     done
 fi
 
