@@ -25,7 +25,7 @@ jobs:
 
       - name: Authenticate to Google Cloud
         id: auth
-        # zizmor: ignore[rule1,rule2] - {both hash and semver raise error with zizmor}
+        # zizmor: ignore["known-vulnerable-actions","template-injection","unpinned-uses"] - {both hash and semver raise error with zizmor}
         uses: google-github-actions/auth@v2.1.7 # 6fc4fa4b961f9dae0f94a7e96a5b4819203c6a44 
         with:
           token_format: access_token
