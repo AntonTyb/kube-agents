@@ -25,8 +25,7 @@ jobs:
 
       - name: Authenticate to Google Cloud
         id: auth
-        # zizmor: ignore["known-vulnerable-actions","template-injection","unpinned-uses"] - {both hash and semver raise error with zizmor}
-        uses: google-github-actions/auth@6fc4fa4b961f9dae0f94a7e96a5b4819203c6a44 # v2.1.7
+        uses: google-github-actions/auth@v3
         with:
           token_format: access_token
           workload_identity_provider: projects/125393897113/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
@@ -40,8 +39,8 @@ jobs:
           password: ${{ steps.auth.outputs.access_token }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@6189d044490f230ec2b2a6549a1ac9a471415278 # v2.1.4
-
+        uses: google-github-actions/setup-gcloud@v3
+        
       - name: Build and Push Platform Agent (GCP Cloud Build)
         id: gcp-platform
         env:
@@ -97,8 +96,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bec8e6aeda8f45a666c24246 # v3.8.0
-
+        uses: sigstore/cosign-installer@v4.1.2
+        
       - name: Sign the images
         env:
           GCP_REG: ${{ env.GCP_REGISTRY }}
