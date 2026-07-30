@@ -2,7 +2,9 @@
 # ==============================================================================
 # 🤖 Step 1: GCP APIs & GKE Cluster Initialization
 # ==============================================================================
-# Idempotent setup script to bootstrap the bare GKE cluster and namespace.
+# Idempotent setup script that enables the GCP APIs and bootstraps the bare
+# GKE cluster. The target namespace is created later, by the operator deploy
+# in step 03.
 # ==============================================================================
 
 set -e
@@ -56,6 +58,7 @@ execute_cluster() {
       --machine-type="e2-standard-4" \
       --num-nodes=1 \
       --workload-pool="${PROJECT_ID}.svc.id.goog" \
+      --addons=GcpFilestoreCsiDriver \
       --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS \
       --project "$PROJECT_ID" \
       --quiet

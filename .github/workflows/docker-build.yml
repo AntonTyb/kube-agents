@@ -31,6 +31,17 @@ jobs:
           build-args: |
             HERMES_AGENT_TAG=${{ env.HERMES_AGENT_TAG }}
 
+      - name: Build Credential Sidecar
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: credential-proxy
+          push: false
+          tags: credential-proxy:latest
+          build-args: |
+            HERMES_AGENT_TAG=${{ env.HERMES_AGENT_TAG }}
+
       - name: Build Replay Proxy
         uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.2
         with:

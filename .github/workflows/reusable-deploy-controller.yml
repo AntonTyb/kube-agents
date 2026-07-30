@@ -7,7 +7,7 @@ on:
         required: true
         type: string
         description: "The GitHub environment to use for variables (e.g., autopush, staging)"
-      controller_tag:
+      image_tag:
         required: true
         type: string
         description: "The Docker image tag to deploy (e.g. commit SHA or 'latest')"
@@ -60,20 +60,20 @@ jobs:
           ref: ${{ inputs.checkout_ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@f111f37a5736e9b614ca8ddb1b019316fb90469b # v5.3.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: "k8s-operator/go.mod"
           cache-dependency-path: "k8s-operator/go.sum"
 
       - name: Authenticate to Google Cloud via WIF
-        uses: google-github-actions/auth@6fc4fa4b961f9dae0f94a7e96a5b4819203c6a44 # v2.1.7
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           token_format: "access_token"
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - name: Authenticate to GKE
-        uses: google-github-actions/get-gke-credentials@688849b2512f45856eb1ec6086f0d9e836b32ee1 # v2.3.0
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
         with:
           cluster_name: ${{ env.GKE_CLUSTER_NAME }}
           location: ${{ env.GCP_REGION }}
@@ -83,11 +83,11 @@ jobs:
         env:
           REPO_NAME: ${{ github.repository }}
           PACKAGE_NAME: "k8s-operator"
-          TAG_NAME: ${{ inputs.controller_tag }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           REPO_DOWNCASE=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
           echo "IMAGE_REPO=ghcr.io/${REPO_DOWNCASE}/${PACKAGE_NAME}" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=${TAG_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${INPUT_IMAGE_TAG}" >> "$GITHUB_ENV"
 
       - name: Perform Controller Redeployment
         env:
@@ -97,6 +97,6 @@ jobs:
           CLUSTER_NAME: ${{ env.GKE_CLUSTER_NAME }}
           IMG: "${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}"
         run: |
-          echo "Redeploying controller via provision_02 with tag: $IMAGE_TAG from repo: $IMAGE_REPO"
+          echo "Redeploying controller via provision_03 with tag: $IMAGE_TAG from repo: $IMAGE_REPO"
           cd k8s-operator
-          make gcp-provision-02-operator ARGS="--no-confirm"
+          make gcp-provision-03-operator ARGS="--no-confirm"
