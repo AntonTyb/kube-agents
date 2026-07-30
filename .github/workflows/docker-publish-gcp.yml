@@ -43,12 +43,16 @@ jobs:
 
       - name: Build and Push Platform Agent (GCP Cloud Build)
         id: gcp-platform
+        env:
+          GCP_REG: ${{ env.GCP_REGISTRY }}
+          SHA: ${{ github.sha }}
+          HERMES_TAG: ${{ env.HERMES_AGENT_TAG }}
         run: |
           gcloud builds submit \
             --config=deploy/docker/cloudbuild.yaml \
-            --substitutions=_IMAGE_URI=${{ env.GCP_REGISTRY }}/platform-agent:${{ github.sha }},_IMAGE_URI_LATEST=${{ env.GCP_REGISTRY }}/platform-agent:latest,_TARGET=platform,_HERMES_AGENT_TAG=${{ env.HERMES_AGENT_TAG }} \
+            --substitutions=_IMAGE_URI=${GCP_REG}/platform-agent:${SHA},_IMAGE_URI_LATEST=${GCP_REG}/platform-agent:latest,_TARGET=platform,_HERMES_AGENT_TAG=${HERMES_TAG} \
             .
-          DIGEST=$(gcloud artifacts docker images describe "${{ env.GCP_REGISTRY }}/platform-agent:${{ github.sha }}" --format="value(image_summary.digest)")
+          DIGEST=$(gcloud artifacts docker images describe "${GCP_REG}/platform-agent:${SHA}" --format="value(image_summary.digest)")
           {
             echo "digest<<EOF"
             echo "$DIGEST"
@@ -57,13 +61,16 @@ jobs:
 
       - name: Build and Push Replay Proxy (GCP Cloud Build)
         id: gcp-replay-proxy
+        env:
+          GCP_REG: ${{ env.GCP_REGISTRY }}
+          SHA: ${{ github.sha }}
         run: |
           gcloud builds submit examples/inference-replay/replay-proxy \
-            --tag=${{ env.GCP_REGISTRY }}/replay-proxy:${{ github.sha }}
+            --tag=${GCP_REG}/replay-proxy:${SHA}
           gcloud artifacts docker tags add \
-            ${{ env.GCP_REGISTRY }}/replay-proxy:${{ github.sha }} \
-            ${{ env.GCP_REGISTRY }}/replay-proxy:latest
-          DIGEST=$(gcloud artifacts docker images describe "${{ env.GCP_REGISTRY }}/replay-proxy:${{ github.sha }}" --format="value(image_summary.digest)")
+            ${GCP_REG}/replay-proxy:${SHA} \
+            ${GCP_REG}/replay-proxy:latest
+          DIGEST=$(gcloud artifacts docker images describe "${GCP_REG}/replay-proxy:${SHA}" --format="value(image_summary.digest)")
           {
             echo "digest<<EOF"
             echo "$DIGEST"
@@ -72,12 +79,16 @@ jobs:
 
       - name: Build and Push Credential Sidecar (GCP Cloud Build)
         id: gcp-credential-proxy
+        env:
+          GCP_REG: ${{ env.GCP_REGISTRY }}
+          SHA: ${{ github.sha }}
+          HERMES_TAG: ${{ env.HERMES_AGENT_TAG }}
         run: |
           gcloud builds submit \
             --config=deploy/docker/cloudbuild.yaml \
-            --substitutions=_IMAGE_URI=${{ env.GCP_REGISTRY }}/credential-proxy:${{ github.sha }},_IMAGE_URI_LATEST=${{ env.GCP_REGISTRY }}/credential-proxy:latest,_TARGET=credential-proxy,_HERMES_AGENT_TAG=${{ env.HERMES_AGENT_TAG }} \
+            --substitutions=_IMAGE_URI=${GCP_REG}/credential-proxy:${SHA},_IMAGE_URI_LATEST=${GCP_REG}/credential-proxy:latest,_TARGET=credential-proxy,_HERMES_AGENT_TAG=${HERMES_TAG} \
             .
-          DIGEST=$(gcloud artifacts docker images describe "${{ env.GCP_REGISTRY }}/credential-proxy:${{ github.sha }}" --format="value(image_summary.digest)")
+          DIGEST=$(gcloud artifacts docker images describe "${GCP_REG}/credential-proxy:${SHA}" --format="value(image_summary.digest)")
           {
             echo "digest<<EOF"
             echo "$DIGEST"
@@ -88,7 +99,12 @@ jobs:
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bec8e6aeda8f45a666c24246 # v3.8.0
 
       - name: Sign the images
+        env:
+          GCP_REG: ${{ env.GCP_REGISTRY }}
+          PLATFORM_DIGEST: ${{ steps.gcp-platform.outputs.digest }}
+          REPLAY_DIGEST: ${{ steps.gcp-replay-proxy.outputs.digest }}
+          CREDENTIAL_DIGEST: ${{ steps.gcp-credential-proxy.outputs.digest }}
         run: |
-          cosign sign --yes "${{ env.GCP_REGISTRY }}/platform-agent@${{ steps.gcp-platform.outputs.digest }}"
-          cosign sign --yes "${{ env.GCP_REGISTRY }}/replay-proxy@${{ steps.gcp-replay-proxy.outputs.digest }}"
-          cosign sign --yes "${{ env.GCP_REGISTRY }}/credential-proxy@${{ steps.gcp-credential-proxy.outputs.digest }}"
+          cosign sign --yes "${GCP_REG}/platform-agent@${PLATFORM_DIGEST}"
+          cosign sign --yes "${GCP_REG}/replay-proxy@${REPLAY_DIGEST}"
+          cosign sign --yes "${GCP_REG}/credential-proxy@${CREDENTIAL_DIGEST}"
