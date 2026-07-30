@@ -50,7 +50,7 @@ jobs:
         run: |
           gcloud builds submit \
             --config=deploy/docker/cloudbuild.yaml \
-            --substitutions=_IMAGE_URI=${GCP_REG}/platform-agent:${SHA},_IMAGE_URI_LATEST=${GCP_REG}/platform-agent:latest,_TARGET=platform,_HERMES_AGENT_TAG=${HERMES_TAG} \
+            --substitutions="_IMAGE_URI=${GCP_REG}/platform-agent:${SHA},_IMAGE_URI_LATEST=${GCP_REG}/platform-agent:latest,_TARGET=platform,_HERMES_AGENT_TAG=${HERMES_TAG}" \
             .
           DIGEST=$(gcloud artifacts docker images describe "${GCP_REG}/platform-agent:${SHA}" --format="value(image_summary.digest)")
           {
@@ -66,10 +66,10 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           gcloud builds submit examples/inference-replay/replay-proxy \
-            --tag=${GCP_REG}/replay-proxy:${SHA}
+            --tag="${GCP_REG}/replay-proxy:${SHA}"
           gcloud artifacts docker tags add \
-            ${GCP_REG}/replay-proxy:${SHA} \
-            ${GCP_REG}/replay-proxy:latest
+            "${GCP_REG}/replay-proxy:${SHA}" \
+            "${GCP_REG}/replay-proxy:latest"
           DIGEST=$(gcloud artifacts docker images describe "${GCP_REG}/replay-proxy:${SHA}" --format="value(image_summary.digest)")
           {
             echo "digest<<EOF"
@@ -86,7 +86,7 @@ jobs:
         run: |
           gcloud builds submit \
             --config=deploy/docker/cloudbuild.yaml \
-            --substitutions=_IMAGE_URI=${GCP_REG}/credential-proxy:${SHA},_IMAGE_URI_LATEST=${GCP_REG}/credential-proxy:latest,_TARGET=credential-proxy,_HERMES_AGENT_TAG=${HERMES_TAG} \
+            --substitutions="_IMAGE_URI=${GCP_REG}/credential-proxy:${SHA},_IMAGE_URI_LATEST=${GCP_REG}/credential-proxy:latest,_TARGET=credential-proxy,_HERMES_AGENT_TAG=${HERMES_TAG}" \
             .
           DIGEST=$(gcloud artifacts docker images describe "${GCP_REG}/credential-proxy:${SHA}" --format="value(image_summary.digest)")
           {

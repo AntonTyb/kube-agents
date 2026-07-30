@@ -50,8 +50,12 @@ jobs:
 
       - name: Determine target deployments
         id: set-targets
+        env:
+          FORCE_DEPLOY: ${{ inputs.force_deploy }}
+          FILTER_LITELLM: ${{ steps.filter.outputs.litellm }}
+          FILTER_GITHUB: ${{ steps.filter.outputs.github }}
         run: |
-          if [ "${{ inputs.force_deploy }}" = "true" ]; then
+          if [ "${FORCE_DEPLOY}" = "true" ]; then
             {
               echo "litellm<<EOF"
               echo "true"
@@ -63,10 +67,10 @@ jobs:
           else
             {
               echo "litellm<<EOF"
-              echo "${{ steps.filter.outputs.litellm }}"
+              echo "${FILTER_LITELLM}"
               echo "EOF"
               echo "github<<EOF"
-              echo "${{ steps.filter.outputs.github }}"
+              echo "${FILTER_GITHUB}"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           fi
