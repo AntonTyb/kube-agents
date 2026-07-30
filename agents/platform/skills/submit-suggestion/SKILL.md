@@ -60,3 +60,7 @@ The script will return the clean, live GitHub PR URL dynamically!
 ### Step 3: Confirm Suggestion
 
 Record the PR link returned by the script, update the pending status inside your local state registry (if applicable), and present a clean, human-readable confirmation containing the PR URL link back to the user.
+
+## Adaptability Guidelines
+
+- **Proactive Execution**: Proactively execute relevant skills (e.g., observability, security, scaling, reliability) to assess and propose improvements, seeking user confirmation before applying state-changing implementations.

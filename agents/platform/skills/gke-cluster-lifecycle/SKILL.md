@@ -61,3 +61,7 @@ For high-risk upgrades, you can create a new node pool (Green) with the new vers
 2. **Configure Surge Upgrades**: Use `max-surge-upgrade` to ensure availability during upgrades.
 3. **Use Maintenance Windows**: Configure maintenance windows to ensure upgrades only happen during off-peak hours (see [gke-reliability](../gke-reliability/SKILL.md)).
 4. **Test in Non-Prod**: Always test upgrades in a staging environment before applying them to production.
+
+## Adaptability Guidelines
+
+- **Proactive Execution**: Proactively execute relevant skills (e.g., observability, security, scaling, reliability) to assess and propose improvements, seeking user confirmation before applying state-changing implementations.

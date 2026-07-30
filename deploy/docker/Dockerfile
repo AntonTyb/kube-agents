@@ -114,6 +114,11 @@ COPY agents/platform/AGENTS.md /opt/defaults/AGENTS.md
 # Copy platform skills
 COPY agents/platform/skills/ /opt/hermes/skills/
 
+# Generate SHA-256 integrity manifest for skill provenance
+RUN cd /opt/hermes/skills && \
+    find . -type f ! -name "skills_manifest.sha256" -exec sha256sum {} + | sort > /opt/hermes/skills/skills_manifest.sha256 && \
+    chmod 444 /opt/hermes/skills/skills_manifest.sha256
+
 # Copy platform plugins
 COPY agents/platform/plugins/ /opt/hermes/plugins/
 
@@ -128,15 +133,16 @@ RUN /opt/hermes/.venv/bin/python3 /tmp/merge_configs.py /opt/defaults/config.yam
     rm -f /tmp/merge_configs.py /tmp/platform-config.yaml
 
 # Normalize ownership and permissions at the end of build
-RUN chown -R hermes:hermes /opt/defaults /opt/hermes/skills /opt/hermes/plugins && \
+RUN chown -R hermes:hermes /opt/defaults /opt/hermes/plugins && \
     find /opt/defaults -type d -exec chmod 755 {} + && \
     find /opt/defaults -type f -exec chmod 644 {} + && \
-    find /opt/hermes/skills -type d -exec chmod 755 {} + && \
-    find /opt/hermes/skills -type f -exec chmod 644 {} + && \
     find /opt/hermes/plugins -type d -exec chmod 755 {} + && \
     find /opt/hermes/plugins -type f -exec chmod 644 {} + && \
     find /opt/defaults/scripts -type f -exec chmod 755 {} + 2>/dev/null && \
-    find /opt/hermes/skills -path '*/scripts/*' -type f -exec chmod 755 {} + 2>/dev/null || true
+    chown -R root:root /opt/hermes/skills && \
+    find /opt/hermes/skills -type d -exec chmod 555 {} + && \
+    find /opt/hermes/skills -type f -exec chmod 444 {} + && \
+    find /opt/hermes/skills -path '*/scripts/*' -type f -exec chmod 555 {} + 2>/dev/null || true
 
 
 # --- CREDENTIAL PROXY TARGET ---

@@ -36,6 +36,48 @@ platform_toolsets:
     - mcp-developer_knowledge
     - mcp-gke
 
+# Security and Execution Boundaries for built-in CLI tools
+execution_bounds:
+  hermes_cli:
+    sandbox_mode: "enforced"
+    # Maximum execution timeout for standard shell commands (seconds)
+    command_timeout_seconds: 60
+    # Allowlist of permitted binary prefixes for development and diagnostics
+    allowed_binary_prefixes:
+      - "git status"
+      - "git diff"
+      - "git log"
+      - "git checkout"
+      - "git add"
+      - "git commit"
+      - "kubectl get"
+      - "kubectl describe"
+      - "kubectl logs"
+      - "gcloud logging read"
+      - "gcloud container clusters describe"
+      - "pytest"
+      - "python3 -m unittest"
+      - "python3 ./skills/"
+      - "python3 ./scripts/"
+    # Blocked patterns and destructive operations
+    blocked_command_patterns:
+      - "rm -rf /"
+      - "sudo "
+      - "chmod "
+      - "chown "
+      - "nohup "
+      - "curl * | bash"
+      - "wget * | bash"
+      - "pip install *"
+    # Filesystem write confinement
+    writable_paths:
+      - "/tmp"
+      - "/opt/data/scratch"
+    read_only_paths:
+      - "/opt/hermes/skills"
+      - "/opt/defaults"
+      - "/etc"
+
 memory:
   memory_enabled: false
   user_profile_enabled: false

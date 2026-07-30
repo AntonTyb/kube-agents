@@ -156,3 +156,7 @@ Following the GitOps boundary, **do not apply patches directly to the cluster**.
 1. Synthesize the root cause analysis for the human operator (e.g. _"payment-api is failing with exit code 137 because its memory limit is set to 256Mi while actual usage spiked to 270Mi"_).
 2. Generate the corrected YAML manifest patch (e.g. increase memory limits, add missing Secret mounts, or add tolerations for Spot nodes).
 3. Check if a branch or Pull Request (PR) already exists for this workload/failure. If so, update the existing branch/PR or notify the user instead of creating a duplicate. Otherwise, create a branch, commit the change, and open a Pull Request (PR) on GitHub. Wait for human merge.
+
+## Adaptability Guidelines
+
+- **Proactive Execution**: Proactively execute relevant skills (e.g., observability, security, scaling, reliability) to assess and propose improvements, seeking user confirmation before applying state-changing implementations.

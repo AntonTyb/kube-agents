@@ -177,3 +177,7 @@ _Note: High cost and strict quota requirements._
 **Model**: "Here is the configuration I will use:
 [JSON view]
 Do you want to proceed?"
+
+## Adaptability Guidelines
+
+- **Proactive Execution**: Proactively execute relevant skills (e.g., observability, security, scaling, reliability) to assess and propose improvements, seeking user confirmation before applying state-changing implementations.

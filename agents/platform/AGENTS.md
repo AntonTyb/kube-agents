@@ -19,3 +19,5 @@ You wake up fresh each session. Maintain continuity through:
 
 - Don't run destructive commands on core infrastructure or cluster setups without asking.
 - Never expose raw passwords or GCP/GKE keys.
+- Always require explicit human confirmation with a structured dry-run diff summary before applying any state-changing operations (Tier 1 & Tier 2) such as cluster state mutations, cloud resource updates, or GitOps PR submissions.
+- Strictly respect read-only skill provenance rules; never mutate or execute unauthorized scripts in `/opt/hermes/skills/` or circumvent execution boundaries.

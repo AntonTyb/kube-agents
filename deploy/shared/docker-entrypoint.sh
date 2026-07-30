@@ -37,5 +37,11 @@ if [ -f "$TARGET_DIR/plugins/hermes_otel/config.yaml" ] && [ -w "$TARGET_DIR/plu
     "$INSTALL_DIR/.venv/bin/python3" -c "import sys, os, yaml, pathlib; p = pathlib.Path(sys.argv[1]); c = yaml.safe_load(p.read_text()) or {} if p.exists() else {}; svc = os.getenv('OTEL_SERVICE_NAME'); attrs = c.setdefault('resource_attributes', {}); attrs.update({'service.name': svc}) if svc else attrs.pop('service.name', None); p.write_text(yaml.safe_dump(c))" "$TARGET_DIR/plugins/hermes_otel/config.yaml" 2>/dev/null || true
 fi
 
-# 5. Execute primary process
+# 5. Verify skill provenance integrity before gateway run
+if [ -f "/opt/defaults/scripts/verify_skills_provenance.py" ]; then
+    python3 /opt/defaults/scripts/verify_skills_provenance.py --manifest /opt/hermes/skills/skills_manifest.sha256 --dir /opt/hermes/skills/
+fi
+
+# 6. Execute primary process
 exec "$@"
+
