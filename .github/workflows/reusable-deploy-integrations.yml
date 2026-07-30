@@ -17,6 +17,9 @@ on:
         type: string
         description: "The git ref to pass to actions/checkout"
 
+permissions:
+  contents: read
+
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
@@ -26,14 +29,14 @@ jobs:
     steps:
       - name: Checkout code
         if: ${{ inputs.force_deploy == false }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref }}
 
       - name: Detect changes
         if: ${{ inputs.force_deploy == false }}
         id: filter
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@de56cc8fc5def410ab09737b5f75661047fb2b62 # v3.0.2
         with:
           filters: |
             litellm:
@@ -49,11 +52,23 @@ jobs:
         id: set-targets
         run: |
           if [ "${{ inputs.force_deploy }}" = "true" ]; then
-            echo "litellm=true" >> "$GITHUB_OUTPUT"
-            echo "github=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "litellm<<EOF"
+              echo "true"
+              echo "EOF"
+              echo "github<<EOF"
+              echo "true"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           else
-            echo "litellm=${{ steps.filter.outputs.litellm }}" >> "$GITHUB_OUTPUT"
-            echo "github=${{ steps.filter.outputs.github }}" >> "$GITHUB_OUTPUT"
+            {
+              echo "litellm<<EOF"
+              echo "${{ steps.filter.outputs.litellm }}"
+              echo "EOF"
+              echo "github<<EOF"
+              echo "${{ steps.filter.outputs.github }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           fi
 
   provision-secrets:
@@ -61,6 +76,9 @@ jobs:
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.litellm == 'true' || needs.detect-changes.outputs.github == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     environment: ${{ inputs.target_environment }}
     concurrency:
       group: ${{ inputs.target_environment }}-redeploy-secrets
@@ -69,25 +87,25 @@ jobs:
       NAMESPACE: "kubeagents-system"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@f111f37a5736e9b614ca8ddb1b019316fb90469b # v5.3.0
         with:
           go-version-file: "k8s-operator/go.mod"
           cache-dependency-path: "k8s-operator/go.sum"
 
       - name: Authenticate to Google Cloud via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@6fc4fa4b961f9dae0f94a7e96a5b4819203c6a44 # v2.1.7
         with:
           token_format: "access_token"
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Authenticate to GKE
-        uses: google-github-actions/get-gke-credentials@v3
+        uses: google-github-actions/get-gke-credentials@688849b2512f45856eb1ec6086f0d9e836b32ee1 # v2.3.0
         with:
           cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
           location: ${{ vars.GCP_REGION }}
@@ -117,6 +135,9 @@ jobs:
     needs: [detect-changes, provision-secrets]
     if: ${{ needs.detect-changes.outputs.litellm == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     environment: ${{ inputs.target_environment }}
     concurrency:
       group: ${{ inputs.target_environment }}-redeploy-litellm
@@ -125,25 +146,25 @@ jobs:
       NAMESPACE: "kubeagents-system"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@f111f37a5736e9b614ca8ddb1b019316fb90469b # v5.3.0
         with:
           go-version-file: "k8s-operator/go.mod"
           cache-dependency-path: "k8s-operator/go.sum"
 
       - name: Authenticate to Google Cloud via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@6fc4fa4b961f9dae0f94a7e96a5b4819203c6a44 # v2.1.7
         with:
           token_format: "access_token"
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Authenticate to GKE
-        uses: google-github-actions/get-gke-credentials@v3
+        uses: google-github-actions/get-gke-credentials@688849b2512f45856eb1ec6086f0d9e836b32ee1 # v2.3.0
         with:
           cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
           location: ${{ vars.GCP_REGION }}
@@ -197,7 +218,11 @@ jobs:
           done
 
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "configured<<EOF"
+              echo "false"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
             echo "⚠️ GitHub Token Minter deployment will be skipped because required repository variables are not configured: ${missing[*]}"
             echo "::notice title=GitHub Minter Skipped::GitHub Token Minter files changed, but deployment will be skipped because required repository variables are not configured: ${missing[*]}"
             echo "### ⚠️ GitHub Token Minter Deployment Skipped" >> "$GITHUB_STEP_SUMMARY"
@@ -206,7 +231,11 @@ jobs:
               echo "- \`$var\`" >> "$GITHUB_STEP_SUMMARY"
             done
           else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "configured<<EOF"
+              echo "true"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
             echo "✅ All required repository variables (GH_ORG, GH_REPO, GH_APP_ID) for GitHub Token Minter deployment are set. Proceeding with deployment."
             echo "### ✅ GitHub Token Minter Configured" >> "$GITHUB_STEP_SUMMARY"
             echo "All required repository variables (GH_ORG, GH_REPO, GH_APP_ID) for GitHub Token Minter deployment are set." >> "$GITHUB_STEP_SUMMARY"
@@ -217,6 +246,9 @@ jobs:
     needs: [detect-changes, provision-secrets, check-github-config]
     if: ${{ needs.detect-changes.outputs.github == 'true' && needs.check-github-config.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     environment: ${{ inputs.target_environment }}
     concurrency:
       group: ${{ inputs.target_environment }}-redeploy-github
@@ -226,25 +258,25 @@ jobs:
       NAMESPACE: "kubeagents-system"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@f111f37a5736e9b614ca8ddb1b019316fb90469b # v5.3.0
         with:
           go-version-file: "k8s-operator/go.mod"
           cache-dependency-path: "k8s-operator/go.sum"
 
       - name: Authenticate to Google Cloud via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@6fc4fa4b961f9dae0f94a7e96a5b4819203c6a44 # v2.1.7
         with:
           token_format: "access_token"
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Authenticate to GKE
-        uses: google-github-actions/get-gke-credentials@v3
+        uses: google-github-actions/get-gke-credentials@688849b2512f45856eb1ec6086f0d9e836b32ee1 # v2.3.0
         with:
           cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
           location: ${{ vars.GCP_REGION }}

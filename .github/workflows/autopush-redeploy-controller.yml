@@ -12,10 +12,12 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   call-deploy:
+    permissions:
+      contents: read
+      id-token: write
     if: |
       github.repository == 'gke-labs/kube-agents' &&
       github.event.workflow_run.conclusion == 'success' &&

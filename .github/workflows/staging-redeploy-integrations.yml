@@ -11,10 +11,12 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   call-deploy:
+    permissions:
+      contents: read
+      id-token: write
     secrets: inherit
     uses: ./.github/workflows/reusable-deploy-integrations.yml
     with:

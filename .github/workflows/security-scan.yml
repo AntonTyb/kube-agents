@@ -1,0 +1,61 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * 1" # Weekly Monday scan
+
+permissions:
+  contents: read
+
+jobs:
+  gosec-scan:
+    name: Go Security Scan (gosec)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run gosec
+        uses: securego/gosec@a4869c9b5f5431fae8f81eaecfeef5b0e8ea312d # v2.22.0
+        with:
+          args: "./k8s-operator/..."
+
+  trivy-scan:
+    name: Container & Manifest Scan (trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Scan Repository Configs & Manifests
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2de8d8e560f # v0.28.0
+        with:
+          scan-type: "config"
+          exit-code: "1"
+          severity: "HIGH,CRITICAL"
+
+  semgrep-scan:
+    name: SAST Scan (semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.82.0@sha256:4a38618e7c10c14b98d1a10065aefc8c1050beab45eead11b33da07d7ccbeec1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run semgrep
+        run: semgrep ci --config=p/security-audit
+
+  checkov-scan:
+    name: IaC Security Scan (checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@51268393c39eddeba6bcbe5ea8c92a95e0c50cae # v12.2928.0
+        with:
+          framework: all
+          output_format: cli
+          soft_fail: false

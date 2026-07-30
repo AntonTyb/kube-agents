@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # GitHub Actions Workflows
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -8,6 +9,54 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    commit-message:
+      prefix: "ci"
+
+  # Go Ecosystem (Operator)
+  - package-ecosystem: "gomod"
+    directory: "/k8s-operator"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "go"
+    commit-message:
+      prefix: "deps"
+
+  # Python Ecosystem (E2E Tests)
+  - package-ecosystem: "pip"
+    directory: "/tests/e2e"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+
+  # Node.js Ecosystem (Root Linters & Tooling)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps"
+
+  # Docker Ecosystems
+  - package-ecosystem: "docker"
+    directory: "/deploy/docker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
     commit-message:
       prefix: "ci"
 
