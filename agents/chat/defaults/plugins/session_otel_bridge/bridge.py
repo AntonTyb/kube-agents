@@ -5,16 +5,11 @@ from inspect import Signature, signature
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-try:
-    from hermes_plugins.hermes_otel.tracer import get_tracer
-except ImportError:
-    def get_tracer() -> Any:
-        return None
-
+from hermes_plugins.hermes_otel.tracer import get_tracer
 try:
     from ..common.redactor import AuditRedactor
 except (ImportError, ValueError):
-    from agents.platform.defaults.plugins.common.redactor import AuditRedactor
+    from plugins.common.redactor import AuditRedactor
 
 DEFAULT_SESSION_KV_DB_PATH = "/var/lib/kube-agents/session/session_kv.db"
 

@@ -6,17 +6,24 @@ import os
 import sqlite3
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
-# Add repo root to sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Stub hermes_plugins.hermes_otel.tracer before imports so bridge.py does not need runtime fallbacks
+_fake_tracer_mod = types.ModuleType("hermes_plugins.hermes_otel.tracer")
+_fake_tracer_mod.get_tracer = lambda *a, **k: MagicMock()
+sys.modules["hermes_plugins"] = types.ModuleType("hermes_plugins")
+sys.modules["hermes_plugins.hermes_otel"] = types.ModuleType("hermes_plugins.hermes_otel")
+sys.modules["hermes_plugins.hermes_otel.tracer"] = _fake_tracer_mod
 
-from agents.platform.defaults.plugins.common.redactor import AuditRedactor
-from agents.chat.defaults.plugins.session_otel_bridge.bridge import (
-    OtelSessionBridge,
-)
-from agents.chat.defaults.plugins.session_store.store import (
+# Add defaults package to sys.path matching container layout
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "defaults"))
+
+from plugins.common.redactor import AuditRedactor
+from plugins.session_otel_bridge.bridge import OtelSessionBridge
+from plugins.session_store.store import (
     SessionMetadata,
     SessionMetadataStore,
 )
@@ -27,7 +34,9 @@ class TestSessionStorePII(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "session_kv.db")
         self._saved_db = os.environ.get("SESSION_KV_DB_PATH")
+        self._saved_salt = os.environ.get("SESSION_KV_SALT")
         os.environ["SESSION_KV_DB_PATH"] = self.db_path
+        os.environ["SESSION_KV_SALT"] = "test-salt-secret"
         # Reset SessionMetadataStore connection
         SessionMetadataStore._close_unlocked()
 
@@ -37,6 +46,10 @@ class TestSessionStorePII(unittest.TestCase):
             os.environ.pop("SESSION_KV_DB_PATH", None)
         else:
             os.environ["SESSION_KV_DB_PATH"] = self._saved_db
+        if self._saved_salt is None:
+            os.environ.pop("SESSION_KV_SALT", None)
+        else:
+            os.environ["SESSION_KV_SALT"] = self._saved_salt
         self.temp_dir.cleanup()
 
     def test_session_metadata_hashes_email(self):
@@ -94,5 +107,16 @@ class TestSessionStorePII(unittest.TestCase):
         self.assertIn(AuditRedactor.hmac_hash(email), attrs["hermes.sender.id"])
 
 
+class TestSessionManagerPII(unittest.TestCase):
+    def test_delegation_headers_uses_email_hash(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform" / "scripts"))
+        from session_manager import SessionManager
+        sm = SessionManager()
+        headers = sm.delegation_headers({"metadata": {"user_email_hash": "hash123"}})
+        self.assertEqual(headers.get("X-Hermes-User-Email-Hash"), "hash123")
+        self.assertNotIn("X-Hermes-User-Email", headers)
+
+
 if __name__ == "__main__":
     unittest.main()
+

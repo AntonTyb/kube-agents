@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
 import sqlite3
-import hmac
 import subprocess
 import sys
 import urllib.error
@@ -43,11 +43,11 @@ CLEANUP_TTL_DAYS = int(os.getenv("SESSION_KV_CLEANUP_TTL_DAYS", "14"))
 
 
 def _get_db_path() -> str:
-    return os.getenv("SESSION_KV_DB_PATH", SESSION_KV_DB_PATH)
+    return SESSION_KV_DB_PATH
 
 
 def _get_api_key() -> str:
-    key = os.getenv("API_SERVER_KEY") or os.getenv("SESSION_KV_API_KEY") or ""
+    key = os.getenv("SESSION_KV_API_KEY") or ""
     return key.strip()
 
 
@@ -122,6 +122,10 @@ def healthz() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+# Note: POST /sessions and POST /sessions/{session_id}/inject remain unauthenticated
+# because k8s-event-watcher calls them over loopback without credentials.
+# All other read/write endpoints (/v1/sessions, /v1/incidents, etc.) are protected
+# by verify_api_key.
 @app.post("/sessions", status_code=201)
 def create_session() -> Dict[str, str]:
     """Create a new session ID for the incoming incident."""
@@ -446,7 +450,7 @@ def list_sessions(limit: int = 100) -> Dict[str, Any]:
     return {"sessions": sessions}
 
 
-@app.post("/v1/incidents")
+@app.post("/v1/incidents", dependencies=[Depends(verify_api_key)])
 def store_incident(body: Dict[str, Any]) -> Dict[str, str]:
     chat_id, thread_id, report = body.get("chat_id"), body.get("thread_id"), body.get("report")
     if not (chat_id and thread_id and report):
@@ -462,7 +466,7 @@ def store_incident(body: Dict[str, Any]) -> Dict[str, str]:
     return {"status": "stored"}
 
 
-@app.get("/v1/incidents/by-thread")
+@app.get("/v1/incidents/by-thread", dependencies=[Depends(verify_api_key)])
 def get_incident(chat_id: str, thread_id: str) -> Dict[str, str]:
     with closing(sqlite3.connect(_get_db_path(), timeout=5.0)) as conn:
         row = conn.execute(
@@ -474,7 +478,5 @@ def get_incident(chat_id: str, thread_id: str) -> Dict[str, str]:
     return {"chat_id": chat_id, "thread_id": thread_id, "report": row[0]}
 
 
-try:
-    init_db()
-except Exception:
-    pass
+init_db()
+

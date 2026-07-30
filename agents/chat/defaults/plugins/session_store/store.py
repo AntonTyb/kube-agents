@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 try:
     from ..common.redactor import AuditRedactor
 except (ImportError, ValueError):
-    from agents.platform.defaults.plugins.common.redactor import AuditRedactor
+    from plugins.common.redactor import AuditRedactor
 
 logger = logging.getLogger("hermes.plugin.session_store")
 

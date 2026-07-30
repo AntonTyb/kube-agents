@@ -219,7 +219,7 @@ class TestSessionKvServerQueryBuilding(unittest.TestCase):
 
 class TestSessionKVServer(unittest.TestCase):
     def setUp(self):
-        self._saved_key = os.environ.get("API_SERVER_KEY")
+        self._saved_key = os.environ.get("SESSION_KV_API_KEY")
         self._saved_db = os.environ.get("SESSION_KV_DB_PATH")
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "test_session_kv.db")
@@ -229,9 +229,9 @@ class TestSessionKVServer(unittest.TestCase):
 
     def tearDown(self):
         if self._saved_key is None:
-            os.environ.pop("API_SERVER_KEY", None)
+            os.environ.pop("SESSION_KV_API_KEY", None)
         else:
-            os.environ["API_SERVER_KEY"] = self._saved_key
+            os.environ["SESSION_KV_API_KEY"] = self._saved_key
         if self._saved_db is None:
             os.environ.pop("SESSION_KV_DB_PATH", None)
         else:
@@ -239,50 +239,87 @@ class TestSessionKVServer(unittest.TestCase):
         session_kv_server.SESSION_KV_DB_PATH = os.environ.get("SESSION_KV_DB_PATH", temp_db_path)
         self.temp_dir.cleanup()
 
+    def _call_protected(self, fn, *args, x_api_key=None, authorization=None, **kwargs):
+        # Simulate FastAPI dependency execution for protected endpoints
+        session_kv_server.verify_api_key(x_api_key=x_api_key, authorization=authorization)
+        return fn(*args, **kwargs)
+
     def test_healthz_unauthenticated(self):
         res = session_kv_server.healthz()
         self.assertEqual(res, {"status": "ok"})
 
+    def test_create_session_unauthenticated_loopback(self):
+        # Watcher loopback calls remain unauthenticated
+        res = session_kv_server.create_session()
+        self.assertIn("sessionID", res)
+
     def test_verify_api_key_raises_when_unset(self):
-        os.environ.pop("API_SERVER_KEY", None)
+        os.environ.pop("SESSION_KV_API_KEY", None)
         with self.assertRaises(Exception) as ctx:
             session_kv_server.verify_api_key(x_api_key="secret")
         self.assertEqual(ctx.exception.status_code, 401)
         self.assertIn("not configured", ctx.exception.detail)
 
     def test_verify_api_key_raises_when_invalid(self):
-        os.environ["API_SERVER_KEY"] = "valid-secret"
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
         with self.assertRaises(Exception) as ctx:
             session_kv_server.verify_api_key(x_api_key="wrong-secret")
         self.assertEqual(ctx.exception.status_code, 401)
         self.assertIn("invalid API key", ctx.exception.detail)
 
     def test_verify_api_key_succeeds_with_x_api_key(self):
-        os.environ["API_SERVER_KEY"] = "valid-secret"
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
         try:
             session_kv_server.verify_api_key(x_api_key="valid-secret")
         except Exception:
             self.fail("verify_api_key raised unexpectedly with valid X-API-Key")
 
     def test_verify_api_key_succeeds_with_bearer_token(self):
-        os.environ["API_SERVER_KEY"] = "valid-secret"
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
         try:
             session_kv_server.verify_api_key(authorization="Bearer valid-secret")
         except Exception:
             self.fail("verify_api_key raised unexpectedly with valid Bearer token")
 
-    def test_get_metadata_and_list_sessions(self):
+    def test_protected_endpoints_require_api_key(self):
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO session_metadata (session_id, metadata) VALUES (?, ?)",
                 ("sess-123", json.dumps({"user_email_hash": "abc"})),
             )
-        res = session_kv_server.get_metadata("sess-123")
+
+        with self.assertRaises(Exception) as ctx:
+            self._call_protected(session_kv_server.get_metadata, "sess-123", x_api_key=None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        res = self._call_protected(session_kv_server.get_metadata, "sess-123", x_api_key="valid-secret")
         self.assertEqual(res, {"user_email_hash": "abc"})
 
-        listed = session_kv_server.list_sessions(limit=10)
+        with self.assertRaises(Exception) as ctx:
+            self._call_protected(session_kv_server.list_sessions, limit=10, x_api_key=None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        listed = self._call_protected(session_kv_server.list_sessions, limit=10, x_api_key="valid-secret")
         self.assertEqual(len(listed["sessions"]), 1)
-        self.assertEqual(listed["sessions"][0]["session_id"], "sess-123")
+
+    def test_incidents_endpoints_require_api_key(self):
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
+        payload = {"chat_id": "c-1", "thread_id": "t-1", "report": "test incident"}
+        with self.assertRaises(Exception) as ctx:
+            self._call_protected(session_kv_server.store_incident, payload, x_api_key="wrong")
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        res = self._call_protected(session_kv_server.store_incident, payload, x_api_key="valid-secret")
+        self.assertEqual(res, {"status": "stored"})
+
+        with self.assertRaises(Exception) as ctx:
+            self._call_protected(session_kv_server.get_incident, "c-1", "t-1", x_api_key=None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        res = self._call_protected(session_kv_server.get_incident, "c-1", "t-1", x_api_key="valid-secret")
+        self.assertEqual(res["report"], "test incident")
+
 
 
 if __name__ == "__main__":

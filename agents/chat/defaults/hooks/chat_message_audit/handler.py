@@ -3,12 +3,9 @@ import logging
 from typing import Any, Dict
 
 try:
-    from ...plugins.common.redactor import AuditRedactor, SecurityAuditViolationError
+    from ...plugins.common.redactor import AuditRedactor
 except (ImportError, ValueError):
-    from agents.platform.defaults.plugins.common.redactor import (
-        AuditRedactor,
-        SecurityAuditViolationError,
-    )
+    from plugins.common.redactor import AuditRedactor
 
 logger = logging.getLogger("hermes.hook.chat_message_audit")
 
@@ -43,9 +40,6 @@ def _emit(audit_event: str, context: Dict[str, Any]) -> None:
 
 
 async def handle(event_type: str, context: Dict[str, Any]) -> None:
-    AuditRedactor.check_security_violations(context)
-    if isinstance(context, dict):
-        AuditRedactor.redact_in_place(context)
     try:
         if event_type == "agent:start":
             _emit("chat_message_start", context)
@@ -53,10 +47,7 @@ async def handle(event_type: str, context: Dict[str, Any]) -> None:
             _emit("chat_message_end", context)
         elif event_type == "agent:step":
             _emit("chat_message_step", context)
-    except SecurityAuditViolationError:
-        raise
     except Exception as exc:
         logger.error(
             "Error in chat_message_audit handler for %s: %s", event_type, exc, exc_info=True
         )
-        raise

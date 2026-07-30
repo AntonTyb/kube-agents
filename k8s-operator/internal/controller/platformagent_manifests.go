@@ -1358,28 +1358,34 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 
 		var apiServerSecretRef *corev1.SecretKeySelector
 		var sessionKVSaltSecretRef *corev1.SecretKeySelector
-		if harness := agent.Spec.Harness; harness != nil && harness.Hermes != nil && harness.Hermes.ApiServerSecretRef != nil {
-			apiServerSecretRef = harness.Hermes.ApiServerSecretRef
-			sessionKVSaltSecretRef = &corev1.SecretKeySelector{
-				LocalObjectReference: harness.Hermes.ApiServerSecretRef.LocalObjectReference,
-				Key:                  "salt",
+		if harness := agent.Spec.Harness; harness != nil && harness.Hermes != nil {
+			if harness.Hermes.ApiServerSecretRef != nil {
+				apiServerSecretRef = harness.Hermes.ApiServerSecretRef
 			}
-		} else {
-			apiServerSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "api-key")
-			sessionKVSaltSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "salt")
+			if harness.Hermes.SessionKVSaltSecretRef != nil {
+				sessionKVSaltSecretRef = harness.Hermes.SessionKVSaltSecretRef
+			}
 		}
-		dashboardEnvVars = append(dashboardEnvVars, corev1.EnvVar{
-			Name: "API_SERVER_KEY",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: apiServerSecretRef,
+		if apiServerSecretRef == nil {
+			apiServerSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "API_SERVER_KEY")
+		}
+		if sessionKVSaltSecretRef == nil {
+			sessionKVSaltSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "SESSION_KV_SALT")
+		}
+		dashboardEnvVars = append(dashboardEnvVars,
+			corev1.EnvVar{
+				Name: "SESSION_KV_API_KEY",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: apiServerSecretRef,
+				},
 			},
-		})
-		dashboardEnvVars = append(dashboardEnvVars, corev1.EnvVar{
-			Name: "SESSION_KV_SALT",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: sessionKVSaltSecretRef,
+			corev1.EnvVar{
+				Name: "SESSION_KV_SALT",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: sessionKVSaltSecretRef,
+				},
 			},
-		})
+		)
 
 		dashboardVolumeMounts := []corev1.VolumeMount{
 			{

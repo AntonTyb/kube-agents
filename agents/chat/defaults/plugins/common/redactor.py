@@ -1,4 +1,4 @@
-"""Centralized thread-safe redaction engine and security policy enforcement for audit logs."""
+"""Centralized stateless redaction engine for audit logs and pseudonymization."""
 
 from __future__ import annotations
 
@@ -6,38 +6,24 @@ import hashlib
 import hmac
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
-
-
-class SecurityAuditViolationError(Exception):
-    """Raised when an audit plugin detects a high-risk security policy violation."""
-
-    pass
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class AuditRedactor:
-    """Thread-safe regex and dictionary redactor for secrets, PII, and security violations."""
+    """Stateless regex and dictionary redactor for secrets and PII."""
 
     PRIVATE_KEY_PATTERN = re.compile(
         r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----",
         re.IGNORECASE,
     )
     GCP_API_KEY_PATTERN = re.compile(r"AIza[0-9A-Za-z-_]{35}")
-    BEARER_TOKEN_PATTERN = re.compile(r"(?i)bearer\s+[a-zA-Z0-9_\-\.=]+")
+    BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bbearer\s+([a-zA-Z0-9_\-\.=]{15,})\b")
     GITHUB_TOKEN_PATTERN = re.compile(r"ghp_[a-zA-Z0-9]{36}")
     OPENAI_TOKEN_PATTERN = re.compile(r"sk-[a-zA-Z0-9]{48}")
     SECRET_KV_PATTERN = re.compile(
         r"(?i)\b(password|secret|token|api_key|apikey|access_token|client_secret)\b([\"']?\s*[:=]\s*)([\"']?)([^\"'\s,}{\]]+)\3"
     )
     EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-
-    HIGH_RISK_PATTERNS = (
-        re.compile(r"(?i)ignore\s+(?:all\s+)?previous\s+instructions"),
-        re.compile(r"(?i)system\s+override"),
-        re.compile(r"(?i)cat\s+/etc/(?:shadow|passwd)"),
-        re.compile(r"(?i)rm\s+-rf\s+/"),
-        re.compile(r"(?i)drop\s+table"),
-    )
 
     SENSITIVE_KEYS = {
         "password",
@@ -50,9 +36,16 @@ class AuditRedactor:
         "authorization",
         "auth",
         "private_key",
-        "credential",
-        "credentials",
     }
+
+    @staticmethod
+    def _get_key_words(key: Any) -> Set[str]:
+        s = str(key)
+        # Split camelCase and PascalCase
+        s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s).lower()
+        words = set(re.split(r"[^a-z0-9]+", s))
+        words.add(s.lower())
+        return {w for w in words if w}
 
     @classmethod
     def redact_text(cls, text: str) -> str:
@@ -69,15 +62,18 @@ class AuditRedactor:
 
     @classmethod
     def redact(cls, value: Any) -> Any:
-        if isinstance(value, str):
+        if isinstance(value, bytes):
+            text = value.decode("utf-8", errors="replace")
+            return cls.redact_text(text).encode("utf-8")
+        elif isinstance(value, str):
             return cls.redact_text(value)
         elif isinstance(value, dict):
             redacted_dict: Dict[Any, Any] = {}
             for k, v in value.items():
-                k_str = str(k).lower()
-                if any(s in k_str for s in cls.SENSITIVE_KEYS):
+                words = cls._get_key_words(k)
+                if words & cls.SENSITIVE_KEYS:
                     redacted_dict[k] = "[REDACTED_SECRET]" if isinstance(v, (str, bytes)) else cls.redact(v)
-                elif "email" in k_str or "mail" in k_str:
+                elif any("email" in w or "mail" == w for w in words):
                     redacted_dict[k] = "[REDACTED_EMAIL]" if isinstance(v, (str, bytes)) else cls.redact(v)
                 else:
                     redacted_dict[k] = cls.redact(v)
@@ -88,45 +84,16 @@ class AuditRedactor:
             return tuple(cls.redact(item) for item in value)
         return value
 
-    @classmethod
-    def redact_in_place(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(data, dict):
-            return data
-        for k, v in list(data.items()):
-            k_str = str(k).lower()
-            if any(s in k_str for s in cls.SENSITIVE_KEYS):
-                data[k] = "[REDACTED_SECRET]" if isinstance(v, (str, bytes)) else cls.redact(v)
-            elif "email" in k_str or "mail" in k_str:
-                data[k] = "[REDACTED_EMAIL]" if isinstance(v, (str, bytes)) else cls.redact(v)
-            else:
-                data[k] = cls.redact(v)
-        return data
-
-    @classmethod
-    def check_security_violations(cls, value: Any) -> None:
-        if isinstance(value, str):
-            for pattern in cls.HIGH_RISK_PATTERNS:
-                if pattern.search(value):
-                    raise SecurityAuditViolationError(
-                        f"Security audit policy violation: high-risk pattern detected ({pattern.pattern})"
-                    )
-        elif isinstance(value, dict):
-            for k, v in value.items():
-                cls.check_security_violations(str(k))
-                cls.check_security_violations(v)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                cls.check_security_violations(item)
-
     @staticmethod
     def hmac_hash(value: str, salt: Optional[bytes] = None) -> str:
         if not value:
             return ""
         if salt is None:
-            salt_str = (
-                os.getenv("SESSION_KV_SALT")
-                or os.getenv("API_SERVER_KEY")
-                or "default-session-kv-salt"
-            )
+            salt_str = os.getenv("SESSION_KV_SALT")
+            if not salt_str:
+                raise ValueError(
+                    "SESSION_KV_SALT environment variable is not configured"
+                )
             salt = salt_str.encode("utf-8")
         return hmac.new(salt, value.encode("utf-8"), hashlib.sha256).hexdigest()
+

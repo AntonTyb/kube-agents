@@ -486,8 +486,8 @@ func TestBuildDeployment(t *testing.T) {
 			if dashboardEnvMap["SESSION_KV_DB_PATH"].Value != sessionKVDBPath {
 				t.Errorf("expected SESSION_KV_DB_PATH %s, got %s", sessionKVDBPath, dashboardEnvMap["SESSION_KV_DB_PATH"].Value)
 			}
-			if dashboardEnvMap["API_SERVER_KEY"].ValueFrom == nil {
-				t.Errorf("expected API_SERVER_KEY env var on dashboard container")
+			if dashboardEnvMap["SESSION_KV_API_KEY"].ValueFrom == nil {
+				t.Errorf("expected SESSION_KV_API_KEY env var on dashboard container")
 			}
 			if dashboardEnvMap["SESSION_KV_SALT"].ValueFrom == nil {
 				t.Errorf("expected SESSION_KV_SALT env var on dashboard container")
