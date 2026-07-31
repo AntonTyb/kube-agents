@@ -122,11 +122,9 @@ def healthz() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-# Note: POST /sessions and POST /sessions/{session_id}/inject remain unauthenticated
-# because k8s-event-watcher calls them over loopback without credentials.
-# All other read/write endpoints (/v1/sessions, /v1/incidents, etc.) are protected
-# by verify_api_key.
-@app.post("/sessions", status_code=201)
+# All endpoints (/sessions, /sessions/{session_id}/inject, /v1/sessions,
+# /v1/incidents, etc.) are protected by verify_api_key.
+@app.post("/sessions", status_code=201, dependencies=[Depends(verify_api_key)])
 def create_session() -> Dict[str, str]:
     """Create a new session ID for the incoming incident."""
     session_id = f"k8s-evt-{uuid.uuid4().hex[:8]}"
@@ -363,7 +361,7 @@ def trigger_agent_troubleshooter(session_id: str, alert_msg: str, payload: Dict[
     _start_agent_turn(api_url, session_id, agent_query, headers)
 
 
-@app.post("/sessions/{session_id}/inject")
+@app.post("/sessions/{session_id}/inject", dependencies=[Depends(verify_api_key)])
 def inject_message(session_id: str, request_data: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, str]:
     """Receive the event payload and notify the Platform Agent via Google Chat."""
     raw_message = request_data.get("message", "")

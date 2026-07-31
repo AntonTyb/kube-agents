@@ -37,13 +37,35 @@ def _load_session_kv_server():
         fastapi = types.ModuleType("fastapi")
         fastapi.HTTPException = StubHTTPException
         fastapi.Header = lambda default=None, alias=None: default
-        fastapi.Depends = lambda fn: fn
         fastapi.BackgroundTasks = object
+        class _DummyDepends:
+            def __init__(self, dependency):
+                self.dependency = dependency
+
+        class _DummyRoute:
+            def __init__(self, path, methods, endpoint, dependencies):
+                self.path = path
+                self.methods = set(methods)
+                self.endpoint = endpoint
+                self.dependencies = []
+                for d in (dependencies or []):
+                    dep_fn = getattr(d, "dependency", d)
+                    self.dependencies.append(types.SimpleNamespace(dependency=dep_fn))
+
         class _DummyApp:
-            def get(self, *a, **k):
-                return lambda f: f
-            def post(self, *a, **k):
-                return lambda f: f
+            def __init__(self):
+                self.routes = []
+            def get(self, path, *a, **k):
+                def _decorator(f):
+                    self.routes.append(_DummyRoute(path, ["GET"], f, k.get("dependencies", [])))
+                    return f
+                return _decorator
+            def post(self, path, *a, **k):
+                def _decorator(f):
+                    self.routes.append(_DummyRoute(path, ["POST"], f, k.get("dependencies", [])))
+                    return f
+                return _decorator
+        fastapi.Depends = _DummyDepends
         fastapi.FastAPI = _DummyApp
 
         mcp = types.ModuleType("mcp"); mcp.__path__ = []
@@ -237,18 +259,71 @@ class TestSessionKVServer(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _call_protected(self, fn, *args, x_api_key=None, authorization=None, **kwargs):
-        # Simulate FastAPI dependency execution for protected endpoints
-        session_kv_server.verify_api_key(x_api_key=x_api_key, authorization=authorization)
+        # Look up fn in registered routes and invoke its dependencies first
+        route = next((r for r in getattr(session_kv_server.app, "routes", []) if getattr(r, "endpoint", None) == fn), None)
+        self.assertIsNotNone(route, f"Function {fn} is not registered as a route")
+        for dep in getattr(route, "dependencies", []):
+            if getattr(dep, "dependency", None) == session_kv_server.verify_api_key:
+                dep.dependency(x_api_key=x_api_key, authorization=authorization)
+            elif callable(getattr(dep, "dependency", None)):
+                dep.dependency()
         return fn(*args, **kwargs)
+
+    def test_all_routes_have_auth_dependency(self):
+        protected_paths = {
+            "/sessions",
+            "/sessions/{session_id}/inject",
+            "/v1/sessions/{session_id}/metadata",
+            "/v1/sessions",
+            "/v1/incidents",
+            "/v1/incidents/by-thread",
+        }
+        found_paths = set()
+        for route in getattr(session_kv_server.app, "routes", []):
+            if route.path == "/healthz":
+                continue
+            found_paths.add(route.path)
+            deps = [getattr(d, "dependency", None) for d in getattr(route, "dependencies", [])]
+            self.assertIn(
+                session_kv_server.verify_api_key,
+                deps,
+                f"Route {route.path} is missing verify_api_key dependency",
+            )
+        self.assertEqual(found_paths, protected_paths)
 
     def test_healthz_unauthenticated(self):
         res = session_kv_server.healthz()
         self.assertEqual(res, {"status": "ok"})
 
-    def test_create_session_unauthenticated_loopback(self):
-        # Watcher loopback calls remain unauthenticated
-        res = session_kv_server.create_session()
+    def test_create_session_requires_api_key(self):
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
+        with self.assertRaises(Exception) as ctx:
+            self._call_protected(session_kv_server.create_session, x_api_key=None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        res = self._call_protected(session_kv_server.create_session, x_api_key="valid-secret")
         self.assertIn("sessionID", res)
+
+    def test_inject_message_requires_api_key(self):
+        os.environ["SESSION_KV_API_KEY"] = "valid-secret"
+        with self.assertRaises(Exception) as ctx:
+            self._call_protected(
+                session_kv_server.inject_message,
+                "sess-123",
+                {"message": '{"reason":"Test"}'},
+                background_tasks=MagicMock(),
+                x_api_key=None,
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        res = self._call_protected(
+            session_kv_server.inject_message,
+            "sess-123",
+            {"message": '{"reason":"Test"}'},
+            background_tasks=MagicMock(),
+            x_api_key="valid-secret",
+        )
+        self.assertEqual(res, {"status": "injected"})
 
     def test_verify_api_key_raises_when_unset(self):
         os.environ.pop("SESSION_KV_API_KEY", None)

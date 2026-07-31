@@ -523,7 +523,7 @@ def send_notification(message: str, session_id: str = "") -> str:
 
     def _api_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         h = dict(extra or {})
-        api_key = os.getenv("SESSION_KV_API_KEY") or os.getenv("API_SERVER_KEY")
+        api_key = os.getenv("SESSION_KV_API_KEY")
         if api_key:
             h["X-API-Key"] = api_key.strip()
         return h

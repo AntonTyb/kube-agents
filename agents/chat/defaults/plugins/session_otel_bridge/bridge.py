@@ -71,9 +71,12 @@ class OtelSessionBridge:
 
     def _merge_fixed_session_attributes(self, session_id: str, attributes: Optional[dict]) -> dict:
         attrs = dict(attributes or {})
-        session_attrs = self._span_attributes_for_session(session_id)
-        if session_attrs:
-            attrs.update(session_attrs)
+        try:
+            session_attrs = self._span_attributes_for_session(session_id)
+            if session_attrs:
+                attrs.update(session_attrs)
+        except Exception as exc:
+            logger.warning("Failed to resolve session attributes for OTel span: %s", exc)
         return attrs
 
     def _span_attributes_for_session(self, session_id: str) -> dict:
@@ -90,7 +93,10 @@ class OtelSessionBridge:
             or ""
         )
         if "@" in str(sender_id):
-            sender_id = AuditRedactor.hmac_hash(str(sender_id))
+            try:
+                sender_id = AuditRedactor.hmac_hash(str(sender_id))
+            except Exception:
+                sender_id = "[REDACTED_EMAIL]"
         user_id = sender_id
         if user_id and platform and ":" not in str(user_id):
             user_id = f"{platform}:{user_id}"

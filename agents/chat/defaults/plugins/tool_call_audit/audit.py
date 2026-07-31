@@ -141,7 +141,7 @@ def log_pre_gateway_dispatch(
             {
                 "session_id": session_id,
                 "platform": platform,
-                "user_id": user_id,
+                "user_id": _serialize(user_id),
                 "text": _serialize(text),
             },
         )

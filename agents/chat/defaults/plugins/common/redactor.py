@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import os
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set
 
 
 class AuditRedactor:

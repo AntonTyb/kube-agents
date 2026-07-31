@@ -29,7 +29,7 @@ def _lookup(chat_id, thread_id):
     url = f"http://127.0.0.1:8699/v1/incidents/by-thread?{q}"
     try:
         headers = {}
-        api_key = os.getenv("SESSION_KV_API_KEY") or os.getenv("API_SERVER_KEY")
+        api_key = os.getenv("SESSION_KV_API_KEY")
         if api_key:
             headers["X-API-Key"] = api_key.strip()
         req = urllib.request.Request(url, headers=headers, method="GET")

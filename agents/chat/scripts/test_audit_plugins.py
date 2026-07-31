@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "defaults"))
 from hooks.chat_message_audit.handler import handle as chat_handle
 from plugins.tool_call_audit.audit import (
     log_post_tool_call,
+    log_pre_gateway_dispatch,
     log_pre_tool_call,
 )
 
@@ -55,6 +56,19 @@ class TestAuditPluginsPassiveLogger(unittest.TestCase):
             asyncio.run(chat_handle("agent:start", ctx))
         except Exception:
             self.fail("chat_message_audit raised unexpectedly")
+
+    def test_gateway_dispatch_redacts_user_id_email(self):
+        import types
+        from unittest.mock import patch
+        from plugins.tool_call_audit import audit
+        source = types.SimpleNamespace(platform="google_chat", user_id="alice@example.com")
+        event = types.SimpleNamespace(source=source, text="Hello world")
+        with patch.object(audit.logger, "info") as mock_info:
+            log_pre_gateway_dispatch(event)
+            self.assertTrue(mock_info.called)
+            logged_payload = mock_info.call_args[0][0]
+            self.assertIn("[REDACTED_EMAIL]", logged_payload)
+            self.assertNotIn("alice@example.com", logged_payload)
 
 
 if __name__ == "__main__":
