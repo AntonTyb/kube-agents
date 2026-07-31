@@ -156,10 +156,18 @@ func buildKubeClient(f *flags) (kubernetes.Interface, error) {
 	)
 	switch {
 	case f.kubeconfig != "":
-		cfg, err = clientcmd.BuildConfigFromFlags("", f.kubeconfig)
-		if err != nil {
-			return nil, fmt.Errorf("kubeconfig %s: %w", f.kubeconfig, err)
+		if _, statErr := os.Stat(f.kubeconfig); statErr == nil {
+			cfg, err = clientcmd.BuildConfigFromFlags("", f.kubeconfig)
+			if err != nil {
+				return nil, fmt.Errorf("kubeconfig %s: %w", f.kubeconfig, err)
+			}
+			break
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("kubeconfig %s stat: %w", f.kubeconfig, statErr)
 		}
+		// Fallback to in-cluster config if explicit kubeconfig file does not exist
+		log.Printf("kubeconfig file %s not found, falling back to in-cluster config", f.kubeconfig)
+		fallthrough
 	case f.inCluster || os.Getenv("KUBERNETES_SERVICE_HOST") != "":
 		cfg, err = rest.InClusterConfig()
 		if err != nil {
@@ -202,48 +210,12 @@ func (d *dispatcher) Dispatch(ctx context.Context, ev TriageEvent) {
 	if !d.filter.Accept(ev) {
 		return
 	}
-	result := d.dedup.Observe(ev.Key, ev.LastSeen)
+	result := d.dedup.Observe(ev.Key, ev.Message, ev.LastSeen)
 	d.metrics.activeIncidents.Set(float64(d.dedup.Len()))
 	if result.Kind == dedupDuplicate {
 		d.metrics.eventsDedupSuppress.WithLabelValues(ev.Key.Reason, ev.Namespace).Inc()
 		log.Printf("dedup %s pod=%s/%s (count=%d, window active)",
 			ev.Key.Reason, ev.Namespace, ev.Name, result.Count)
-
-		if result.SessionID != "" {
-			payload := InjectPayload{
-				Kind:         injectKindFollowup,
-				Reason:       ev.Key.Reason,
-				Namespace:    ev.Namespace,
-				KindOfObject: ev.KindOfObject,
-				Name:         ev.Name,
-				Container:    ev.Container,
-				UID:          ev.Key.UID,
-				Message:      ev.Message,
-				Count:        result.Count,
-				FirstSeen:    ev.FirstSeen,
-				LastSeen:     ev.LastSeen,
-				Cluster:      d.cluster,
-				Type:         ev.Type,
-				Context: PayloadContext{
-					ControllerRef: ev.ControllerRef,
-					Node:          ev.Node,
-					Labels:        ev.Labels,
-				},
-			}
-			if d.dryRun {
-				out, _ := json.MarshalIndent(payload, "", "  ")
-				fmt.Printf("--- dry-run follow-up payload for session %q ---\n%s\n", result.SessionID, string(out))
-				return
-			}
-			if err := d.injector.Inject(ctx, result.SessionID, payload); err != nil {
-				log.Printf("dispatcher: inject follow-up for %s/%s (sid=%s): %v", ev.Namespace, ev.Name, result.SessionID, err)
-				d.metrics.injectErrors.WithLabelValues(ev.Key.Reason, "inject_followup").Inc()
-				return
-			}
-			d.metrics.eventsInjected.WithLabelValues(ev.Key.Reason, ev.Namespace).Inc()
-			log.Printf("fire follow-up %s pod=%s/%s → sid=%s",
-				ev.Key.Reason, ev.Namespace, ev.Name, result.SessionID)
-		}
 		return
 	}
 	// Create or reuse a troubleshooter session, then inject event telemetry.
@@ -260,7 +232,7 @@ func (d *dispatcher) Dispatch(ctx context.Context, ev TriageEvent) {
 		}
 		sid = newSid
 		d.metrics.sessionCreates.WithLabelValues("ok").Inc()
-		d.dedup.BindSession(ev.Key, sid)
+		d.dedup.BindSession(ev.Key, ev.Message, sid)
 	}
 	payload := InjectPayload{
 		Kind:         injectKindEvent,
@@ -383,15 +355,10 @@ func realMain(argv []string) error {
 		go runSnapshotLoop(ctx, dedup, f.snapshotInterval)
 	}
 
-	// Build the kube client.
 	if f.dryRun {
-		log.Printf("k8s-event-watcher: --dry-run: skipping kube client; would watch cluster %q", f.clusterName)
-		<-ctx.Done()
-		if err := dedup.Snapshot(); err != nil {
-			log.Printf("dedup snapshot on shutdown: %v", err)
-		}
-		return nil
+		log.Printf("k8s-event-watcher: running in --dry-run mode; watching cluster %q without calling the daemon", f.clusterName)
 	}
+	// Build the kube client.
 	client, err := buildKubeClient(f)
 	if err != nil {
 		return err
