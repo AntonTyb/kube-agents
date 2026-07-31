@@ -197,6 +197,8 @@ RUN set -eu; \
         find "$d" -path '*/scripts/*' -type f -exec chmod 755 {} + ; \
     done
 
+USER 10000:10000
+
 
 # --- CREDENTIAL PROXY TARGET ---
 # Only this image contains the real credential-aware CLIs. The platform target
@@ -223,3 +225,5 @@ RUN curl -sSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dear
     rm -f /tmp/gh.deb && \
     rm -rf /var/lib/apt/lists/* && \
     chmod 755 /etc/envoy /usr/local/bin/envoy /usr/local/bin/envoy-credential-sidecar
+
+USER 10000:10000

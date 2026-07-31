@@ -35,7 +35,7 @@ jobs:
           scan-type: "config"
           exit-code: "1"
           severity: "HIGH,CRITICAL"
-          trivyignores: ".trivyignore"
+          trivyignores: ".trivyignore.yaml"
 
   semgrep-scan:
     name: SAST Scan (semgrep)
