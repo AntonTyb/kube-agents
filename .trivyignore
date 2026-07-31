@@ -14,3 +14,6 @@ KSV-0118
 
 # Ignore KSV-0046: read-only explorer ClusterRoles in sample manifests use wildcard resource read
 KSV-0046
+
+# Ignore KSV-0112: read-only explorer Roles in sample manifests use wildcard resource read
+KSV-0112
