@@ -72,7 +72,7 @@ func (d *PlatformAgentCustomDefaulter) Default(ctx context.Context, obj runtime.
 	if platformAgent.Spec.Deployment.Tag == nil || *platformAgent.Spec.Deployment.Tag == "" {
 		platformAgent.Spec.Deployment.Tag = ptr.To("latest")
 	}
-	if platformAgent.Spec.Deployment.ImagePullPolicy == nil {
+	if platformAgent.Spec.Deployment.ImagePullPolicy == nil || *platformAgent.Spec.Deployment.ImagePullPolicy == "" {
 		platformAgent.Spec.Deployment.ImagePullPolicy = ptr.To(corev1.PullIfNotPresent)
 	}
 	if platformAgent.Spec.Harness != nil {

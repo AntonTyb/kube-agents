@@ -265,6 +265,34 @@ func TestPlatformAgentDefaulter(t *testing.T) {
 			t.Errorf("expected UserProfileEnabled false, got %v", agent.Spec.Harness.Memory.UserProfileEnabled)
 		}
 	})
+
+	t.Run("defaults Tag and ImagePullPolicy when set to empty string", func(t *testing.T) {
+		agent := &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-agent",
+			},
+			Spec: agentv1alpha1.PlatformAgentSpec{
+				AgentSpec: agentv1alpha1.AgentSpec{
+					Deployment: &agentv1alpha1.DeploymentSpec{
+						Tag:             ptr.To(""),
+						ImagePullPolicy: ptr.To(corev1.PullPolicy("")),
+					},
+				},
+			},
+		}
+
+		err := defaulter.Default(ctx, agent)
+		if err != nil {
+			t.Fatalf("unexpected defaulting error: %v", err)
+		}
+
+		if agent.Spec.Deployment.Tag == nil || *agent.Spec.Deployment.Tag != "latest" {
+			t.Errorf("expected Tag 'latest', got %v", agent.Spec.Deployment.Tag)
+		}
+		if agent.Spec.Deployment.ImagePullPolicy == nil || *agent.Spec.Deployment.ImagePullPolicy != corev1.PullIfNotPresent {
+			t.Errorf("expected ImagePullPolicy IfNotPresent, got %v", agent.Spec.Deployment.ImagePullPolicy)
+		}
+	})
 }
 
 func TestPlatformAgentValidateDelete(t *testing.T) {
