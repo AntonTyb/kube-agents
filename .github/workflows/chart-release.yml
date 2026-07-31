@@ -33,5 +33,5 @@ jobs:
         run: |
           REPO_DOWNCASE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           helm lint charts/kube-agents
-          helm package charts/kube-agents --version ${{ steps.version.outputs.VERSION }} --app-version ${{ github.ref_name }} --destination /tmp/charts
-          helm push /tmp/charts/kube-agents-${{ steps.version.outputs.VERSION }}.tgz oci://ghcr.io/${REPO_DOWNCASE}/charts
+          helm package charts/kube-agents --version "${{ steps.version.outputs.VERSION }}" --app-version "${{ github.ref_name }}" --destination /tmp/charts
+          helm push "/tmp/charts/kube-agents-${{ steps.version.outputs.VERSION }}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts"

@@ -17,11 +17,11 @@ sidebar:
 
 ## Helm Chart Versioning Matrix
 
-| Chart `version` | Chart `appVersion` | Trigger Condition |
-| :--- | :--- | :--- |
-| `1.0.0` | `1.0.0` | Initial production release |
-| `1.0.1` | `1.0.0` | Chart template or documentation bugfix (no image change) |
-| `1.1.0` | `1.1.0` | Application release with new features and updated image tag |
+| Chart `version` | Chart `appVersion` | Trigger Condition                                           |
+| :-------------- | :----------------- | :---------------------------------------------------------- |
+| `1.0.0`         | `1.0.0`            | Initial production release                                  |
+| `1.0.1`         | `1.0.0`            | Chart template or documentation bugfix (no image change)    |
+| `1.1.0`         | `1.1.0`            | Application release with new features and updated image tag |
 
 ## Pinning Terraform Module Versions in GitOps
 
