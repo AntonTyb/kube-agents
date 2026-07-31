@@ -11,3 +11,6 @@ KSV-0056
 
 # Ignore KSV-0118: kustomize overlay patches do not define full security contexts
 KSV-0118
+
+# Ignore KSV-0046: read-only explorer ClusterRoles in sample manifests use wildcard resource read
+KSV-0046
