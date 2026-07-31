@@ -97,6 +97,50 @@ func TestPlatformAgentValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("allows update to the same existing platform agent", func(t *testing.T) {
+		existingAgent := &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "existing-agent",
+				Namespace: "kubeagents-system",
+			},
+			Spec: agentv1alpha1.PlatformAgentSpec{},
+		}
+
+		scheme := runtime.NewScheme()
+		_ = agentv1alpha1.AddToScheme(scheme)
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingAgent).Build()
+
+		val := &PlatformAgentCustomValidator{
+			Client: fakeClient,
+		}
+
+		_, err := val.ValidateUpdate(ctx, nil, existingAgent)
+		if err != nil {
+			t.Errorf("unexpected error when updating the same existing PlatformAgent: %v", err)
+		}
+	})
+
+	t.Run("allows update when the agent under validation is terminating to prevent deadlocks", func(t *testing.T) {
+		val := &PlatformAgentCustomValidator{}
+
+		now := metav1.Now()
+		agent := &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "test-agent",
+				Namespace:         "kubeagents-system",
+				DeletionTimestamp: &now,
+			},
+			Spec: agentv1alpha1.PlatformAgentSpec{
+				Harness: &agentv1alpha1.HarnessSpec{ProjectID: "my-project", ClusterName: "my-cluster"},
+			},
+		}
+
+		_, err := val.ValidateUpdate(ctx, nil, agent)
+		if err != nil {
+			t.Errorf("unexpected validation failure when updating terminating agent: %v", err)
+		}
+	})
+
 	t.Run("fails if sensitive environment variables are overridden", func(t *testing.T) {
 		val := &PlatformAgentCustomValidator{}
 
