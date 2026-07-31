@@ -14,7 +14,7 @@ FROM nousresearch/hermes-agent:${HERMES_AGENT_TAG} AS agent-base
 USER root
 
 # 1. Install all common system utilities and dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     ca-certificates \
     curl \
@@ -212,7 +212,7 @@ COPY deploy/shared/envoy-credential-sidecar.sh /usr/local/bin/envoy-credential-s
 
 RUN curl -sSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    apt-get update && apt-get install -y \
+    apt-get update && apt-get install -y --no-install-recommends \
       git \
       google-cloud-cli \
       google-cloud-cli-gke-gcloud-auth-plugin \
