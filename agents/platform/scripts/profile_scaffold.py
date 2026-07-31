@@ -107,6 +107,29 @@ def overlay_template(
             shutil.copy2(src, dest)
     if plugins_dir and plugins_dir.is_dir():
         shutil.copytree(plugins_dir, home / "plugins", dirs_exist_ok=True)
+    skills_dest = home / "skills"
+    manifest = template_dir / "skills" / "skills_manifest.sha256"
+    if skills_dest.is_dir() and manifest.is_file():
+        try:
+            from verify_skills_provenance import verify_provenance
+
+            verify_provenance(str(manifest), str(skills_dest))
+        except ImportError:
+            pass
+        except Exception as e:
+            raise SystemExit(f"ERROR: skill provenance verification failed for {skills_dest}: {e}")
+        for root, dirs, files in os.walk(skills_dest):
+            for d in dirs:
+                try:
+                    os.chmod(os.path.join(root, d), 0o555)
+                except OSError:
+                    pass
+            for f in files:
+                filepath = os.path.join(root, f)
+                try:
+                    os.chmod(filepath, 0o555 if "/scripts/" in filepath else 0o444)
+                except OSError:
+                    pass
 
 
 def main() -> None:

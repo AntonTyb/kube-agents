@@ -54,18 +54,28 @@ DEFAULT_EXECUTION_BOUNDS = {
         "python3 ./scripts/",
         "python3 /opt/data/skills/",
         "python3 /opt/data/scripts/",
+        "python3 /opt/data/profiles/",
         "python3 /opt/defaults/skills/",
         "python3 /opt/defaults/scripts/",
         "python3 /opt/hermes/skills/",
         "python3 /opt/hermes/scripts/",
+        "python3 /opt/platform-template/skills/",
+        "python3 /opt/platform-template/scripts/",
+        "python3 /opt/cluster-template/skills/",
+        "python3 /opt/cluster-template/scripts/",
         "./skills/",
         "./scripts/",
         "/opt/data/skills/",
         "/opt/data/scripts/",
+        "/opt/data/profiles/",
         "/opt/defaults/skills/",
         "/opt/defaults/scripts/",
         "/opt/hermes/skills/",
         "/opt/hermes/scripts/",
+        "/opt/platform-template/skills/",
+        "/opt/platform-template/scripts/",
+        "/opt/cluster-template/skills/",
+        "/opt/cluster-template/scripts/",
     ],
     "blocked_command_patterns": [
         "rm -rf /",
@@ -83,6 +93,8 @@ DEFAULT_EXECUTION_BOUNDS = {
     ],
     "read_only_paths": [
         "/opt/hermes/skills",
+        "/opt/platform-template",
+        "/opt/cluster-template",
         "/opt/defaults",
         "/etc",
     ],
@@ -192,6 +204,10 @@ def verify_execution_bounds(
 
     for token in tokens:
         if token.startswith("/"):
+            if is_mutating and "/profiles/" in token and "/skills" in token:
+                raise PermissionError(
+                    f"Command '{cmd_stripped}' is blocked by execution bounds: write access to runtime profile skills directory is forbidden."
+                )
             for ro_path in read_only_paths:
                 if token == ro_path or token.startswith(ro_path.rstrip("/") + "/"):
                     if is_mutating:

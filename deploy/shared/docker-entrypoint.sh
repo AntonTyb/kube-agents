@@ -92,6 +92,10 @@ if [ -d "$TARGET_DIR/profiles/platform" ] && [ -d "$PLATFORM_TEMPLATE" ]; then
     for f in config.yaml SOUL.md AGENTS.md CAPABILITIES.md; do
         [ -f "$PLATFORM_TEMPLATE/$f" ] && cp -f "$PLATFORM_TEMPLATE/$f" "$TARGET_DIR/profiles/platform/$f" 2>/dev/null || true
     done
+    if [ -d "$PLATFORM_TEMPLATE/skills" ]; then
+        mkdir -p "$TARGET_DIR/profiles/platform/skills"
+        cp -rf "$PLATFORM_TEMPLATE/skills/." "$TARGET_DIR/profiles/platform/skills/" 2>/dev/null || true
+    fi
 fi
 CLUSTER_TEMPLATE="/opt/cluster-template"
 if [ -d "$CLUSTER_TEMPLATE" ]; then
@@ -100,6 +104,10 @@ if [ -d "$CLUSTER_TEMPLATE" ]; then
         for f in SOUL.md AGENTS.md CAPABILITIES.md; do
             [ -f "$CLUSTER_TEMPLATE/$f" ] && cp -f "$CLUSTER_TEMPLATE/$f" "$d/$f" 2>/dev/null || true
         done
+        if [ -d "$CLUSTER_TEMPLATE/skills" ]; then
+            mkdir -p "$d/skills"
+            cp -rf "$CLUSTER_TEMPLATE/skills/." "$d/skills/" 2>/dev/null || true
+        fi
         # Targeted self-heal: drop `memory.provider` from cluster configs already
         # on the PVC. The template no longer sets it (multiuser_memory scopes by
         # gateway user identity, which a dispatcher-spawned worker never has), but
@@ -143,7 +151,30 @@ fi
 
 # 5. Verify skill provenance integrity before gateway run
 if [ -f "/opt/defaults/scripts/verify_skills_provenance.py" ]; then
-    python3 /opt/defaults/scripts/verify_skills_provenance.py --manifest /opt/hermes/skills/skills_manifest.sha256 --dir /opt/hermes/skills/
+    for manifest_pair in \
+        "/opt/hermes/skills/skills_manifest.sha256:/opt/hermes/skills" \
+        "/opt/platform-template/skills/skills_manifest.sha256:/opt/platform-template/skills" \
+        "/opt/platform-template/skills/skills_manifest.sha256:$TARGET_DIR/profiles/platform/skills" \
+        "/opt/cluster-template/skills/skills_manifest.sha256:/opt/cluster-template/skills"; do
+        manifest="${manifest_pair%%:*}"
+        target_dir="${manifest_pair#*:}"
+        if [ -f "$manifest" ] && [ -d "$target_dir" ]; then
+            python3 /opt/defaults/scripts/verify_skills_provenance.py --manifest "$manifest" --dir "$target_dir"
+        fi
+    done
+    if [ -f "/opt/cluster-template/skills/skills_manifest.sha256" ]; then
+        for target_dir in "$TARGET_DIR"/profiles/cluster-*/skills; do
+            if [ -d "$target_dir" ]; then
+                python3 /opt/defaults/scripts/verify_skills_provenance.py --manifest "/opt/cluster-template/skills/skills_manifest.sha256" --dir "$target_dir"
+            fi
+        done
+    fi
+    # Enforce read-only permissions on all runtime PVC skill copies to prevent runtime tampering
+    for target_dir in "$TARGET_DIR"/profiles/*/skills; do
+        if [ -d "$target_dir" ]; then
+            chmod -R u-w "$target_dir" 2>/dev/null || true
+        fi
+    done
 fi
 
 # 6. Start background microservices (FastAPI proxy)

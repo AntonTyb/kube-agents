@@ -51,6 +51,10 @@ class TestToolCallAudit(unittest.TestCase):
             "python3 /opt/data/scripts/kanban_notify_propagate.py --to child-1",
             "python3 /opt/data/skills/github-issue-resolver/scripts/resolver.py poll",
             "python3 /opt/data/scripts/cluster_agent_profile.py create --project p --cluster c --location l",
+            "python3 /opt/platform-template/skills/test_skill/scripts/test.py",
+            "python3 /opt/cluster-template/skills/test_skill/scripts/test.py",
+            "python3 /opt/data/profiles/platform/skills/test_skill/scripts/test.py",
+            "python3 /opt/data/profiles/cluster-prod/skills/test_skill/scripts/test.py",
             "/opt/data/scripts/kanban_notify_propagate.py --to child-1",
             "/opt/data/skills/github-issue-resolver/scripts/resolver.py poll",
             "/opt/data/scripts/cluster_agent_profile.py create --project p --cluster c --location l",
@@ -77,6 +81,18 @@ class TestToolCallAudit(unittest.TestCase):
         """Commands mutating read-only paths or outside writable paths should be blocked."""
         with self.assertRaises(PermissionError):
             verify_execution_bounds("hermes-cli", {"command": "rm /opt/hermes/skills/SKILL.md"})
+
+        with self.assertRaises(PermissionError):
+            verify_execution_bounds("hermes-cli", {"command": "rm /opt/platform-template/skills/SKILL.md"})
+
+        with self.assertRaises(PermissionError):
+            verify_execution_bounds("hermes-cli", {"command": "rm /opt/cluster-template/skills/SKILL.md"})
+
+        with self.assertRaises(PermissionError):
+            verify_execution_bounds("hermes-cli", {"command": "rm /opt/data/profiles/platform/skills/SKILL.md"})
+
+        with self.assertRaises(PermissionError):
+            verify_execution_bounds("hermes-cli", {"command": "rm /opt/data/profiles/cluster-prod/skills/SKILL.md"})
 
         with self.assertRaises(PermissionError):
             verify_execution_bounds("hermes-cli", {"command": "touch /etc/passwd"})

@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -73,6 +74,18 @@ class TestVerifySkillsProvenance(unittest.TestCase):
         """Non-existent manifest path should raise RuntimeError."""
         with self.assertRaises(RuntimeError):
             verify_provenance("/non/existent/manifest.sha256", self.skills_dir)
+
+    def test_profile_pvc_copy_verification(self):
+        """Verifying a runtime PVC copy of skills against an immutable template manifest should succeed and catch mutations."""
+        pvc_dir = os.path.join(self.test_dir.name, "pvc_skills")
+        shutil.copytree(self.skills_dir, pvc_dir)
+        self.assertTrue(verify_provenance(self.manifest_path, pvc_dir))
+
+        with open(os.path.join(pvc_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("# Corrupted PVC content\n")
+        with self.assertRaises(RuntimeError) as cm:
+            verify_provenance(self.manifest_path, pvc_dir)
+        self.assertIn("Checksum mismatch", str(cm.exception))
 
 
 if __name__ == "__main__":

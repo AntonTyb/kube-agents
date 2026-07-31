@@ -173,10 +173,14 @@ COPY --chown=hermes:hermes agents/cluster/ /opt/cluster-template/
 # Shared plugins available to all profiles (memory backend used by the Chat Agent).
 COPY agents/platform/plugins/ /opt/hermes/plugins/
 
-# Generate SHA-256 integrity manifest for skill provenance
-RUN cd /opt/hermes/skills && \
-    find . -type f ! -name "skills_manifest.sha256" -exec sha256sum {} + | sort > /opt/hermes/skills/skills_manifest.sha256 && \
-    chmod 444 /opt/hermes/skills/skills_manifest.sha256
+# Generate SHA-256 integrity manifests for skill provenance across base image and repo skill templates
+RUN for dir in /opt/hermes/skills /opt/platform-template/skills /opt/cluster-template/skills; do \
+        if [ -d "$dir" ]; then \
+            cd "$dir" && \
+            find . -type f ! -name "skills_manifest.sha256" -exec sha256sum {} + | sort > "$dir/skills_manifest.sha256" && \
+            chmod 444 "$dir/skills_manifest.sha256"; \
+        fi; \
+    done
 
 # NOTE: the platform overlay is no longer merged into /opt/defaults/config.yaml.
 # /opt/defaults now belongs to the Chat Agent (`default` profile) and its config
@@ -201,10 +205,14 @@ RUN set -eu; \
     for d in /opt/platform-template /opt/cluster-template; do \
         find "$d" -path '*/scripts/*' -type f -exec chmod 755 {} + ; \
     done; \
-    chown -R root:root /opt/hermes/skills; \
-    find /opt/hermes/skills -type d -exec chmod 555 {} + ; \
-    find /opt/hermes/skills -type f -exec chmod 444 {} + ; \
-    find /opt/hermes/skills -path '*/scripts/*' -type f -exec chmod 555 {} +
+    for d in /opt/hermes/skills /opt/platform-template/skills /opt/cluster-template/skills; do \
+        if [ -d "$d" ]; then \
+            chown -R root:root "$d"; \
+            find "$d" -type d -exec chmod 555 {} + ; \
+            find "$d" -type f -exec chmod 444 {} + ; \
+            find "$d" -path '*/scripts/*' -type f -exec chmod 555 {} + ; \
+        fi; \
+    done
 
 
 # --- CREDENTIAL PROXY TARGET ---
