@@ -93,17 +93,36 @@ def _load_execution_bounds(config_path: Optional[str] = None) -> Dict[str, Any]:
     paths_to_check = []
     if config_path:
         paths_to_check.append(pathlib.Path(config_path))
-    paths_to_check.append(pathlib.Path("/opt/defaults/config.yaml"))
 
     try:
         curr = pathlib.Path(__file__).resolve()
         for p in curr.parents:
-            candidate = p / "agents" / "platform" / "config.yaml"
-            if candidate.exists():
-                paths_to_check.append(candidate)
-                break
+            candidate_profile = p / "config.yaml"
+            if candidate_profile.exists() and candidate_profile not in paths_to_check:
+                paths_to_check.append(candidate_profile)
     except Exception:
         pass
+
+    hermes_home = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data"))
+    for candidate in (
+        hermes_home / "profiles" / "platform" / "config.yaml",
+        pathlib.Path("/opt/data/profiles/platform/config.yaml"),
+        pathlib.Path("/opt/platform-template/config.yaml"),
+    ):
+        if candidate not in paths_to_check:
+            paths_to_check.append(candidate)
+
+    try:
+        curr = pathlib.Path(__file__).resolve()
+        for p in curr.parents:
+            candidate_repo = p / "agents" / "platform" / "config.yaml"
+            if candidate_repo.exists() and candidate_repo not in paths_to_check:
+                paths_to_check.append(candidate_repo)
+    except Exception:
+        pass
+
+    if pathlib.Path("/opt/defaults/config.yaml") not in paths_to_check:
+        paths_to_check.append(pathlib.Path("/opt/defaults/config.yaml"))
 
     for path in paths_to_check:
         if path.exists() and yaml is not None:

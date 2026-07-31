@@ -8,6 +8,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from agents.chat.defaults.plugins.tool_call_audit.audit import (
+    _load_execution_bounds,
     verify_execution_bounds,
     log_pre_tool_call,
 )
@@ -110,6 +111,53 @@ class TestToolCallAudit(unittest.TestCase):
         verify_execution_bounds("hermes-cli", {"cmd": "pytest"})
         with self.assertRaises(PermissionError):
             verify_execution_bounds("hermes-cli", {"args": ["sudo", "rm", "-rf", "/"]})
+
+    def test_load_execution_bounds_runtime_paths(self):
+        """_load_execution_bounds should discover profile and platform container config paths."""
+        import tempfile
+        import yaml
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profiles_dir = os.path.join(tmp_dir, "profiles", "platform")
+            os.makedirs(profiles_dir, exist_ok=True)
+            cfg_path = os.path.join(profiles_dir, "config.yaml")
+            custom_bounds = {
+                "execution_bounds": {
+                    "hermes_cli": {
+                        "sandbox_mode": "enforced",
+                        "allowed_binary_prefixes": ["git status", "echo hello"],
+                    }
+                }
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(custom_bounds, f)
+
+            original_home = os.environ.get("HERMES_HOME")
+            try:
+                os.environ["HERMES_HOME"] = tmp_dir
+                bounds = _load_execution_bounds()
+                self.assertIn("echo hello", bounds.get("allowed_binary_prefixes", []))
+
+                # Verify explicit config_path override
+                explicit_cfg = os.path.join(tmp_dir, "custom_config.yaml")
+                with open(explicit_cfg, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(
+                        {
+                            "execution_bounds": {
+                                "hermes_cli": {
+                                    "allowed_binary_prefixes": ["custom command"],
+                                }
+                            }
+                        },
+                        f,
+                    )
+                bounds_explicit = _load_execution_bounds(explicit_cfg)
+                self.assertIn("custom command", bounds_explicit.get("allowed_binary_prefixes", []))
+            finally:
+                if original_home is not None:
+                    os.environ["HERMES_HOME"] = original_home
+                else:
+                    os.environ.pop("HERMES_HOME", None)
 
 
 if __name__ == "__main__":
