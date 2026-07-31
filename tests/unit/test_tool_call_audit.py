@@ -7,7 +7,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from agents.platform.defaults.plugins.tool_call_audit.audit import (
+from agents.chat.defaults.plugins.tool_call_audit.audit import (
     verify_execution_bounds,
     log_pre_tool_call,
 )
