@@ -21,7 +21,7 @@ jobs:
       - name: Run gosec
         uses: securego/gosec@e0cca6fe95306b7e7790d6f1bf6a7bec6d622459 # v2.22.0
         with:
-          args: "-no-fail ./k8s-operator/..."
+          args: "./k8s-operator/..."
 
   trivy-scan:
     name: Container & Manifest Scan (trivy)
