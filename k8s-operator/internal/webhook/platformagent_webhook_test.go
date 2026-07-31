@@ -54,6 +54,44 @@ func assertFieldError(t *testing.T, err error, expectedPath string) {
 func TestPlatformAgentValidation(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("allows creation of a valid PlatformAgent spec", func(t *testing.T) {
+		val := &PlatformAgentCustomValidator{}
+
+		validAgent := &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "valid-agent",
+				Namespace: "default",
+			},
+			Spec: agentv1alpha1.PlatformAgentSpec{
+				AgentSpec: agentv1alpha1.AgentSpec{
+					Deployment: &agentv1alpha1.DeploymentSpec{
+						Env: []corev1.EnvVar{
+							{Name: "CUSTOM_ENV_VAR", Value: "allowed-value"},
+						},
+						Sidecars: []corev1.Container{
+							{
+								Name: "sidecar",
+								SecurityContext: &corev1.SecurityContext{
+									Privileged:               ptr.To(false),
+									AllowPrivilegeEscalation: ptr.To(false),
+									RunAsUser:                ptr.To(int64(10000)),
+								},
+							},
+						},
+					},
+					Security: &agentv1alpha1.SecuritySpec{
+						ServiceAccountName: "agent-sa",
+					},
+				},
+			},
+		}
+
+		_, err := val.ValidateCreate(ctx, validAgent)
+		if err != nil {
+			t.Errorf("expected valid PlatformAgent spec to pass validation, got: %v", err)
+		}
+	})
+
 	t.Run("fails if another platform agent already exists in the project", func(t *testing.T) {
 		existingAgent := &agentv1alpha1.PlatformAgent{
 			ObjectMeta: metav1.ObjectMeta{

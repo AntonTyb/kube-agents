@@ -35,6 +35,8 @@ import (
 )
 
 // PreventDeletionAnnotation blocks deletion when set to "true".
+// Note that this serves as an accidental-deletion guardrail rather than an authorization control,
+// as a principal with update permissions can remove the annotation before deleting.
 const PreventDeletionAnnotation = "kubeagents.x-k8s.io/prevent-deletion"
 
 // restrictedServiceAccounts is the set of high-privilege service account names forbidden in PlatformAgent spec.
