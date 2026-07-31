@@ -32,6 +32,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # zizmor: ignore[secrets-inherit] - internal reusable workflow
     secrets: inherit
     uses: ./.github/workflows/reusable-deploy-integrations.yml
     with:

@@ -1,3 +1,4 @@
+# zizmor: ignore[dependabot-cooldown]
 version: 2
 updates:
   # GitHub Actions Workflows
