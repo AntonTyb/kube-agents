@@ -152,6 +152,36 @@ func TestPlatformAgentValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("fails if privileged init containers are specified", func(t *testing.T) {
+		val := &PlatformAgentCustomValidator{}
+
+		agent := &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-agent",
+				Namespace: "default",
+			},
+			Spec: agentv1alpha1.PlatformAgentSpec{
+				AgentSpec: agentv1alpha1.AgentSpec{
+					Deployment: &agentv1alpha1.DeploymentSpec{
+						InitContainers: []corev1.Container{
+							{
+								Name: "malicious-init",
+								SecurityContext: &corev1.SecurityContext{
+									Privileged: ptr.To(true),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		_, err := val.ValidateCreate(ctx, agent)
+		if err == nil {
+			t.Error("expected validation to fail for privileged init container")
+		}
+	})
+
 	t.Run("fails if hostPath volumes are specified", func(t *testing.T) {
 		val := &PlatformAgentCustomValidator{}
 

@@ -159,13 +159,13 @@ func (v *PlatformAgentCustomValidator) validatePlatformAgent(ctx context.Context
 		}
 
 		// 2b. Validate InitContainers security context
-		for i, container := range platformAgent.Spec.Deployment.InitContainers {
-			allErrs = append(allErrs, validateContainerSecurity(container, depPath.Child("initContainers").Index(i))...)
+		for i := range platformAgent.Spec.Deployment.InitContainers {
+			allErrs = append(allErrs, validateContainerSecurity(platformAgent.Spec.Deployment.InitContainers[i].SecurityContext, depPath.Child("initContainers").Index(i))...)
 		}
 
 		// 2c. Validate Sidecars security context
-		for i, container := range platformAgent.Spec.Deployment.Sidecars {
-			allErrs = append(allErrs, validateContainerSecurity(container, depPath.Child("sidecars").Index(i))...)
+		for i := range platformAgent.Spec.Deployment.Sidecars {
+			allErrs = append(allErrs, validateContainerSecurity(platformAgent.Spec.Deployment.Sidecars[i].SecurityContext, depPath.Child("sidecars").Index(i))...)
 		}
 
 		// 2d. Validate ExtraVolumes & SidecarVolumes (hostPath forbidden)
@@ -209,13 +209,11 @@ func (v *PlatformAgentCustomValidator) validatePlatformAgent(ctx context.Context
 	return nil, nil
 }
 
-func validateContainerSecurity(container corev1.Container, path *field.Path) field.ErrorList {
+func validateContainerSecurity(sc *corev1.SecurityContext, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
-	if container.SecurityContext == nil {
+	if sc == nil {
 		return errs
 	}
-
-	sc := container.SecurityContext
 	if sc.Privileged != nil && *sc.Privileged {
 		errs = append(errs, field.Forbidden(
 			path.Child("securityContext", "privileged"),
