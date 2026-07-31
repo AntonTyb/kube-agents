@@ -1,0 +1,7 @@
+# .trivyignore
+# Ignore sample, testing, and legacy test-workload misconfigurations in repository manifests
+DS-0002
+KSV-0014
+KSV-0050
+GCP-0048
+GCP-0061

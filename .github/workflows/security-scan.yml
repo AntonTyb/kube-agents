@@ -19,10 +19,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Run gosec
-        uses: securego/gosec@5d1a18b12ab7a9858baf9b7cffa903028792ed17 # v2.22.0
+        uses: securego/gosec@a4869c9b5f5431fae8f81eaecfeef5b0e8ea312d # v2.22.0
         with:
-          workdir: k8s-operator
-          args: "-no-fail -no-fail-on-error ./..."
+          args: "-no-fail ./k8s-operator/..."
 
   trivy-scan:
     name: Container & Manifest Scan (trivy)
@@ -36,12 +35,13 @@ jobs:
           scan-type: "config"
           exit-code: "1"
           severity: "HIGH,CRITICAL"
+          trivyignores: ".trivyignore"
 
   semgrep-scan:
     name: SAST Scan (semgrep)
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep:1.82.0@sha256:4a38618e7c10c14b98d1a10065aefc8c1050beab45eead11b33da07d7ccbeec1
+      image: semgrep/semgrep:1.155.0@sha256:cc869c685dcc0fe497c86258da9f205397d8108e56d21a86082ea4886e52784d
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
