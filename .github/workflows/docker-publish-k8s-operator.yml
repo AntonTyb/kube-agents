@@ -3,6 +3,8 @@ name: Publish Controller to GHCR
 on:
   push:
     branches: [main]
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
 
 permissions:
@@ -47,6 +49,9 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:latest
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.ref_name }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 

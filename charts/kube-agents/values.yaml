@@ -1,5 +1,6 @@
 operator:
   enabled: true
+  enableWebhooks: false
   image:
     repository: ghcr.io/gke-labs/kube-agents/k8s-operator
     tag: "" # defaults to Chart.appVersion
