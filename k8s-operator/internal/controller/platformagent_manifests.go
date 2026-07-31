@@ -160,7 +160,9 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent) string {
 			DispatchIntervalSeconds int  `json:"dispatch_interval_seconds"`
 		} `json:"kanban,omitempty"`
 		Approvals struct {
-			CronMode string `json:"cron_mode,omitempty"`
+			CronMode                string   `json:"cron_mode,omitempty"`
+			AllowedAutonomousVerbs  []string `json:"allowed_autonomous_verbs,omitempty"`
+			RequireHumanApprovalFor []string `json:"require_human_approval_for,omitempty"`
 		} `json:"approvals,omitempty"`
 		Web struct {
 			Backend string `json:"backend,omitempty"`
@@ -289,7 +291,9 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent) string {
 	}
 
 	// Execution & Display UX configuration
-	cfg.Approvals.CronMode = "approve"
+	cfg.Approvals.CronMode = "restricted"
+	cfg.Approvals.AllowedAutonomousVerbs = []string{"get", "list", "describe", "logs"}
+	cfg.Approvals.RequireHumanApprovalFor = []string{"delete", "patch", "apply", "exec", "drain"}
 	cfg.Web.Backend = "ddgs"
 	// Enable incident_context plugin by default to parse and rewrite GChat/Slack threaded incident replies.
 	// bootstrap_onboarding rides on the default profile because it hooks pre_llm_call on the first
@@ -316,6 +320,17 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent) string {
 		}
 		if agent.Spec.Harness.Memory.UserProfileEnabled != nil {
 			cfg.Memory.UserProfileEnabled = *agent.Spec.Harness.Memory.UserProfileEnabled
+		}
+	}
+	if agent.Spec.Harness != nil && agent.Spec.Harness.Approvals != nil {
+		if agent.Spec.Harness.Approvals.CronMode != "" {
+			cfg.Approvals.CronMode = agent.Spec.Harness.Approvals.CronMode
+		}
+		if len(agent.Spec.Harness.Approvals.AllowedAutonomousVerbs) > 0 {
+			cfg.Approvals.AllowedAutonomousVerbs = agent.Spec.Harness.Approvals.AllowedAutonomousVerbs
+		}
+		if len(agent.Spec.Harness.Approvals.RequireHumanApprovalFor) > 0 {
+			cfg.Approvals.RequireHumanApprovalFor = agent.Spec.Harness.Approvals.RequireHumanApprovalFor
 		}
 	}
 

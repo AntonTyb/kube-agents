@@ -69,6 +69,26 @@ type HarnessSpec struct {
 	// Memory configures agent memory settings.
 	// +optional
 	Memory *MemorySpec `json:"memory,omitempty"`
+
+	// Approvals configures autonomous command execution approval policies.
+	// +optional
+	Approvals *ApprovalsSpec `json:"approvals,omitempty"`
+}
+
+// ApprovalsSpec configures autonomous command approval policies for the agent.
+type ApprovalsSpec struct {
+	// CronMode specifies the approval mode for cron watchdog tasks (e.g. "restricted" or "approve").
+	// +kubebuilder:default="restricted"
+	// +optional
+	CronMode string `json:"cronMode,omitempty"`
+
+	// AllowedAutonomousVerbs lists command verbs auto-approved in restricted mode.
+	// +optional
+	AllowedAutonomousVerbs []string `json:"allowedAutonomousVerbs,omitempty"`
+
+	// RequireHumanApprovalFor lists command verbs requiring human approval.
+	// +optional
+	RequireHumanApprovalFor []string `json:"requireHumanApprovalFor,omitempty"`
 }
 
 // MemorySpec configures memory and user profile settings for the agent framework.
