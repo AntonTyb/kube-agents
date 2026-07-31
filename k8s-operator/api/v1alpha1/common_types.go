@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -329,9 +330,18 @@ type AgentStatus struct {
 	StorageStatus StorageStatus `json:"storageStatus,omitempty"`
 }
 
+const (
+	// MaxGitRepoURLLength defines the maximum character length for GitRepo URLs,
+	// matching the +kubebuilder:validation:MaxLength marker on GitHubSpec.GitRepo.
+	MaxGitRepoURLLength = 2048
+)
+
 // scpRegex validates SCP-style SSH Git URLs (e.g., git@github.com:owner/repo.git).
 // Compiled at package level to avoid re-compilation overhead on every validation invocation.
 var scpRegex = regexp.MustCompile(`^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(\.git)?$`)
+
+// ownerRepoRegex validates bare "owner/repo" shorthand (e.g. "gke-labs/kube-agents").
+var ownerRepoRegex = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 // ValidateGitRepoURL verifies that a GitRepo string is a valid Git repository URL
 // and contains no control characters or newline injections (PI-004).
@@ -341,24 +351,24 @@ func ValidateGitRepoURL(rawURL string) error {
 		return nil
 	}
 
-	if len(trimmed) > 2048 {
-		return fmt.Errorf("gitRepo URL exceeds maximum length of 2048 characters")
+	if utf8.RuneCountInString(trimmed) > MaxGitRepoURLLength {
+		return fmt.Errorf("gitRepo URL exceeds maximum length of %d characters", MaxGitRepoURLLength)
 	}
 
-	// Disallow newlines and control characters (unicode.IsControl includes \r and \n)
+	// Disallow whitespace (ASCII and Unicode) and any non-graphic characters (control chars, zero-width chars, etc.)
 	for _, r := range trimmed {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("gitRepo URL contains invalid control characters or newlines")
+		if unicode.IsSpace(r) || !unicode.IsGraphic(r) {
+			return fmt.Errorf("gitRepo URL contains whitespace or non-graphic characters")
 		}
-	}
-
-	// Disallow whitespace within URL
-	if strings.ContainsAny(trimmed, " \t") {
-		return fmt.Errorf("gitRepo URL contains whitespace")
 	}
 
 	// Check SCP-style SSH format: git@host:owner/repo.git
 	if scpRegex.MatchString(trimmed) {
+		return nil
+	}
+
+	// Check bare owner/repo shorthand (e.g., gke-labs/kube-agents)
+	if ownerRepoRegex.MatchString(trimmed) {
 		return nil
 	}
 

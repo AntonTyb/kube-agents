@@ -210,4 +210,28 @@ func TestPlatformAgentValidation(t *testing.T) {
 			t.Errorf("expected create validation to succeed for valid gitRepo, got: %v", err)
 		}
 	})
+
+	t.Run("allows creation with bare owner/repo gitRepo shorthand", func(t *testing.T) {
+		val := &PlatformAgentCustomValidator{}
+		agent := &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-agent",
+				Namespace: "default",
+			},
+			Spec: agentv1alpha1.PlatformAgentSpec{
+				Integration: &agentv1alpha1.PlatformAgentIntegrationSpec{
+					IntegrationSpec: agentv1alpha1.IntegrationSpec{
+						GitHub: &agentv1alpha1.GitHubSpec{
+							GitRepo: "gke-labs/kube-agents",
+						},
+					},
+				},
+			},
+		}
+
+		_, err := val.ValidateCreate(ctx, agent)
+		if err != nil {
+			t.Errorf("expected create validation to succeed for bare owner/repo gitRepo, got: %v", err)
+		}
+	})
 }

@@ -37,6 +37,9 @@ import (
 	agentv1alpha1 "github.com/gke-labs/kube-agents/k8s-operator/api/v1alpha1"
 )
 
+// manifestsLog is for logging in the manifests builder functions.
+var manifestsLog = logf.Log.WithName("platformagent-manifests")
+
 const (
 	defaultPlatformAgentSecrets = "platform-agent-secrets"
 	sessionKVDBPath             = "/var/lib/kube-agents/session/session_kv.db"
@@ -110,7 +113,7 @@ func buildSettingsConfigMap(agent *agentv1alpha1.PlatformAgent) *corev1.ConfigMa
 	}
 
 	if err := agentv1alpha1.ValidateGitRepoURL(gitRepo); err != nil {
-		logf.Log.WithName("platformagent-manifests").Info("Invalid gitRepo URL in PlatformAgent spec, defaulting SETTINGS.md to None", "err", err, "gitRepo", gitRepo)
+		manifestsLog.Info("Invalid gitRepo URL in PlatformAgent spec, defaulting SETTINGS.md to None", "err", err, "gitRepo", gitRepo)
 		gitRepo = "None"
 	} else if gitRepo == "" {
 		gitRepo = "None"
