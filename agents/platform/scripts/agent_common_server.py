@@ -51,8 +51,8 @@ def _run_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 
 
-def resolve_agent_credentials(agent_id: str) -> tuple[str, str]:
-    """Retrieve the target agent's endpoint and shared API key."""
+def resolve_agent_credentials(agent_id: str) -> tuple[str, str, str]:
+    """Retrieve the target agent's endpoint, primary API key, and optional previous API key."""
     api_key = os.environ.get("API_SERVER_KEY", "").strip()
     if not api_key:
         # Fail closed: never fall back to a guessable literal (e.g. "none").
@@ -63,9 +63,11 @@ def resolve_agent_credentials(agent_id: str) -> tuple[str, str]:
             "unauthenticated inter-agent request."
         )
 
+    previous_key = os.environ.get("API_SERVER_KEY_PREVIOUS", "").strip()
+
     if agent_id.lower() == "platform":
         endpoint = os.environ.get("PLATFORM_API_URL") or "platform-agent.kubeagents-system.svc.cluster.local:8642"
-        return endpoint, api_key
+        return endpoint, api_key, previous_key
 
     raise ValueError(f"ERROR [404]: Could not resolve agent '{agent_id}'. Only 'platform' agent is supported.")
 
@@ -100,7 +102,7 @@ def call_agent(
     context = SESSION_MANAGER.current_context(session_id)
 
     try:
-        endpoint, api_key = resolve_agent_credentials(target_agent_id)
+        endpoint, api_key, _ = resolve_agent_credentials(target_agent_id)
     except Exception as e:
         return str(e)
 
@@ -116,7 +118,7 @@ def call_agent(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
-    headers.update(SESSION_MANAGER.delegation_headers(context))
+    headers.update(SESSION_MANAGER.signed_delegation_headers(context, api_key))
 
     payload = {
         "model": "hermes-agent",

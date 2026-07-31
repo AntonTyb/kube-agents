@@ -162,7 +162,8 @@ Example attributes, anonymized:
 ## Delegation
 
 When `agent_common_server.py` delegates to another agent, it uses
-`SessionManager` to forward the same session context as headers:
+`SessionManager` to forward the same session context as cryptographically
+signed headers:
 
 ```text
 X-Hermes-Session-Id
@@ -171,10 +172,15 @@ X-Hermes-Sender-Id
 X-Hermes-User-Email
 X-Hermes-Chat-Id
 X-Hermes-Thread-Id
+X-Hermes-Signature
+X-Hermes-Timestamp
 ```
 
 This allows downstream agents to preserve attribution when they receive the
-session context.
+session context. Downstream consumers must cryptographically verify the
+HMAC-SHA256 signature in `X-Hermes-Signature` against `API_SERVER_KEY` (or
+`API_SERVER_KEY_PREVIOUS` during key rotation grace periods) and validate
+timestamp freshness before trusting the session context.
 
 ## Verification
 
@@ -243,7 +249,7 @@ curl -s \
   | jq '.spans[] | {name, spanId, labels}'
 ```
 
-## Reliability Notes
+## Reliability & Security Notes
 
 - The authoritative ingress mapping uses Hermes runtime session state, not a
   model-supplied tool parameter.
@@ -251,9 +257,12 @@ curl -s \
   created after Hermes resolves the session.
 - Attribution is limited to fixed fields we explicitly persist and format:
   `session_id`, Google Chat sender identity, Google Chat space/thread, and
-  delegation headers. The code does not dynamically parse arbitrary attributes
-  for user identity.
+  delegation headers (`signature` and `timestamp` are fixed control-plane fields).
+  The code does not dynamically parse arbitrary attributes for user identity.
+- Cryptographic request signing via HMAC-SHA256 (`X-Hermes-Signature`) and
+  timestamp validation (`X-Hermes-Timestamp`) provide non-repudiation and replay
+  defense across inter-agent delegation hops.
 - OTel enrichment depends on `hermes_otel`, `session_store`, and
   `session_otel_bridge` all being enabled.
-- Remote systems can only preserve attribution if they receive and honor the
+- Remote systems can only preserve attribution if they receive, verify, and honor the
   forwarded session headers.
