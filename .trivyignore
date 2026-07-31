@@ -5,3 +5,6 @@ KSV-0014
 KSV-0050
 GCP-0048
 GCP-0061
+
+# Ignore KSV-0056: manager-role requires networkpolicies access to manage agent sandboxes
+KSV-0056
