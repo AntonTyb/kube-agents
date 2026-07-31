@@ -75,8 +75,13 @@ func (d *PlatformAgentCustomDefaulter) Default(ctx context.Context, obj runtime.
 	if platformAgent.Spec.Deployment.ImagePullPolicy == nil {
 		platformAgent.Spec.Deployment.ImagePullPolicy = ptr.To(corev1.PullIfNotPresent)
 	}
-	if platformAgent.Spec.Harness != nil && platformAgent.Spec.Harness.Memory != nil && platformAgent.Spec.Harness.Memory.UserProfileEnabled == nil {
-		platformAgent.Spec.Harness.Memory.UserProfileEnabled = ptr.To(false)
+	if platformAgent.Spec.Harness != nil {
+		if platformAgent.Spec.Harness.Memory == nil {
+			platformAgent.Spec.Harness.Memory = &agentv1alpha1.MemorySpec{}
+		}
+		if platformAgent.Spec.Harness.Memory.UserProfileEnabled == nil {
+			platformAgent.Spec.Harness.Memory.UserProfileEnabled = ptr.To(false)
+		}
 	}
 
 	return nil
