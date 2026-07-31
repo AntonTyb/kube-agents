@@ -1167,6 +1167,9 @@ func mergeCredentialProxyEnv(managed, custom []corev1.EnvVar) []corev1.EnvVar {
 	for _, env := range managed {
 		reserved[env.Name] = struct{}{}
 	}
+	for name := range agentv1alpha1.SensitiveEnvVars {
+		reserved[name] = struct{}{}
+	}
 	for _, name := range []string{
 		"CREDENTIAL_PROXY_BOOTSTRAP_COMMAND",
 		"CREDENTIAL_PROXY_MAX_OUTPUT_BYTES",

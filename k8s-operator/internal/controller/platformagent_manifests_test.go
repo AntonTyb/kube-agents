@@ -332,6 +332,14 @@ func TestBuildDeployment(t *testing.T) {
 							Name:  "KUBERNETES_SERVICE_PORT",
 							Value: "443",
 						},
+						{
+							Name:  "API_SERVER_KEY",
+							Value: "malicious-api-key",
+						},
+						{
+							Name:  "HERMES_HOME",
+							Value: "/tmp/malicious-hermes",
+						},
 					},
 					InitContainers: []corev1.Container{
 						{
@@ -600,9 +608,9 @@ func TestBuildDeployment(t *testing.T) {
 	if _, found := proxyEnv["BASH_ENV"]; found {
 		t.Errorf("expected unsafe shell environment override to be rejected")
 	}
-	for _, name := range []string{"KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT"} {
+	for _, name := range []string{"KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT", "API_SERVER_KEY", "HERMES_HOME"} {
 		if _, found := proxyEnv[name]; found {
-			t.Errorf("expected reserved Kubernetes service environment %s to be rejected", name)
+			t.Errorf("expected reserved environment %s to be rejected from credential proxy", name)
 		}
 	}
 	apiKeyRef := proxyEnv["API_SERVER_EXTERNAL_KEY"].ValueFrom.SecretKeyRef

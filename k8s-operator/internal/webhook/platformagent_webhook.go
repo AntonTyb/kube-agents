@@ -37,6 +37,12 @@ import (
 // PreventDeletionAnnotation blocks deletion when set to "true".
 const PreventDeletionAnnotation = "kubeagents.x-k8s.io/prevent-deletion"
 
+// restrictedServiceAccounts is the set of high-privilege service account names forbidden in PlatformAgent spec.
+var restrictedServiceAccounts = map[string]struct{}{
+	"cluster-admin": {},
+	"system:admin":  {},
+}
+
 // log is for logging in this package.
 var platformagentlog = logf.Log.WithName("platformagent-resource")
 
@@ -66,14 +72,13 @@ func (d *PlatformAgentCustomDefaulter) Default(ctx context.Context, obj runtime.
 	}
 	platformagentlog.Info("defaulting PlatformAgent", "name", platformAgent.Name)
 
-	if platformAgent.Spec.Deployment == nil {
-		platformAgent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{}
-	}
-	if platformAgent.Spec.Deployment.Tag == nil || *platformAgent.Spec.Deployment.Tag == "" {
-		platformAgent.Spec.Deployment.Tag = ptr.To("latest")
-	}
-	if platformAgent.Spec.Deployment.ImagePullPolicy == nil || *platformAgent.Spec.Deployment.ImagePullPolicy == "" {
-		platformAgent.Spec.Deployment.ImagePullPolicy = ptr.To(corev1.PullIfNotPresent)
+	if platformAgent.Spec.Deployment != nil {
+		if platformAgent.Spec.Deployment.Tag == nil || *platformAgent.Spec.Deployment.Tag == "" {
+			platformAgent.Spec.Deployment.Tag = ptr.To("latest")
+		}
+		if platformAgent.Spec.Deployment.ImagePullPolicy == nil || *platformAgent.Spec.Deployment.ImagePullPolicy == "" {
+			platformAgent.Spec.Deployment.ImagePullPolicy = ptr.To(corev1.PullIfNotPresent)
+		}
 	}
 	if platformAgent.Spec.Harness != nil {
 		if platformAgent.Spec.Harness.Memory == nil {
@@ -150,7 +155,7 @@ func (v *PlatformAgentCustomValidator) validatePlatformAgent(ctx context.Context
 
 		// 2a. Validate sensitive environment variable overrides
 		for i, env := range platformAgent.Spec.Deployment.Env {
-			if env.Name == "API_SERVER_KEY" || env.Name == "HERMES_HOME" {
+			if _, isSensitive := agentv1alpha1.SensitiveEnvVars[env.Name]; isSensitive {
 				allErrs = append(allErrs, field.Forbidden(
 					depPath.Child("env").Index(i).Child("name"),
 					fmt.Sprintf("overriding sensitive environment variable %q is forbidden", env.Name),
@@ -196,7 +201,7 @@ func (v *PlatformAgentCustomValidator) validatePlatformAgent(ctx context.Context
 	// at webhook admission time.
 	if platformAgent.Spec.Security != nil && platformAgent.Spec.Security.ServiceAccountName != "" {
 		sa := platformAgent.Spec.Security.ServiceAccountName
-		if sa == "cluster-admin" || sa == "system:admin" {
+		if _, isRestricted := restrictedServiceAccounts[sa]; isRestricted {
 			allErrs = append(allErrs, field.Forbidden(
 				field.NewPath("spec", "security", "serviceAccountName"),
 				fmt.Sprintf("binding to privileged service account %q is forbidden", sa),
@@ -236,6 +241,12 @@ func validateContainerSecurity(sc *corev1.SecurityContext, path *field.Path) fie
 		errs = append(errs, field.Forbidden(
 			path.Child("securityContext", "runAsUser"),
 			"running containers as root (runAsUser=0) is forbidden",
+		))
+	}
+	if sc.Capabilities != nil && len(sc.Capabilities.Add) > 0 {
+		errs = append(errs, field.Forbidden(
+			path.Child("securityContext", "capabilities", "add"),
+			"adding capabilities is forbidden",
 		))
 	}
 
