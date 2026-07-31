@@ -20,18 +20,27 @@ jobs:
         uses: azure/setup-helm@b9e51907a09c3e6b493c4216a8159bb8a68b5a75 # v4.2.0
 
       - name: Log in to GHCR via Helm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
       - name: Extract SemVer version
         id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="$REF_NAME"
           echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Lint, Package and Push Canonical Chart
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          REPO_DOWNCASE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          REPO_DOWNCASE=$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')
           helm lint charts/kube-agents
-          helm package charts/kube-agents --version "${{ steps.version.outputs.VERSION }}" --app-version "${{ github.ref_name }}" --destination /tmp/charts
-          helm push "/tmp/charts/kube-agents-${{ steps.version.outputs.VERSION }}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts"
+          helm package charts/kube-agents --version "$VERSION" --app-version "$REF_NAME" --destination /tmp/charts
+          helm push "/tmp/charts/kube-agents-${VERSION}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts"
