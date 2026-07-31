@@ -53,8 +53,6 @@ def _load_session_kv_server():
             tool=lambda *a, **k: (lambda f: f), run=lambda: None)
         pydantic = types.ModuleType("pydantic")
         pydantic.Field = lambda *a, **k: None
-        session_manager = types.ModuleType("session_manager")
-        session_manager.SessionManager = object
 
         sys.modules.update({
             "fastapi": fastapi,
@@ -62,7 +60,6 @@ def _load_session_kv_server():
             "mcp.server": mcp_server,
             "mcp.server.fastmcp": fastmcp,
             "pydantic": pydantic,
-            "session_manager": session_manager,
         })
         return importlib.import_module("session_kv_server")
 
