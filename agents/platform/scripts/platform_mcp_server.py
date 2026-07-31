@@ -114,10 +114,14 @@ def _strip_unsafe_chars(text: str) -> str:
     return "".join(ch for ch in text if _is_safe_char(ch))
 
 
-def _sanitize_log_text(text: str, max_lines: int = 100, max_line_len: int = 500) -> str:
+def _sanitize_log_text(text: str, max_lines: int = 1000, max_line_len: int = 500) -> str:
     """
     Sanitize container stdout/stderr logs and pod describe outputs to prevent
     indirect prompt injection (PI-001, PI-005) and token exhaustion.
+
+    max_lines defaults to 1000 to preserve multi-container pod diagnostics
+    (including `kubectl describe pod` Events and logs across all containers)
+    without premature line truncation.
     """
     if not text:
         return ""

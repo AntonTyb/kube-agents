@@ -608,6 +608,17 @@ class TestSanitizationAndMutationRemoval(unittest.TestCase):
         sanitized_short = _sanitize_log_text(raw_short, max_lines=100, max_line_len=500)
         self.assertIn("additional lines truncated", sanitized_short)
 
+        # Verify default max_lines=1000 preserves diagnostics up to 1000 lines (e.g., describe pod Events)
+        raw_describe = "\n".join([f"Line {i}" for i in range(250)])
+        sanitized_describe = _sanitize_log_text(raw_describe)
+        self.assertNotIn("additional lines truncated", sanitized_describe)
+        self.assertIn("Line 249", sanitized_describe)
+
+        # Verify truncation occurs when exceeding default 1000 lines
+        raw_long_logs = "\n".join([f"Log {i}" for i in range(1100)])
+        sanitized_long_logs = _sanitize_log_text(raw_long_logs)
+        self.assertIn("100 additional lines truncated", sanitized_long_logs)
+
     def test_strip_audit_log_noise_recursive_sanitization(self):
         raw = json.dumps([
             {
