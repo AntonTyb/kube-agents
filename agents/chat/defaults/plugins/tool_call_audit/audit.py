@@ -176,6 +176,14 @@ def verify_execution_bounds(
     if not bounds:
         bounds = DEFAULT_EXECUTION_BOUNDS
 
+    # 0. Reject shell metacharacters that allow command chaining, piping, redirection, or substitution
+    shell_metacharacters = [";", "&", "|", "`", "$", "\n", "\r", "<(", ">("]
+    for meta in shell_metacharacters:
+        if meta in cmd_stripped:
+            raise PermissionError(
+                f"Command '{cmd_stripped}' is blocked by execution bounds: contains forbidden shell metacharacter '{meta}'."
+            )
+
     # 1. Check blocked command patterns
     blocked_patterns = bounds.get("blocked_command_patterns", [])
     for pattern in blocked_patterns:
@@ -202,22 +210,55 @@ def verify_execution_bounds(
     read_only_paths = bounds.get("read_only_paths", [])
     writable_paths = bounds.get("writable_paths", [])
 
-    for token in tokens:
-        if token.startswith("/"):
-            if is_mutating and "/profiles/" in token and "/skills" in token:
-                raise PermissionError(
-                    f"Command '{cmd_stripped}' is blocked by execution bounds: write access to runtime profile skills directory is forbidden."
-                )
-            for ro_path in read_only_paths:
-                if token == ro_path or token.startswith(ro_path.rstrip("/") + "/"):
+    ro_list = []
+    for ro in read_only_paths:
+        ro_list.append(ro.rstrip("/"))
+        ro_list.append(os.path.abspath(os.path.expanduser(ro)).rstrip("/"))
+        ro_list.append(os.path.realpath(os.path.expanduser(ro)).rstrip("/"))
+
+    w_list = []
+    for w in writable_paths:
+        w_list.append(w.rstrip("/"))
+        w_list.append(os.path.abspath(os.path.expanduser(w)).rstrip("/"))
+        w_list.append(os.path.realpath(os.path.expanduser(w)).rstrip("/"))
+
+    path_candidates = []
+    for idx, token in enumerate(tokens):
+        if token in mutating_tokens or token.startswith("-"):
+            continue
+        if (
+            token.startswith("/")
+            or token.startswith(".")
+            or token.startswith("~")
+            or "/" in token
+            or (idx > 0 and tokens[idx - 1] in {">", ">>"})
+            or (is_mutating and idx > 0 and tokens[0] in mutating_tokens)
+        ):
+            path_candidates.append(token)
+
+    for token in path_candidates:
+        norm_paths = {
+            token,
+            os.path.normpath(token),
+            os.path.abspath(os.path.expanduser(token)),
+            os.path.realpath(os.path.expanduser(token)),
+        }
+        if is_mutating and any("/profiles/" in p and "/skills" in p for p in norm_paths):
+            raise PermissionError(
+                f"Command '{cmd_stripped}' is blocked by execution bounds: write access to runtime profile skills directory is forbidden."
+            )
+        for p in norm_paths:
+            p_clean = p.rstrip("/")
+            for ro_path in ro_list:
+                if p_clean == ro_path or p_clean.startswith(ro_path + "/"):
                     if is_mutating:
                         raise PermissionError(
                             f"Command '{cmd_stripped}' is blocked by execution bounds: write access to read-only path '{ro_path}' is forbidden."
                         )
             if is_mutating:
                 is_writable = any(
-                    token == w_path or token.startswith(w_path.rstrip("/") + "/")
-                    for w_path in writable_paths
+                    p_clean == w_path or p_clean.startswith(w_path + "/")
+                    for w_path in w_list
                 )
                 if not is_writable:
                     raise PermissionError(
