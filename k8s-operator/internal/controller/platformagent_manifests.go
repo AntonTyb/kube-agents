@@ -690,6 +690,37 @@ func buildPodTemplateSpec(agent *agentv1alpha1.PlatformAgent, configHash, fluent
 		},
 	}
 
+	var apiServerSecretRef *corev1.SecretKeySelector
+	var sessionKVSaltSecretRef *corev1.SecretKeySelector
+	if harness := agent.Spec.Harness; harness != nil && harness.Hermes != nil {
+		if harness.Hermes.ApiServerSecretRef != nil {
+			apiServerSecretRef = harness.Hermes.ApiServerSecretRef
+		}
+		if harness.Hermes.SessionKVSaltSecretRef != nil {
+			sessionKVSaltSecretRef = harness.Hermes.SessionKVSaltSecretRef
+		}
+	}
+	if apiServerSecretRef == nil {
+		apiServerSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "API_SERVER_KEY")
+	}
+	if sessionKVSaltSecretRef == nil {
+		sessionKVSaltSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "SESSION_KV_SALT")
+	}
+	envVars = append(envVars,
+		corev1.EnvVar{
+			Name: "SESSION_KV_API_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: apiServerSecretRef,
+			},
+		},
+		corev1.EnvVar{
+			Name: "SESSION_KV_SALT",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: sessionKVSaltSecretRef,
+			},
+		},
+	)
+
 	envVars = append(envVars, otelTelemetryEnvVars("platform", agent.Name, agent.Namespace)...)
 	if agent.Spec.Deployment != nil {
 		envVars = mergeEnvVars(envVars, safeSandboxEnvOverrides(agent.Spec.Deployment.Env))
@@ -1355,37 +1386,6 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 				Value: sessionKVDBPath,
 			},
 		}
-
-		var apiServerSecretRef *corev1.SecretKeySelector
-		var sessionKVSaltSecretRef *corev1.SecretKeySelector
-		if harness := agent.Spec.Harness; harness != nil && harness.Hermes != nil {
-			if harness.Hermes.ApiServerSecretRef != nil {
-				apiServerSecretRef = harness.Hermes.ApiServerSecretRef
-			}
-			if harness.Hermes.SessionKVSaltSecretRef != nil {
-				sessionKVSaltSecretRef = harness.Hermes.SessionKVSaltSecretRef
-			}
-		}
-		if apiServerSecretRef == nil {
-			apiServerSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "API_SERVER_KEY")
-		}
-		if sessionKVSaltSecretRef == nil {
-			sessionKVSaltSecretRef = defaultSecretRef(nil, defaultPlatformAgentSecrets, "SESSION_KV_SALT")
-		}
-		dashboardEnvVars = append(dashboardEnvVars,
-			corev1.EnvVar{
-				Name: "SESSION_KV_API_KEY",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: apiServerSecretRef,
-				},
-			},
-			corev1.EnvVar{
-				Name: "SESSION_KV_SALT",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: sessionKVSaltSecretRef,
-				},
-			},
-		)
 
 		dashboardVolumeMounts := []corev1.VolumeMount{
 			{
