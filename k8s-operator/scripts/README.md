@@ -2,15 +2,22 @@
 
 This directory contains the automation scripts for provisioning and tearing down the GCP and GKE infrastructure required by the `kube-agents` platform agent and operator.
 
+> **This page is the canonical description of what each script does.** `INSTALL.md`, the operator
+> README, and the documentation site all link here rather than restating the steps. If you change a
+> script's behaviour, update it here — and nowhere else.
+
 ## Architecture & Configuration Flow
 
-All scripts are modular and idempotent. They share a single configuration state stored in a local [vars.sh](vars.sh) file (which is git-ignored).
+All scripts are modular and idempotent. They share a single configuration state stored in a local `vars.sh` file (which is git-ignored).
 
 When any script is run:
 
-1. It checks if [vars.sh](vars.sh) exists.
-2. If any required variables are missing, the script prompts the user for them, exports them, and appends them to [vars.sh](vars.sh).
-3. If they are already defined in [vars.sh](vars.sh), the script sources them and runs non-interactively.
+1. It checks if `vars.sh` exists.
+2. If any required variables are missing, the script prompts the user for them, exports them, and appends them to `vars.sh`.
+3. If they are already defined in `vars.sh`, the script sources them and runs non-interactively.
+
+> [!NOTE]
+> Because the provisioning scripts persist configuration state in `vars.sh`, running the script again will reuse the same options selected on the first run. If you want to change configuration variables, manually edit `vars.sh` or perform a teardown first.
 
 ---
 
@@ -18,68 +25,59 @@ When any script is run:
 
 ### Orchestration Scripts
 
-- **[provision.sh](provision.sh)**: Master script that coordinates the execution of all core provisioning steps (01 to 10).
-- **[teardown.sh](teardown.sh)**: Master script that coordinates the teardown steps in reverse order (10 down to 01, conditionally including auxiliary scripts).
+- **[provision.sh](provision.sh)**: Master script that coordinates the sequential execution of all core provisioning steps.
+- **[teardown.sh](teardown.sh)**: Master script that coordinates the teardown steps in reverse order (conditionally including auxiliary scripts).
 
-### Provisioning Steps
+### Pipeline steps
 
-1. **[provision_01_gcp_cluster.sh](provision_01_gcp_cluster.sh)**
-   - Sets up initial project configs.
-   - Enables GKE/GCP Service APIs (`container.googleapis.com` and `cloudresourcemanager.googleapis.com`).
-   - Provisions a GKE Standard Cluster with Workload Identity enabled.
-   - Points `kubectl` credentials to the new cluster and creates the target namespace.
-     1a. **[provision_01a_gvisor_nodepool.sh](provision_01a_gvisor_nodepool.sh)** (Optional)
-   - Provisions a dedicated GKE Sandbox (gVisor) node pool (defaults to `gvisor-pool`, configurable via `GVISOR_POOL_NAME`). Executed automatically if `ENABLE_GVISOR=true`.
-2. **[provision_02_gcp_gke_operator.sh](provision_02_gcp_gke_operator.sh)**
-   - Installs Custom Resource Definitions (CRDs) for `PlatformAgent`.
-   - Installs Custom Resource Definitions (CRDs) for `PlatformAgent`.
-   - Deploys the Operator controller manager into the GKE cluster.
-3. **[provision_03_gcp_iam.sh](provision_03_gcp_iam.sh)**
-   - Pre-provisions GCP Service Accounts (GSAs) for the Controller and Platform Agent.
-   - Configures Workload Identity policy bindings mapping the Kubernetes SAs to the GCP GSAs.
-   - Grants GKE permissions to the Controller GSA and Platform Agent GSA based on the selected permission set (`read-only`, `gke-admin`, or `custom`).
-   - Annotates the Controller KSA in GKE and restarts the controller manager deployment to apply Workload Identity instantly.
-4. **[provision_04_gcp_gchat.sh](provision_04_gcp_gchat.sh)**
-   - Sets up the Pub/Sub Topic and Subscription for Google Chat events.
-5. **[provision_05_slack.sh](provision_05_slack.sh)**
-   - Configures Slack integration parameters, bot tokens, and home channel settings.
-   - **Note:** You must create a Slack App and obtain tokens before running this. [See the Slack App Setup Guide](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/slack).
-6. **[provision_06_gcp_k8s_secrets.sh](provision_06_gcp_k8s_secrets.sh)**
-   - Prompts for/reads the `MODEL_PROVIDER` and corresponding `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`.
-   - Creates the Kubernetes Secret (`platform-agent-secrets`) directly in the target GKE namespace.
-7. **[provision_07_deploy_platform_agent.sh](provision_07_deploy_platform_agent.sh)**
-   - Uses `envsubst` to render `platform-agent.yaml` from its template.
-   - Applies the resulting `PlatformAgent` Custom Resource (CR) to deploy the platform agent instance.
-8. **[provision_08_deploy_litellm.sh](provision_08_deploy_litellm.sh)**
-   - Deploys the LiteLLM Gateway to the GKE cluster.
-9. **[provision_09_deploy_github_minter.sh](provision_09_deploy_github_minter.sh)**
-   - Sets up Google Cloud KMS keyrings and keys for token signing.
-   - Deploys the GitHub Token Minter into the cluster.
-10. **[provision_10_deploy_inference_replay.sh](provision_10_deploy_inference_replay.sh)**
-    - Opt-in via `INFERENCE_REPLAY_ENABLED=true`; otherwise skipped.
-    - Prompts for `REPLAY_IMAGE` (the proxy container image).
-    - Deploys the Inference Replay proxy: PVC + ConfigMap (mode=off pass-through), Deployment, a `litellm-gateway` Service pointing at the original LiteLLM pods, and a replacement `litellm` Service routing traffic through the proxy. Toggle caching on at runtime via `kubectl patch configmap inference-replay-config -n <ns> --type merge -p '{"data":{"mode":"on"}}'`.
+Generated from each script's own comment banner.
 
-### Auxiliary & Development Scripts (`dev/`)
+<!-- BEGIN GENERATED: provisioning-steps -->
+<!-- Regenerate with: make docs-generate -- do not edit by hand. -->
+<!-- prettier-ignore-start -->
 
+### Provisioning steps
+
+| # | Script | What it does |
+| :-: | ------ | ------------ |
+| 1 | [`provision_01_gcp_cluster.sh`](provision_01_gcp_cluster.sh) | **GCP APIs & GKE Cluster Initialization** — Idempotent setup script that enables the GCP APIs and bootstraps the bare GKE cluster. The target namespace is created later, by the operator deploy in step 03. |
+| 2 | [`provision_02_gvisor_nodepool.sh`](provision_02_gvisor_nodepool.sh) | **Optional Dedicated gVisor Node Pool Initialization** — Idempotent script to bootstrap a dedicated GKE Sandbox (gVisor) node pool on an existing GKE Standard cluster. Can be run independently for migration. |
+| 3 | [`provision_03_gcp_gke_operator.sh`](provision_03_gcp_gke_operator.sh) | **Deploy Kubernetes Operator (CRDs & Controller Manager)** — Idempotent script that installs the CRDs and deploys the operator to the cluster. |
+| 4 | [`provision_04_gcp_iam.sh`](provision_04_gcp_iam.sh) | **Controller & Agent GCP Workload Identity & GCP IAM Permissions** — Idempotent script for granting GKE cluster management and Workload Identity permissions to the Operator Controller Manager and Agent GSAs. |
+| 5 | [`provision_05_gcp_gchat.sh`](provision_05_gcp_gchat.sh) | **Google Chat & Pub/Sub Setup** — Configures the Google Chat backend: Pub/Sub routing, the Agent's Service Account, and grants the Service Account permission to read incoming chat messages. Also enables the Workspace Add-ons and Chat APIs and provisions their service identities — without the Chat API identity, Google Chat fails silently. |
+| 6 | [`provision_06_slack.sh`](provision_06_slack.sh) | **Slack Integration Setup** — Configures Slack bot tokens, app tokens, and home channel settings. |
+| 7 | [`provision_07_gcp_k8s_secrets.sh`](provision_07_gcp_k8s_secrets.sh) | **GKE Kubernetes Secrets Setup** — Idempotent setup script to configure local Kubernetes secrets directly. |
+| 8 | [`provision_08_deploy_platform_agent.sh`](provision_08_deploy_platform_agent.sh) | **Deploy PlatformAgent Custom Resource Manifest** — Idempotent script that connects to GKE, renders the platform-agent.yaml template, and deploys it to the cluster. |
+| 9 | [`provision_09_deploy_litellm.sh`](provision_09_deploy_litellm.sh) | **Deploy LiteLLM Gateway** — Idempotent script that connects to GKE and deploys the LiteLLM Gateway. |
+| 10 | [`provision_10_deploy_github_minter.sh`](provision_10_deploy_github_minter.sh) | **Deploy GitHub Token Minter** — Idempotent script that deploys the GitHub Token Minter. Runs only when GITHUB_ORG, GITHUB_REPO, and GITHUB_APP_ID are all set; skipped otherwise. |
+| 11 | [`provision_11_deploy_inference_replay.sh`](provision_11_deploy_inference_replay.sh) | **Deploy Inference Replay Proxy (optional)** — Idempotent script that deploys the Inference Replay proxy in front of the LiteLLM gateway. Skipped unless INFERENCE_REPLAY_ENABLED=true. The proxy intercepts the `litellm` Service so agents need no configuration changes. With REPLAY_MODE=off (default) it is a pure pass-through; flip the `inference-replay-config` ConfigMap to `on` to start recording/replaying. |
+
+### Teardown steps
+
+| # | Script | What it does |
+| :-: | ------ | ------------ |
+| 1 | [`teardown_01_gcp_cluster.sh`](teardown_01_gcp_cluster.sh) | **Teardown GKE Cluster & Local State** — Idempotent script to clean up the GKE Standard Cluster and local state files. |
+| 2 | [`teardown_02_gvisor_nodepool.sh`](teardown_02_gvisor_nodepool.sh) | **Optional Teardown of Dedicated gVisor Node Pool** — Idempotent script to clean up the dedicated GKE Sandbox (gVisor) node pool and RuntimeClass. Can be run independently to test disabling gVisor. |
+| 3 | [`teardown_03_gcp_gke_operator.sh`](teardown_03_gcp_gke_operator.sh) | **Teardown Kubernetes Operator (CRDs & Controller Manager)** — Idempotent script to clean up the deployed operator and CRDs. |
+| 4 | [`teardown_04_gcp_iam.sh`](teardown_04_gcp_iam.sh) | **Teardown Controller & Agent GCP Workload Identity & GCP IAM** — Idempotent script to remove cluster management and Workload Identity bindings from the Controller manager and all Agent GSAs, and delete the GSAs. |
+| 5 | [`teardown_05_gcp_gchat.sh`](teardown_05_gcp_gchat.sh) | **Teardown Google Chat & Pub/Sub Setup** — Idempotent script to clean up GChat Pub/Sub Topic/Subscription and the Bot GSA. |
+| 6 | [`teardown_06_slack.sh`](teardown_06_slack.sh) | **Teardown Slack Integration Setup** — Idempotent script to clean up Slack integration state and tokens. |
+| 7 | [`teardown_07_gcp_k8s_secrets.sh`](teardown_07_gcp_k8s_secrets.sh) | **Teardown GKE Secrets** — Idempotent script to clean up Kubernetes secrets. |
+| 8 | [`teardown_08_deploy_platform_agent.sh`](teardown_08_deploy_platform_agent.sh) | **Teardown PlatformAgent Custom Resource** — Idempotent script to clean up the applied PlatformAgent Custom Resource (CR) and delete the local generated manifest file. |
+| 9 | [`teardown_09_deploy_litellm.sh`](teardown_09_deploy_litellm.sh) | **Teardown LiteLLM Gateway** — Idempotent script to undeploy the LiteLLM gateway. |
+| 10 | [`teardown_10_deploy_github_minter.sh`](teardown_10_deploy_github_minter.sh) | **Teardown GitHub Token Minter** — Idempotent script to clean up the GitHub Token Minter. |
+| 11 | [`teardown_11_deploy_inference_replay.sh`](teardown_11_deploy_inference_replay.sh) | **Teardown Inference Replay Proxy** — Idempotent script to undeploy the Inference Replay proxy and restore the original LiteLLM Service. Safe to run even when the proxy was never deployed. |
+
+<!-- prettier-ignore-end -->
+<!-- END GENERATED: provisioning-steps -->
+
+### Auxiliary & Development Scripts
+
+- **[common.sh](common.sh)**: Shared utility functions, color output, logging, prompt helpers, and state management.
+- **[platform-agent.yaml.template](platform-agent.yaml.template)**: Manifest template used by `provision_08_deploy_platform_agent.sh` to render the `PlatformAgent` Custom Resource.
+- **[print_instructions_gchat.sh](print_instructions_gchat.sh)**: Helper script that prints Google Chat integration post-provisioning instructions.
+- **[print_instructions_slack.sh](print_instructions_slack.sh)**: Helper script that prints Slack integration post-provisioning instructions.
 - **[dev/dev_rebuild_agent.sh](dev/dev_rebuild_agent.sh)**: Fast local development utility that builds, pushes, and redeploys agent container images.
-
-### Teardown Steps
-
-- **[teardown_10_deploy_inference_replay.sh](teardown_10_deploy_inference_replay.sh)**: Always executed by master teardown; undeploys the proxy (including the cache PVC) if present and re-applies the LiteLLM Service manifest to restore the original selector. Idempotent no-op if the proxy was never deployed.
-- **[teardown_09_deploy_github_minter.sh](teardown_09_deploy_github_minter.sh)**: Cleans up the GitHub Token Minter deployment, GSAs, and KMS resources.
-- **[teardown_08_deploy_litellm.sh](teardown_08_deploy_litellm.sh)**: Undeploys the LiteLLM Gateway from the cluster.
-- **[teardown_07_deploy_platform_agent.sh](teardown_07_deploy_platform_agent.sh)**: Safely deletes the `PlatformAgent` Custom Resource and cleans up local manifests.
-- **[teardown_06_gcp_k8s_secrets.sh](teardown_06_gcp_k8s_secrets.sh)**: Deletes the Kubernetes secrets in GKE.
-- **[teardown_05_slack.sh](teardown_05_slack.sh)**: Resets Slack integration configuration state and tokens.
-- **[teardown_04_gcp_gchat.sh](teardown_04_gcp_gchat.sh)**: Deletes the Google Chat Pub/Sub topic and subscription.
-- **[teardown_03_gcp_iam.sh](teardown_03_gcp_iam.sh)**: Removes all GCP IAM policy bindings, Workload Identity mappings, and deletes the GSAs for the Controller and Agents.
-- **[teardown_02_gcp_gke_operator.sh](teardown_02_gcp_gke_operator.sh)**: Removes the Operator manager deployment and unregisters CRDs.
-- **[teardown_01a_gvisor_nodepool.sh](teardown_01a_gvisor_nodepool.sh)**: Optional standalone script to delete the dedicated gVisor node pool without destroying the cluster.
-- **[dev/teardown_dev_01_gcp_artifact_registry.sh](dev/teardown_dev_01_gcp_artifact_registry.sh)**: Conditionally executed by master teardown if local dev artifact registry was created.
-- **[teardown_01_gcp_cluster.sh](teardown_01_gcp_cluster.sh)**: Deletes the GKE Standard cluster and removes the local state file `vars.sh`.
-
----
 
 ## Direct Usage Examples
 
@@ -112,5 +110,5 @@ Clean up the provisioned environment:
 For example, if you want to update IAM configurations:
 
 ```bash
-./provision_03_gcp_iam.sh
+./provision_04_gcp_iam.sh
 ```
