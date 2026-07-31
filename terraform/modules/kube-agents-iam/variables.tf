@@ -6,7 +6,7 @@ variable "project_id" {
 variable "service_account_id" {
   description = "IAM Service Account ID for Kube-Agents"
   type        = string
-  default     = "kube-agents-sa"
+  default     = "kubeagents-platform-gsa"
 }
 
 variable "namespace" {
@@ -18,5 +18,5 @@ variable "namespace" {
 variable "ksa_name" {
   description = "Kubernetes Service Account name"
   type        = string
-  default     = "platform-agent"
+  default     = "kubeagents-platform-agent"
 }

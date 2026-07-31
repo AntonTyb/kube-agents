@@ -6,11 +6,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   harness:
-    clusterName: {{ .Values.platformAgent.harness.clusterName | quote }}
-    location: {{ .Values.platformAgent.harness.location | quote }}
-    projectId: {{ .Values.platformAgent.harness.projectId | quote }}
+    clusterName: {{ required "platformAgent.harness.clusterName is required" .Values.platformAgent.harness.clusterName | quote }}
+    location: {{ required "platformAgent.harness.location is required" .Values.platformAgent.harness.location | quote }}
+    projectId: {{ required "platformAgent.harness.projectId is required" .Values.platformAgent.harness.projectId | quote }}
   deployment:
-    image: "{{ .Values.platformAgent.deployment.image.repository }}:{{ .Values.platformAgent.deployment.image.tag | default .Chart.AppVersion }}"
+    image: {{ .Values.platformAgent.deployment.image.repository | quote }}
     tag: {{ .Values.platformAgent.deployment.image.tag | default .Chart.AppVersion | quote }}
     imagePullPolicy: {{ .Values.platformAgent.deployment.image.pullPolicy }}
 {{- end }}

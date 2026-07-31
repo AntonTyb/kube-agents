@@ -53,15 +53,21 @@ Hourly propagation of platform default policies. Reads the baseline `NetworkPoli
 
 Invoked by the [`policy-propagation`](/kube-agents/concepts/autonomous-watchdogs/) watchdog hourly.
 
+### `release_validation_sop.md`
+
+Pre-release operational playbook executed before promoting a release candidate to an immutable SemVer release tag (`vMAJOR.MINOR.PATCH`). Verifies that candidate container images exist in GHCR, canonical OCI Helm charts pass linting, and reusable Terraform modules validate syntactically.
+
+Invoked on demand prior to release tag promotion.
+
 ### `security_patch_orchestrator_sop.md`
 
-Daily audit of GKE control plane and node versions against the latest available security patches (queried via `gcloud container get-server-config`). When a critical upgrade is required it proposes a staggered rollout — dev/staging cluster first, then production once the dev change is merged and healthy — as GitHub PRs via `submit-suggestion`, never applying upgrades directly.
+Daily audit of GKE control plane and node versions against the latest available security patches (queried via `gcloud container get-server-config`), as well as checking GitHub Releases for new `kube-agents` SemVer releases (`vX.Y.Z`). When an upgrade is required it proposes a staggered rollout — dev/staging cluster first, then production once the dev change is merged and healthy — as GitHub PRs via `submit-suggestion`, never applying upgrades directly.
 
 Invoked by the [`security-patch-orchestrator`](/kube-agents/concepts/autonomous-watchdogs/) watchdog daily at 11:00.
 
 ### `standardization_validator_sop.md`
 
-Weekly deep-diff of live cluster configuration against corporate architectural patterns. Verifies that deployments and services carry the standard metadata labels (`app.kubernetes.io/name`, `owner`, `environment`), and flags any dev-namespace Service exposing a public external LoadBalancer IP without the `platform.harness.io/public-exposition-approved: "true"` annotation.
+Weekly deep-diff of live cluster configuration against corporate architectural patterns. Verifies that deployments and services carry the standard metadata labels (`app.kubernetes.io/name`, `owner`, `environment`), flags any dev-namespace Service exposing a public external LoadBalancer IP without the `platform.harness.io/public-exposition-approved: "true"` annotation, and enforces immutable SemVer image tags in staging and production namespaces (prohibiting `:latest` or mutable commit SHAs).
 
 Invoked by the [`standardization-validator`](/kube-agents/concepts/autonomous-watchdogs/) watchdog weekly on Sunday 10:00.
 

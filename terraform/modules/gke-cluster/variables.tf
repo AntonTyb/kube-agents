@@ -8,8 +8,13 @@ variable "cluster_name" {
   type        = string
 }
 
-variable "region" {
-  description = "GCP region"
+variable "location" {
+  description = "GCP location (region or zone)"
   type        = string
-  default     = "us-east4"
+}
+
+variable "deletion_protection" {
+  description = "Whether deletion protection is enabled on the cluster"
+  type        = bool
+  default     = true
 }

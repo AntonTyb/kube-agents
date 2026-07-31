@@ -6,14 +6,21 @@ operator:
     tag: "" # defaults to Chart.appVersion
     pullPolicy: IfNotPresent
   replicaCount: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
 
 platformAgent:
   enabled: true
   name: platform-agent
   harness:
-    clusterName: ""
-    location: ""
-    projectId: ""
+    clusterName: "my-cluster"
+    location: "us-central1"
+    projectId: "my-project"
   deployment:
     image:
       repository: ghcr.io/gke-labs/kube-agents/platform-agent

@@ -49,9 +49,9 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:latest
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.sha }}
-            ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.ref_name }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/{0}/k8s-operator:{1}', env.IMAGE_REPOSITORY, github.ref_name) || '' }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 

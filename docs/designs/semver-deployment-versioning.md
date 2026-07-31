@@ -14,7 +14,10 @@ This document provides a comprehensive architectural analysis of the current and
 
 ---
 
-## 2. Background & Current Architecture
+## 2. Background & Pre-SemVer Architecture (Legacy vs. Shipped State)
+
+> [!NOTE]
+> This section describes the legacy pre-SemVer baseline that motivated this design. All target architecture changes described below now ship in `main`.
 
 ### 2.1 Container Images & CI/CD Pipelines
 
@@ -76,7 +79,7 @@ graph TD
 
 ## 4. Comprehensive Gap Analysis Matrix
 
-| Domain Area                                                            | Element / Component                                                     | Current Implementation in Codebase                                                                                                                              | Target SemVer Architecture                                                                                                                                                   | Critical Gaps & Required Actions                                                                                                                                                                        |
+| Domain Area                                                            | Element / Component                                                     | Pre-PR 493 Implementation                                                                                                                                       | Shipped SemVer State (main)                                                                                                                                                  | Changes Landed in PR 493                                                                                                                                                                                |
 | :--------------------------------------------------------------------- | :---------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **1. Helm Deployments (Workloads & Agents)**                           | **Image References & Tag Fallbacks**                                    | Defaults to `:latest` in `manifest_helpers.go` (`defaultPlatformAgentImage`), `platformagent_manifests.go` (sidecars/init containers), and `scripts/common.sh`. | All Deployments use explicit SemVer tags (`vX.Y.Z`). Operator defaults to the controller's release version instead of `latest`.                                              | • Remove `:latest` hardcodes in Go controller and scripts.<br>• Inject operator release version as default tag at build time.<br>• Update `kustomization.yaml` (`newTag: latest` → SemVer placeholder). |
 |                                                                        | **Helm Values Schema (`values.yaml`)**                                  | `workload-bundle` templates hardcode image tags or lack structured SemVer image overrides.                                                                      | Pinned default SemVer tags in `values.yaml` (`image.tag: ""`, defaulting to `Chart.appVersion`).                                                                             | • Standardize `values.yaml` schema with `image.repository`, `image.tag`, and `image.pullPolicy: IfNotPresent`.<br>• Add linting rules to forbid `:latest` in charts.                                    |

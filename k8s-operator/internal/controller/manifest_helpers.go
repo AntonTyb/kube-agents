@@ -94,7 +94,7 @@ func resolveAgentImage(deployment *agentv1alpha1.DeploymentSpec, defaultImage st
 		}
 
 		if !hasTagOrDigest {
-			tag := DefaultPlatformAgentVersion
+			tag := "latest"
 			if deployment.Tag != nil && *deployment.Tag != "" {
 				tag = *deployment.Tag
 			}

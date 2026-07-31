@@ -26,7 +26,7 @@ For each active GKE cluster, run these standardization audits directly using nat
     - 🚨 **Standard Violation:** No GKE Service inside a development namespace is allowed to expose a **public External LoadBalancer IP** unless it has the explicit annotation `platform.harness.io/public-exposition-approved: "true"`. Public endpoints exposed without this approval represent a High-Risk Architectural Violation.
 3.  **Immutable Image Tag Compliance:**
     - Query: `"kubectl get deployments,statefulsets,daemonsets -A -o json"`
-    - 🚨 **Standard Violation:** In any non-development namespace (`staging-*`, `prod-*`, `kubeagents-system`), container images **must not** use `:latest`, empty tags, or mutable commit SHAs. Any workload running without a valid SemVer tag (`vMAJOR.MINOR.PATCH`) is flagged as a **High-Risk Architectural Violation**.
+    - 🚨 **Standard Violation:** In any non-development namespace (`staging-*`, `prod-*`), container images **must not** use `:latest`, empty tags, or mutable commit SHAs. Any workload running without a valid SemVer tag (`vMAJOR.MINOR.PATCH`) is flagged as a **High-Risk Architectural Violation** (`kubeagents-system` is exempt in dev/test clusters, but should be pinned to a SemVer release tag in production).
 
 ### 3. Generate Standardization Audit Log
 

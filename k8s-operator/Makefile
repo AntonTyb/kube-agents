@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= ghcr.io/gke-labs/kube-agents/k8s-operator:latest
 VERSION ?= latest
-LDFLAGS ?= -ldflags "-s -w -X github.com/gke-labs/kube-agents/k8s-operator/internal/controller.DefaultPlatformAgentVersion=$(VERSION)"
+LDFLAGS ?= -ldflags "-X github.com/gke-labs/kube-agents/k8s-operator/internal/controller.DefaultPlatformAgentVersion=$(VERSION)"
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
