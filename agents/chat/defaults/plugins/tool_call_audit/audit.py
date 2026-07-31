@@ -48,6 +48,11 @@ DEFAULT_EXECUTION_BOUNDS = {
         "gcloud logging read",
         "gcloud container clusters describe",
         "gcloud container clusters list",
+        "gcloud container clusters get-credentials",
+        "gcloud container ai profiles",
+        "gcloud config get-value",
+        "gcloud config list",
+        "gcloud auth list",
         "pytest",
         "python3 -m unittest",
         "python3 ./skills/",
@@ -149,13 +154,51 @@ def _load_execution_bounds(config_path: Optional[str] = None) -> Dict[str, Any]:
     return DEFAULT_EXECUTION_BOUNDS
 
 
+def _is_shell_tool(tool_name: str) -> bool:
+    if not tool_name or not isinstance(tool_name, str):
+        return False
+    name_lower = tool_name.lower()
+    shell_tools = {
+        "hermes-cli",
+        "hermes_cli",
+        "shell",
+        "bash",
+        "run_command",
+        "cli",
+        "terminal",
+        "execute_command",
+        "exec_command",
+        "command",
+        "run_shell",
+        "run_shell_command",
+        "exec",
+        "execute",
+        "cmd",
+        "terminal_command",
+        "command_execution",
+        "run",
+    }
+    if name_lower in shell_tools:
+        return True
+    shell_keywords = (
+        "run_command",
+        "execute_command",
+        "shell_command",
+        "terminal_command",
+        "run_shell",
+        "bash_command",
+    )
+    if any(kw in name_lower for kw in shell_keywords):
+        return True
+    return False
+
+
 def verify_execution_bounds(
     tool_name: str = "",
     args: Optional[Dict[str, Any]] = None,
     config_path: Optional[str] = None,
 ) -> None:
-    shell_tools = {"hermes-cli", "hermes_cli", "shell", "bash", "run_command", "cli"}
-    if not tool_name or tool_name.lower() not in shell_tools:
+    if not _is_shell_tool(tool_name):
         return
     if not args or not isinstance(args, dict):
         return

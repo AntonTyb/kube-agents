@@ -70,6 +70,11 @@ class TestToolCallAudit(unittest.TestCase):
             "git branch",
             "kubectl exec pod-123 -c agent -n kubeagents-system -- curl http://localhost:4318/v1/traces",
             "kubectl top pod -l app=hermes -n kubeagents-system",
+            "gcloud container clusters get-credentials my-cluster --location us-central1 --project my-proj",
+            "gcloud container ai profiles list",
+            "gcloud config get-value project",
+            "gcloud config list",
+            "gcloud auth list",
         ]
         for cmd in allowed_cmds:
             try:
@@ -127,6 +132,32 @@ class TestToolCallAudit(unittest.TestCase):
         verify_execution_bounds("hermes-cli", {"cmd": "pytest"})
         with self.assertRaises(PermissionError):
             verify_execution_bounds("hermes-cli", {"args": ["sudo", "rm", "-rf", "/"]})
+
+    def test_shell_tool_names_enforcement(self):
+        """verify_execution_bounds should enforce bounds across all standard shell tool names."""
+        shell_names = [
+            "hermes-cli",
+            "hermes_cli",
+            "shell",
+            "bash",
+            "run_command",
+            "cli",
+            "terminal",
+            "execute_command",
+            "run_shell",
+            "run_shell_command",
+            "exec",
+            "execute",
+            "cmd",
+            "terminal_command",
+            "command_execution",
+            "run",
+            "mcp-hermes_run_command",
+        ]
+        for name in shell_names:
+            verify_execution_bounds(name, {"command": "git status"})
+            with self.assertRaises(PermissionError, msg=f"Tool '{name}' should block destructive command"):
+                verify_execution_bounds(name, {"command": "rm -rf /"})
 
     def test_load_execution_bounds_runtime_paths(self):
         """_load_execution_bounds should discover profile and platform container config paths."""
