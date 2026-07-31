@@ -89,9 +89,8 @@ class TestResolveAgentCredentials(unittest.TestCase):
 
     def test_returns_endpoint_and_key_when_set(self):
         os.environ["API_SERVER_KEY"] = "s3cret"
-        endpoint, api_key, previous_key = resolve_agent_credentials("platform")
+        endpoint, api_key = resolve_agent_credentials("platform")
         self.assertEqual(api_key, "s3cret")
-        self.assertEqual(previous_key, "")
         self.assertIn("8642", endpoint)
 
 
@@ -108,7 +107,7 @@ class TestDelegationHeaderSecurity(unittest.TestCase):
             "metadata": {"user_email": "user@example.com"},
         }
         self.api_key = "primary-secret-key"
-        self.prev_key = "previous-secret-key"
+        self.secondary_key = "secondary-secret-key"
 
     def test_signed_delegation_headers(self):
         headers = self.sm.signed_delegation_headers(self.context, self.api_key)
@@ -123,10 +122,10 @@ class TestDelegationHeaderSecurity(unittest.TestCase):
         valid = self.sm.verify_delegation_headers(headers, [self.api_key])
         self.assertTrue(valid)
 
-    def test_verify_delegation_headers_key_rotation(self):
-        headers = self.sm.signed_delegation_headers(self.context, self.prev_key)
+    def test_verify_delegation_headers_multiple_keys(self):
+        headers = self.sm.signed_delegation_headers(self.context, self.secondary_key)
         valid = self.sm.verify_delegation_headers(
-            headers, [self.api_key, self.prev_key]
+            headers, [self.api_key, self.secondary_key]
         )
         self.assertTrue(valid)
 

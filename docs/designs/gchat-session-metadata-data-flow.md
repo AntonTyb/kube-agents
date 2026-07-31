@@ -178,8 +178,7 @@ X-Hermes-Timestamp
 
 This allows downstream agents to preserve attribution when they receive the
 session context. Downstream consumers must cryptographically verify the
-HMAC-SHA256 signature in `X-Hermes-Signature` against `API_SERVER_KEY` (or
-`API_SERVER_KEY_PREVIOUS` during key rotation grace periods) and validate
+HMAC-SHA256 signature in `X-Hermes-Signature` against `API_SERVER_KEY` and validate
 timestamp freshness before trusting the session context.
 
 ## Verification
