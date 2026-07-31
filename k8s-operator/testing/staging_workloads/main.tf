@@ -36,10 +36,6 @@ resource "google_container_cluster" "primary" {
 
   ip_allocation_policy {}
 
-  master_authorized_networks_config {
-    gcp_public_cidrs_access_enabled = true
-  }
-
   addons_config {
     ray_operator_config {
       enabled = each.value.enable_ray
@@ -81,10 +77,6 @@ resource "google_container_cluster" "standard" {
   }
 
   ip_allocation_policy {}
-
-  master_authorized_networks_config {
-    gcp_public_cidrs_access_enabled = true
-  }
 }
 
 resource "google_container_node_pool" "standard_nodes" {
