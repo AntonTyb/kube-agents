@@ -126,6 +126,25 @@ func (v *PlatformAgentCustomValidator) validatePlatformAgent(ctx context.Context
 		}
 	}
 
+	var allErrs field.ErrorList
+	if platformAgent.Spec.Integration != nil && platformAgent.Spec.Integration.GitHub != nil {
+		if err := agentv1alpha1.ValidateGitRepoURL(platformAgent.Spec.Integration.GitHub.GitRepo); err != nil {
+			allErrs = append(allErrs, field.Invalid(
+				field.NewPath("spec", "integration", "github", "gitRepo"),
+				platformAgent.Spec.Integration.GitHub.GitRepo,
+				err.Error(),
+			))
+		}
+	}
+
+	if len(allErrs) > 0 {
+		return nil, apierrors.NewInvalid(
+			schema.GroupKind{Group: "kubeagents.x-k8s.io", Kind: "PlatformAgent"},
+			platformAgent.Name,
+			allErrs,
+		)
+	}
+
 	return nil, nil
 }
 
