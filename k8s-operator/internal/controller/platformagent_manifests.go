@@ -1266,7 +1266,7 @@ func resolveCredentialProxyImage(deployment *agentv1alpha1.DeploymentSpec) strin
 		return prefix + name + ":" + *deployment.Tag
 	}
 	if suffix == "" {
-		suffix = ":latest"
+		suffix = ":" + DefaultPlatformAgentVersion
 	}
 	return prefix + name + suffix
 }

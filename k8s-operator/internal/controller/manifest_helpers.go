@@ -34,9 +34,14 @@ import (
 	agentv1alpha1 "github.com/gke-labs/kube-agents/k8s-operator/api/v1alpha1"
 )
 
-const (
-	defaultPlatformAgentImage = "ghcr.io/gke-labs/kube-agents/platform-agent:latest"
+var (
+	// DefaultPlatformAgentVersion is injected at build time via -ldflags "-X ...DefaultPlatformAgentVersion=vX.Y.Z"
+	// or defaults to "latest" during local development.
+	DefaultPlatformAgentVersion = "latest"
+	defaultPlatformAgentImage   = "ghcr.io/gke-labs/kube-agents/platform-agent:" + DefaultPlatformAgentVersion
+)
 
+const (
 	// managedOTelEndpoint is the OTLP/HTTP endpoint of the GKE Managed OpenTelemetry
 	// collector. The same endpoint is already used by the LiteLLM integration, so agent
 	// traces and LLM-call telemetry land in the same place (Cloud Trace/Logging).
@@ -89,7 +94,7 @@ func resolveAgentImage(deployment *agentv1alpha1.DeploymentSpec, defaultImage st
 		}
 
 		if !hasTagOrDigest {
-			tag := "latest"
+			tag := DefaultPlatformAgentVersion
 			if deployment.Tag != nil && *deployment.Tag != "" {
 				tag = *deployment.Tag
 			}

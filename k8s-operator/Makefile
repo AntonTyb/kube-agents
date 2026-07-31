@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= ghcr.io/gke-labs/kube-agents/k8s-operator:latest
+VERSION ?= latest
+LDFLAGS ?= -ldflags "-s -w -X github.com/gke-labs/kube-agents/k8s-operator/internal/controller.DefaultPlatformAgentVersion=$(VERSION)"
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -58,7 +60,7 @@ test-python: ## Run Python tests.
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/main.go
+	go build $(LDFLAGS) -o bin/manager cmd/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.

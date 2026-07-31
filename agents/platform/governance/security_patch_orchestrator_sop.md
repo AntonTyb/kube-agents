@@ -34,3 +34,13 @@ If an emergency security patch upgrade is required:
     - Utilize the **`submit-suggestion` skill** to submit a Pull Request (PR) proposing the version upgrade for the production cluster (e.g., `mercury-04`).
 3.  **Log Release Rollout Progress:**
     - Document the PR links and the staggered rollout timeline in the cron output.
+
+### 4. Kube-Agents SemVer Release Upgrade Checklist
+
+1.  **Check for New Stable SemVer Releases:**
+    - Query GitHub Container Registry / GitHub Releases for the latest stable `kube-agents` SemVer release (`vX.Y.Z`).
+2.  **Audit Active Agent Versions:**
+    - Inspect active `PlatformAgent` Custom Resource `.spec.deployment.tag` and operator container tags across the fleet.
+3.  **Orchestrate Staggered Agent Upgrades (GitOps PRs):**
+    - If an agent version lag is detected, automate dev/staging PR proposals via **`submit-suggestion`** immediately upon release.
+    - Gate production PR proposals on successful staging verification (monitored healthy for at least 30 minutes in staging).

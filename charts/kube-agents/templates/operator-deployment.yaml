@@ -1,0 +1,21 @@
+{{- if .Values.operator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.operator.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}-operator
+    spec:
+      containers:
+        - name: manager
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+{{- end }}

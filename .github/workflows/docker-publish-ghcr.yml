@@ -3,6 +3,7 @@ name: Publish to GHCR
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
 
 jobs:
   publish-ghcr:
@@ -46,6 +47,7 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/platform-agent:latest
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/platform-agent:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/platform-agent:${{ github.ref_name }}
           build-args: |
             HERMES_AGENT_TAG=${{ env.HERMES_AGENT_TAG }}
 
@@ -58,6 +60,7 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/replay-proxy:latest
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/replay-proxy:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/replay-proxy:${{ github.ref_name }}
 
       - name: Build and Push Credential Sidecar (GHCR)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -70,6 +73,7 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/credential-proxy:latest
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/credential-proxy:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/credential-proxy:${{ github.ref_name }}
           build-args: |
             HERMES_AGENT_TAG=${{ env.HERMES_AGENT_TAG }}
 

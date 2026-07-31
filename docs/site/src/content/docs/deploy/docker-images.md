@@ -9,7 +9,7 @@ Images published by this repo, plus the base Hermes image (pulled from Docker Hu
 
 ## Published images
 
-Published on push to `main` via GitHub Actions workflows.
+Published on push to `main` via GitHub Actions workflows (tagged `:latest` and commit SHA), and on SemVer git tag pushes (`v*.*.*`, tagged `vX.Y.Z`).
 
 ### `platform-agent`
 

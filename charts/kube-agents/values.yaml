@@ -1,0 +1,20 @@
+operator:
+  enabled: true
+  image:
+    repository: ghcr.io/gke-labs/kube-agents/k8s-operator
+    tag: "" # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+platformAgent:
+  enabled: true
+  name: platform-agent
+  harness:
+    clusterName: ""
+    location: ""
+    projectId: ""
+  deployment:
+    image:
+      repository: ghcr.io/gke-labs/kube-agents/platform-agent
+      tag: "" # defaults to Chart.appVersion
+      pullPolicy: IfNotPresent
