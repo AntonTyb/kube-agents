@@ -188,6 +188,12 @@ func (v *PlatformAgentCustomValidator) validatePlatformAgent(ctx context.Context
 	}
 
 	// 3. Validate Security ServiceAccountName
+	// Note: This check serves as a name-based tripwire against obvious misconfigurations
+	// (e.g., binding to literal names like "cluster-admin" or "system:admin"). It is NOT
+	// full security enforcement against privileged ServiceAccounts. Genuine RBAC enforcement
+	// requires inspecting RoleBinding / ClusterRoleBinding resources, which is controller
+	// and admission-policy territory to avoid time-of-check to time-of-use (TOCTOU) issues
+	// at webhook admission time.
 	if platformAgent.Spec.Security != nil && platformAgent.Spec.Security.ServiceAccountName != "" {
 		sa := platformAgent.Spec.Security.ServiceAccountName
 		if sa == "cluster-admin" || sa == "system:admin" {
