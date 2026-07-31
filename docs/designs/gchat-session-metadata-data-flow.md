@@ -256,11 +256,12 @@ curl -s \
   created after Hermes resolves the session.
 - Attribution is limited to fixed fields we explicitly persist and format:
   `session_id`, Google Chat sender identity, Google Chat space/thread, and
-  delegation headers (`signature` and `timestamp` are fixed control-plane fields).
-  The code does not dynamically parse arbitrary attributes for user identity.
-- Cryptographic request signing via HMAC-SHA256 (`X-Hermes-Signature`) and
-  timestamp validation (`X-Hermes-Timestamp`) provide non-repudiation and replay
-  defense across inter-agent delegation hops.
+  delegation headers. The code does not dynamically parse arbitrary attributes
+  for user identity.
+- Signed delegation headers (`X-Hermes-Signature` via HMAC-SHA256 and
+  `X-Hermes-Timestamp`) are emitted when forwarding session context across
+  inter-agent delegation hops; cryptographic verification and timestamp
+  validation are requirements on downstream consumers that are not yet met.
 - OTel enrichment depends on `hermes_otel`, `session_store`, and
   `session_otel_bridge` all being enabled.
 - Remote systems can only preserve attribution if they receive, verify, and honor the

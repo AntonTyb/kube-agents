@@ -22,8 +22,6 @@ class SessionManager:
         "chat_id",
         "thread_id",
         "updated_at",
-        "signature",
-        "timestamp",
     )
 
     ENV_SESSION_KEYS = (
