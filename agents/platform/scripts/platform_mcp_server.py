@@ -67,6 +67,53 @@ def _pod_summary(pod: dict) -> dict | None:
 # Input Sanitization Helpers for Pod & Audit Logs (Task 537148227)
 # =============================================================================
 
+def _is_safe_char(ch: str) -> bool:
+    """Check whether a character is safe from control/zero-width/bidi smuggling."""
+    code = ord(ch)
+    # Preserve newline (\n, 10) and tab (\t, 9)
+    if code in (9, 10):
+        return True
+    # Strip C0 control characters (< 32), DEL (127), and C1 control characters (128-159)
+    if code < 32 or 127 <= code <= 159:
+        return False
+    # Strip zero-width, bidi, and format control characters
+    # U+200B-U+200F (Zero-width space, non-joiner, joiner, LRM, RLM)
+    # U+202A-U+202E (Bidi embedding/override controls: LRE, RLE, PDF, LRO, RLO)
+    # U+2060-U+206F (Word joiner, invisible operators, bidi isolates)
+    # U+FEFF (Zero-width no-break space / BOM)
+    # U+00AD (Soft hyphen), U+034F (Combining grapheme joiner), U+061C (Arabic letter mark), U+180E (Mongolian vowel separator)
+    if (
+        0x200B <= code <= 0x200F
+        or 0x202A <= code <= 0x202E
+        or 0x2060 <= code <= 0x206F
+        or code in (0xFEFF, 0x00AD, 0x034F, 0x061C, 0x180E)
+    ):
+        return False
+    # Strip Unicode tag block and non-printable supplementary blocks (U+E0000 and above)
+    if code >= 0xE0000:
+        return False
+    return True
+
+
+def _strip_unsafe_chars(text: str) -> str:
+    """
+    Strip ANSI escape codes (7-bit and 8-bit CSI), carriage returns, C0/C1
+    control characters, DEL, zero-width characters, bidi control characters,
+    and Unicode tag blocks.
+    """
+    if not text:
+        return ""
+    # Strip ANSI escape codes (7-bit ESC sequences and 8-bit CSI sequences) and carriage returns
+    text = re.sub(r"\r", "", text)
+    text = re.sub(
+        r"(?:\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|\x9B[0-?]*[ -/]*[@-~])",
+        "",
+        text,
+    )
+    # Strip C0/C1 control characters, DEL, zero-width/bidi characters, and Unicode tag block
+    return "".join(ch for ch in text if _is_safe_char(ch))
+
+
 def _sanitize_log_text(text: str, max_lines: int = 100, max_line_len: int = 500) -> str:
     """
     Sanitize container stdout/stderr logs and pod describe outputs to prevent
@@ -77,12 +124,8 @@ def _sanitize_log_text(text: str, max_lines: int = 100, max_line_len: int = 500)
     if not isinstance(text, str):
         text = str(text)
 
-    # 1. Strip ANSI escape codes and carriage returns
-    text = re.sub(r"\r", "", text)
-    text = re.sub(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", text)
-
-    # 2. Strip ASCII control characters except newline (\n) and tab (\t)
-    text = "".join(ch for ch in text if ord(ch) >= 32 or ch in ("\n", "\t"))
+    # 1. & 2. Strip ANSI escape codes, C0/C1 control characters, DEL, zero-width/bidi chars, and tag blocks
+    text = _strip_unsafe_chars(text)
 
     # 3. Neutralize LLM special tokens and prompt injection framing
     replacements = {
@@ -127,10 +170,8 @@ def _sanitize_log_text(text: str, max_lines: int = 100, max_line_len: int = 500)
 def _sanitize_audit_value(val: Any, max_len: int = 500) -> Any:
     """Recursively sanitize string values in Cloud Audit Log JSON entries."""
     if isinstance(val, str):
-        # Strip ANSI codes and non-printable chars
-        s = re.sub(r"\r", "", val)
-        s = re.sub(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", s)
-        s = "".join(ch for ch in s if ord(ch) >= 32 or ch in ("\n", "\t"))
+        # Strip ANSI codes, non-printable chars, zero-width/bidi chars, DEL, C1, and tag block
+        s = _strip_unsafe_chars(val)
         # Neutralize injection delimiters
         s = re.sub(r"<\|im_start\|>", "[token_start]", s, flags=re.IGNORECASE)
         s = re.sub(r"<\|im_end\|>", "[token_end]", s, flags=re.IGNORECASE)
