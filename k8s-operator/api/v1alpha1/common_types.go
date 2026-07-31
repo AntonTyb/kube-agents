@@ -28,6 +28,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// SensitiveEnvVars defines environment variables that are sensitive and cannot be
+// overridden by user Deployment specs or injected into the credential proxy.
+var SensitiveEnvVars = map[string]struct{}{
+	"API_SERVER_KEY": {},
+	"HERMES_HOME":    {},
+}
+
 type HermesSpec struct {
 	// DashboardEnabled toggles the AGENT_DASHBOARD environment variable.
 	// +kubebuilder:default=true
