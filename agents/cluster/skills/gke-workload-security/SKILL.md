@@ -215,4 +215,4 @@ This will log connection details to Cloud Logging.
 
 ## Adaptability Guidelines
 
-- **Proactive Execution**: Proactively execute relevant skills (e.g., observability, security, scaling, reliability) to assess and propose improvements, seeking user confirmation before applying state-changing implementations.
+- **Proactive Execution**: Proactively execute relevant skills (e.g., observability, security, scaling, reliability) to assess cluster health and propose diagnostic findings or read-only recommendations, adhering strictly to the Cluster Agent's read-only boundary.

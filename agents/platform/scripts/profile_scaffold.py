@@ -81,6 +81,26 @@ def ensure_profile(name: str, description: str, hermes_home: Path) -> Path:
     return home
 
 
+def _make_writable(path: Path) -> None:
+    if not path.exists():
+        return
+    for root, dirs, files in os.walk(path):
+        for d in dirs:
+            try:
+                os.chmod(os.path.join(root, d), 0o755)
+            except OSError:
+                pass
+        for f in files:
+            try:
+                os.chmod(os.path.join(root, f), 0o644)
+            except OSError:
+                pass
+    try:
+        os.chmod(path, 0o755)
+    except OSError:
+        pass
+
+
 def overlay_template(
     home: Path,
     template_dir: Path,
@@ -102,10 +122,12 @@ def overlay_template(
             continue
         dest = home / item_name
         if src.is_dir():
+            _make_writable(dest)
             shutil.copytree(src, dest, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dest)
     if plugins_dir and plugins_dir.is_dir():
+        _make_writable(home / "plugins")
         shutil.copytree(plugins_dir, home / "plugins", dirs_exist_ok=True)
     skills_dest = home / "skills"
     manifest = template_dir / "skills" / "skills_manifest.sha256"
@@ -114,8 +136,6 @@ def overlay_template(
             from verify_skills_provenance import verify_provenance
 
             verify_provenance(str(manifest), str(skills_dest))
-        except ImportError:
-            pass
         except Exception as e:
             raise SystemExit(f"ERROR: skill provenance verification failed for {skills_dest}: {e}")
         for root, dirs, files in os.walk(skills_dest):

@@ -93,6 +93,8 @@ if [ -d "$TARGET_DIR/profiles/platform" ] && [ -d "$PLATFORM_TEMPLATE" ]; then
         [ -f "$PLATFORM_TEMPLATE/$f" ] && cp -f "$PLATFORM_TEMPLATE/$f" "$TARGET_DIR/profiles/platform/$f" 2>/dev/null || true
     done
     if [ -d "$PLATFORM_TEMPLATE/skills" ]; then
+        chmod -R u+w "$TARGET_DIR/profiles/platform/skills" 2>/dev/null || true
+        rm -rf "$TARGET_DIR/profiles/platform/skills"
         mkdir -p "$TARGET_DIR/profiles/platform/skills"
         cp -rf "$PLATFORM_TEMPLATE/skills/." "$TARGET_DIR/profiles/platform/skills/" 2>/dev/null || true
     fi
@@ -105,6 +107,8 @@ if [ -d "$CLUSTER_TEMPLATE" ]; then
             [ -f "$CLUSTER_TEMPLATE/$f" ] && cp -f "$CLUSTER_TEMPLATE/$f" "$d/$f" 2>/dev/null || true
         done
         if [ -d "$CLUSTER_TEMPLATE/skills" ]; then
+            chmod -R u+w "$d/skills" 2>/dev/null || true
+            rm -rf "$d/skills"
             mkdir -p "$d/skills"
             cp -rf "$CLUSTER_TEMPLATE/skills/." "$d/skills/" 2>/dev/null || true
         fi
@@ -159,17 +163,17 @@ if [ -f "/opt/defaults/scripts/verify_skills_provenance.py" ]; then
         manifest="${manifest_pair%%:*}"
         target_dir="${manifest_pair#*:}"
         if [ -f "$manifest" ] && [ -d "$target_dir" ]; then
-            python3 /opt/defaults/scripts/verify_skills_provenance.py --manifest "$manifest" --dir "$target_dir"
+            "$INSTALL_DIR/.venv/bin/python3" /opt/defaults/scripts/verify_skills_provenance.py --manifest "$manifest" --dir "$target_dir"
         fi
     done
     if [ -f "/opt/cluster-template/skills/skills_manifest.sha256" ]; then
         for target_dir in "$TARGET_DIR"/profiles/cluster-*/skills; do
             if [ -d "$target_dir" ]; then
-                python3 /opt/defaults/scripts/verify_skills_provenance.py --manifest "/opt/cluster-template/skills/skills_manifest.sha256" --dir "$target_dir"
+                "$INSTALL_DIR/.venv/bin/python3" /opt/defaults/scripts/verify_skills_provenance.py --manifest "/opt/cluster-template/skills/skills_manifest.sha256" --dir "$target_dir"
             fi
         done
     fi
-    # Enforce read-only permissions on all runtime PVC skill copies to prevent runtime tampering
+    # Enforce best-effort boot-time read-only permissions on runtime PVC skill copies (note: user owns files so agent could revert chmod; this serves as boot-time detection)
     for target_dir in "$TARGET_DIR"/profiles/*/skills; do
         if [ -d "$target_dir" ]; then
             chmod -R u-w "$target_dir" 2>/dev/null || true
@@ -197,4 +201,3 @@ fi
 
 # 7. Execute primary process
 exec "$@"
-
