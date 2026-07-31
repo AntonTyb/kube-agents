@@ -50,11 +50,11 @@ updates: # zizmor: ignore[dependabot-cooldown]
     commit-message:
       prefix: "deps"
 
-  # Node.js Ecosystem (Root Linters & Tooling)
+  # Node.js Ecosystem (Docs Site)
   # zizmor: ignore[dependabot-cooldown]
   - package-ecosystem: "npm" # zizmor: ignore[dependabot-cooldown]
     # zizmor: ignore[dependabot-cooldown]
-    directory: "/"
+    directory: "/docs/site"
     # zizmor: ignore[dependabot-cooldown]
     schedule: # zizmor: ignore[dependabot-cooldown]
       # zizmor: ignore[dependabot-cooldown]
