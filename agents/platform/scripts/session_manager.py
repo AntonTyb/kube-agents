@@ -111,7 +111,10 @@ class SessionManager:
             ):
                 normalized[lower_key] = str(value).strip()
         sorted_keys = sorted(normalized.keys())
-        canonical_lines = [f"{key}:{normalized[key]}\n" for key in sorted_keys]
+        canonical_lines = [
+            f"{len(key)}:{key}:{len(normalized[key])}:{normalized[key]}\n"
+            for key in sorted_keys
+        ]
         return "".join(canonical_lines)
 
     def _base_delegation_headers(self, context: Dict[str, Any]) -> Dict[str, str]:
@@ -131,8 +134,23 @@ class SessionManager:
             headers["X-Hermes-Thread-Id"] = str(context["thread_id"])
         return headers
 
+    def _resolve_signing_key(self, api_key: str) -> str:
+        env_key = os.environ.get("HERMES_DELEGATION_SIGNING_KEY", "").strip()
+        if env_key:
+            return env_key
+        # Derive a distinct signing secret so the raw API key is never used directly as the HMAC key
+        return hmac.new(
+            api_key.strip().encode("utf-8"),
+            b"hermes-delegation-signing-key",
+            hashlib.sha256,
+        ).hexdigest()
+
     def signed_delegation_headers(
-        self, context: Dict[str, Any], api_key: str
+        self,
+        context: Dict[str, Any],
+        api_key: str,
+        body_digest: str = "",
+        target: str = "",
     ) -> Dict[str, str]:
         if not api_key or not str(api_key).strip():
             raise ValueError("API key is required to sign delegation headers.")
@@ -145,29 +163,18 @@ class SessionManager:
             or context.get("session_id")
             or ""
         ).strip()
-        signing_payload = f"{timestamp}:{session_id}:{header_digest}"
+        signing_payload = (
+            f"{timestamp}:{session_id}:{target}:{body_digest}:{header_digest}"
+        )
+        signing_key = self._resolve_signing_key(api_key)
         signature = hmac.new(
-            api_key.strip().encode("utf-8"),
+            signing_key.encode("utf-8"),
             signing_payload.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
         headers["X-Hermes-Signature"] = f"sha256={signature}"
         headers["X-Hermes-Timestamp"] = timestamp
         return headers
-
-    def delegation_headers(
-        self,
-        context: Dict[str, Any],
-        api_key: Optional[str] = None,
-    ) -> Dict[str, str]:
-        key = (
-            api_key
-            or os.environ.get("API_SERVER_KEY", "").strip()
-            or context.get("api_key", "").strip()
-        )
-        if key:
-            return self.signed_delegation_headers(context, key)
-        return self._base_delegation_headers(context)
 
     @staticmethod
     def _get_header_ci(headers: Dict[str, str], key: str) -> Optional[str]:
@@ -182,6 +189,8 @@ class SessionManager:
         headers: Dict[str, str],
         api_keys: List[str],
         max_skew_seconds: int = 300,
+        body_digest: str = "",
+        target: str = "",
     ) -> bool:
         sig_header = self._get_header_ci(headers, "X-Hermes-Signature")
         ts_header = self._get_header_ci(headers, "X-Hermes-Timestamp")
@@ -190,7 +199,7 @@ class SessionManager:
 
         if not str(sig_header).startswith("sha256="):
             return False
-        provided_sig = str(sig_header)[7:]
+        provided_sig = str(sig_header).removeprefix("sha256=")
 
         try:
             ts_int = int(str(ts_header).strip())
@@ -209,11 +218,14 @@ class SessionManager:
         session_id = str(
             self._get_header_ci(headers, "X-Hermes-Session-Id") or ""
         ).strip()
-        signing_payload = f"{str(ts_header).strip()}:{session_id}:{header_digest}"
+        signing_payload = (
+            f"{str(ts_header).strip()}:{session_id}:{target}:{body_digest}:{header_digest}"
+        )
 
         for api_key in valid_keys:
+            signing_key = self._resolve_signing_key(api_key)
             expected_sig = hmac.new(
-                api_key.encode("utf-8"),
+                signing_key.encode("utf-8"),
                 signing_payload.encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()

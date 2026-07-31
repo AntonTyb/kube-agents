@@ -177,9 +177,12 @@ X-Hermes-Timestamp
 ```
 
 This allows downstream agents to preserve attribution when they receive the
-session context. Downstream consumers must cryptographically verify the
-HMAC-SHA256 signature in `X-Hermes-Signature` against `API_SERVER_KEY` and validate
-timestamp freshness before trusting the session context.
+session context. As a future requirement, downstream consumers will be required
+to cryptographically verify the HMAC-SHA256 signature in `X-Hermes-Signature`
+against the delegation signing secret (`HERMES_DELEGATION_SIGNING_KEY` or derived
+secret) and validate timestamp freshness before trusting the session context.
+The signing payload covers the timestamp, session ID, target agent ID, body digest,
+and length-prefixed canonicalized header digest.
 
 ## Verification
 
@@ -260,8 +263,11 @@ curl -s \
   for user identity.
 - Signed delegation headers (`X-Hermes-Signature` via HMAC-SHA256 and
   `X-Hermes-Timestamp`) are emitted when forwarding session context across
-  inter-agent delegation hops; cryptographic verification and timestamp
-  validation are requirements on downstream consumers that are not yet met.
+  inter-agent delegation hops using a dedicated signing secret
+  (`HERMES_DELEGATION_SIGNING_KEY` or derived key), binding the timestamp,
+  session ID, target agent ID, body digest, and length-prefixed canonicalized
+  header digest; cryptographic verification and timestamp validation are
+  requirements on downstream consumers that are not yet met.
 - OTel enrichment depends on `hermes_otel`, `session_store`, and
   `session_otel_bridge` all being enabled.
 - Remote systems can only preserve attribution if they receive, verify, and honor the
