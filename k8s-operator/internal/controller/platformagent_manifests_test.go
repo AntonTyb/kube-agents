@@ -997,6 +997,70 @@ func TestResolveCredentialProxyImagePreservesTag(t *testing.T) {
 	if got := resolveCredentialProxyImage(&agentv1alpha1.DeploymentSpec{Image: "example/platform-agent"}); got != "example/credential-proxy:latest" {
 		t.Fatalf("expected explicit latest tag for untagged sidecar image: %s", got)
 	}
+	// A tag embedded in the image wins over the tag field, matching the agent container.
+	if got := resolveCredentialProxyImage(&agentv1alpha1.DeploymentSpec{Image: "example/platform-agent:v2", Tag: ptr.To("latest")}); got != "example/credential-proxy:v2" {
+		t.Fatalf("expected sidecar tag to follow the agent image's embedded tag: %s", got)
+	}
+	// The agent image's digest cannot name the proxy image; fall back to latest.
+	digestImage := "example/platform-agent@sha256:a6ce64e2038867885c2c90f6602425e6e70293d5e6d952a0e603a99265e01c40"
+	if got := resolveCredentialProxyImage(&agentv1alpha1.DeploymentSpec{Image: digestImage}); got != "example/credential-proxy:latest" {
+		t.Fatalf("expected latest tag for digest-pinned agent image: %s", got)
+	}
+	if got := resolveCredentialProxyImage(&agentv1alpha1.DeploymentSpec{Image: digestImage, Tag: ptr.To("v3")}); got != "example/credential-proxy:v3" {
+		t.Fatalf("expected tag field for digest-pinned agent image: %s", got)
+	}
+}
+
+func TestImageEnvOverrides(t *testing.T) {
+	t.Setenv("PLATFORM_AGENT_IMAGE", "registry.corp/mirror/platform-agent:v1.2.3")
+
+	if got := defaultPlatformAgentImage(); got != "registry.corp/mirror/platform-agent:v1.2.3" {
+		t.Fatalf("expected PLATFORM_AGENT_IMAGE to override the default agent image, got %s", got)
+	}
+	// The credential proxy follows the overridden agent image's registry.
+	if got := resolveCredentialProxyImage(nil); got != "registry.corp/mirror/credential-proxy:v1.2.3" {
+		t.Fatalf("expected credential proxy derived from PLATFORM_AGENT_IMAGE, got %s", got)
+	}
+	// A deployment block without an image gets tag: "latest" defaulted by the
+	// CRD/webhook; the sidecar must still follow PLATFORM_AGENT_IMAGE's tag,
+	// exactly like the agent container does.
+	if got := resolveCredentialProxyImage(&agentv1alpha1.DeploymentSpec{Tag: ptr.To("latest")}); got != "registry.corp/mirror/credential-proxy:v1.2.3" {
+		t.Fatalf("expected sidecar tag in lockstep with PLATFORM_AGENT_IMAGE despite defaulted tag field, got %s", got)
+	}
+	// A CR-level image still wins over the operator-level default.
+	if got := resolveAgentImage(&agentv1alpha1.DeploymentSpec{Image: "gcr.io/my-proj/agent:v9"}, defaultPlatformAgentImage()); got != "gcr.io/my-proj/agent:v9" {
+		t.Fatalf("expected spec.deployment.image to win over PLATFORM_AGENT_IMAGE, got %s", got)
+	}
+
+	// An explicit proxy override beats derivation, including from a CR image.
+	t.Setenv("CREDENTIAL_PROXY_IMAGE", "registry.corp/mirror/kube-agents-proxy:v1.2.3")
+	if got := resolveCredentialProxyImage(&agentv1alpha1.DeploymentSpec{Image: "example/platform-agent"}); got != "registry.corp/mirror/kube-agents-proxy:v1.2.3" {
+		t.Fatalf("expected CREDENTIAL_PROXY_IMAGE to win, got %s", got)
+	}
+}
+
+func TestFluentBitImageEnvOverride(t *testing.T) {
+	if got := fluentBitImage(); got != "fluent/fluent-bit:5.0.7" {
+		t.Fatalf("unexpected default fluent-bit image: %s", got)
+	}
+	t.Setenv("FLUENT_BIT_IMAGE", "registry.corp/mirror/fluent-bit:5.0.7")
+
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-agent", Namespace: "my-ns"},
+	}
+	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456")
+	found := false
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name == "fluent-bit" {
+			found = true
+			if c.Image != "registry.corp/mirror/fluent-bit:5.0.7" {
+				t.Fatalf("expected FLUENT_BIT_IMAGE override on sidecar, got %s", c.Image)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("fluent-bit sidecar container not found")
+	}
 }
 
 func TestBuildDeploymentGoogleChatAllowedUsersEmpty(t *testing.T) {

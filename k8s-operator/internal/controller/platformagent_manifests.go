@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"reflect"
 	"regexp"
@@ -785,7 +786,7 @@ func buildPodTemplateSpec(agent *agentv1alpha1.PlatformAgent, configHash, fluent
 		saName = agent.Spec.Security.ServiceAccountName
 	}
 
-	image := resolveAgentImage(agent.Spec.Deployment, defaultPlatformAgentImage)
+	image := resolveAgentImage(agent.Spec.Deployment, defaultPlatformAgentImage())
 	pullPolicy := corev1.PullAlways
 	if agent.Spec.Deployment != nil && agent.Spec.Deployment.ImagePullPolicy != nil {
 		pullPolicy = *agent.Spec.Deployment.ImagePullPolicy
@@ -1437,11 +1438,16 @@ func buildCredentialProxyVolumes(agent *agentv1alpha1.PlatformAgent) []corev1.Vo
 	}
 }
 
+// resolveCredentialProxyImage returns the credential-proxy sidecar image. An
+// explicit CREDENTIAL_PROXY_IMAGE env var wins; otherwise the image is derived
+// from the resolved agent image — same registry and tag as the image the agent
+// container actually runs, with the name platform-agent → credential-proxy —
+// so agent and sidecar can never end up on different versions.
 func resolveCredentialProxyImage(deployment *agentv1alpha1.DeploymentSpec) string {
-	image := defaultPlatformAgentImage
-	if deployment != nil && deployment.Image != "" {
-		image = deployment.Image
+	if override := os.Getenv(credentialProxyImageEnvVar); override != "" {
+		return override
 	}
+	image := resolveAgentImage(deployment, defaultPlatformAgentImage())
 	lastSlash := strings.LastIndex(image, "/")
 	prefix, name := "", image
 	if lastSlash >= 0 {
@@ -1449,7 +1455,12 @@ func resolveCredentialProxyImage(deployment *agentv1alpha1.DeploymentSpec) strin
 	}
 	suffix := ""
 	if digest := strings.Index(name, "@"); digest >= 0 {
-		suffix, name = name[digest:], name[:digest]
+		// The agent image's digest cannot name the proxy image; fall back to
+		// the tag field or latest.
+		name = name[:digest]
+		if deployment != nil && deployment.Tag != nil && *deployment.Tag != "" {
+			suffix = ":" + *deployment.Tag
+		}
 	} else if tag := strings.LastIndex(name, ":"); tag >= 0 {
 		suffix, name = name[tag:], name[:tag]
 	}
@@ -1457,9 +1468,6 @@ func resolveCredentialProxyImage(deployment *agentv1alpha1.DeploymentSpec) strin
 		name = "credential-proxy"
 	} else {
 		name += "-credential-proxy"
-	}
-	if deployment != nil && deployment.Tag != nil && *deployment.Tag != "" {
-		return prefix + name + ":" + *deployment.Tag
 	}
 	if suffix == "" {
 		suffix = ":latest"
@@ -1607,7 +1615,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 
 	containers = append(containers, corev1.Container{
 		Name:  "fluent-bit",
-		Image: "fluent/fluent-bit:5.0.7",
+		Image: fluentBitImage(),
 		Args: []string{
 			"-c",
 			"/fluent-bit/etc/fluent-bit.conf",
