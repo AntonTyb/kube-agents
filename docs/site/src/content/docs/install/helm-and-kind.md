@@ -9,7 +9,7 @@ description: A canonical GKE-oriented Helm chart and companion Terraform modules
 ## Install today
 
 - [Quick start (GKE)](/kube-agents/install/quickstart-gke/) — `./provision.sh` bootstraps GKE, the operator, and the agent.
-- [Helm & Terraform (GitOps)](/kube-agents/deploy/release-versioning/) — deploy via versioned OCI Helm charts and SemVer Terraform modules.
+- [Helm & Terraform (GitOps)](/kube-agents/deploy/release-versioning/) — deploy via versioned OCI Helm charts and SemVer Terraform modules. For a one-command IaC install (cluster + IAM + chart in a single `terraform apply`), see [`terraform/examples/full-install/`](https://github.com/gke-labs/kube-agents/tree/main/terraform/examples/full-install).
 - [Manual install](/kube-agents/install/manual/) — for other Hermes-compatible harnesses.
 
 Check the repository's [`charts/`](https://github.com/gke-labs/kube-agents/tree/main/charts) tree for canonical Helm charts and [`terraform/modules/`](https://github.com/gke-labs/kube-agents/tree/main/terraform/modules) for infrastructure modules.
