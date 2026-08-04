@@ -74,5 +74,3 @@ graph TD
   chart and templates set explicit values instead.
 - **No chart lint rule forbids `:latest`.** Chart defaults simply never produce it;
   enforcement in rendered workloads comes from the governance SOP, not `helm lint`.
-- **`examples/gitops-repo/` still predates this design** and has not been converted to
-  versioned module sourcing or OCI chart references.
