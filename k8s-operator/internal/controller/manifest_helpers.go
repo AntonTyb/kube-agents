@@ -55,7 +55,6 @@ const (
 	credentialProxyImageEnvVar = "CREDENTIAL_PROXY_IMAGE"
 	fluentBitImageEnvVar       = "FLUENT_BIT_IMAGE"
 
-const (
 	// managedOTelEndpoint is the OTLP/HTTP endpoint of the GKE Managed OpenTelemetry
 	// collector. The same endpoint is already used by the LiteLLM integration, so agent
 	// traces and LLM-call telemetry land in the same place (Cloud Trace/Logging).
