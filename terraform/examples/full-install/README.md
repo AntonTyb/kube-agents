@@ -16,7 +16,8 @@ same cluster, service accounts, and IAM bindings.
 - The agent's GCP identity ([`kube-agents-iam`](../../modules/kube-agents-iam)
   module): the `kubeagents-platform-gsa` service account, its read-only
   project roles, and the Workload Identity binding to the
-  `kubeagents-platform-agent` KSA.
+  `kubeagents-platform-agent` KSA (see [IAM roles](#iam-roles-project_roles)
+  below).
 - Optionally (`enable_google_chat = true`) the Google Chat backend
   ([`chat-pubsub`](../../modules/chat-pubsub) module): Pub/Sub topic,
   subscription, and Chat integration wiring.
@@ -59,6 +60,24 @@ checkout's `Chart.yaml` carries an `appVersion` placeholder that never matches
 a published image tag — so the chart's usual tag defaulting cannot work here
 (see the [chart README](../../../charts/kube-agents/README.md)). `latest` is
 fine for evaluation; pin a `vX.Y.Z` release tag for production.
+
+### IAM roles (`project_roles`)
+
+When `project_roles` is not set, the agent's service account gets the
+**read-only permission set** — verify the exact list in the
+`project_roles` variable default in
+[`terraform/modules/kube-agents-iam/variables.tf`](../../modules/kube-agents-iam/variables.tf),
+which mirrors the provisioning scripts' `read-only` set (the scripts' own
+default; source: `read_only_roles` in
+[`k8s-operator/scripts/provision_04_gcp_iam.sh`](../../../k8s-operator/scripts/provision_04_gcp_iam.sh)).
+
+To grant a different set, set `project_roles` explicitly in your
+`terraform.tfvars` — for the scripts' `gke-admin` equivalent, copy the
+`gke_admin_roles` list from `provision_04_gcp_iam.sh` rather than typing it
+from memory. `project_roles = []` grants nothing and leaves IAM to you (the
+agent fails every GCP call until an equivalent set exists). Deliberately no
+admin list is pre-staged in `terraform.tfvars.example` — widening access
+should be an explicit, reviewed choice.
 
 ### Google Chat and GitHub integrations
 
