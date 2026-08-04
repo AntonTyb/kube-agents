@@ -32,13 +32,15 @@ jobs:
         run: |
           # clusterName/location/projectId are required values with no
           # defaults, so lint and render need them set.
-          SET_FLAGS="--set platformAgent.harness.clusterName=ci-cluster \
-            --set platformAgent.harness.location=us-central1 \
-            --set platformAgent.harness.projectId=ci-project"
-          helm lint charts/kube-agents $SET_FLAGS
-          helm template test-release charts/kube-agents $SET_FLAGS > /dev/null
+          SET_FLAGS=(
+            --set platformAgent.harness.clusterName=ci-cluster
+            --set platformAgent.harness.location=us-central1
+            --set platformAgent.harness.projectId=ci-project
+          )
+          helm lint charts/kube-agents "${SET_FLAGS[@]}"
+          helm template test-release charts/kube-agents "${SET_FLAGS[@]}" > /dev/null
           # Render again with explicit image tags to cover the override path.
-          helm template test-release charts/kube-agents $SET_FLAGS \
+          helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
             --set operator.image.tag=v9.9.9 \
             --set platformAgent.deployment.image.tag=v9.9.9 > /dev/null
           # Rendering without the required values must fail.
