@@ -7,6 +7,11 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+# Queue rather than cancel: every publish should complete, but not interleave.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
@@ -47,7 +52,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:latest
+            ${{ github.ref_type == 'branch' && format('ghcr.io/{0}/k8s-operator:latest', env.IMAGE_REPOSITORY) || '' }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.sha }}
             ${{ github.ref_type == 'tag' && format('ghcr.io/{0}/k8s-operator:{1}', env.IMAGE_REPOSITORY, github.ref_name) || '' }}
           build-args: |

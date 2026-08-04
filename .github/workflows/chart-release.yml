@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
 
+# Queue rather than cancel: every publish should complete, but not interleave.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish-charts:
     runs-on: ubuntu-latest
@@ -19,6 +24,8 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
 
       - name: Log in to GHCR via Helm
         env:
@@ -49,7 +56,16 @@ jobs:
             --set platformAgent.harness.projectId=ci-project
           mkdir -p /tmp/charts
           helm package charts/kube-agents --version "$VERSION" --app-version "$REF_NAME" --destination /tmp/charts
-          helm push "/tmp/charts/kube-agents-${VERSION}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts"
+          # Capture the pushed digest so the sign step can sign exactly this
+          # artifact rather than whatever the mutable version tag points at.
+          PUSH_OUTPUT=$(helm push "/tmp/charts/kube-agents-${VERSION}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts" 2>&1)
+          echo "$PUSH_OUTPUT"
+          CHART_DIGEST=$(echo "$PUSH_OUTPUT" | awk '/^Digest:/ {print $2}')
+          if [ -z "$CHART_DIGEST" ]; then
+            echo "could not extract chart digest from helm push output" >&2
+            exit 1
+          fi
+          echo "CHART_DIGEST=$CHART_DIGEST" >> "$GITHUB_ENV"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -57,7 +73,6 @@ jobs:
       - name: Sign the chart
         env:
           REPOSITORY: ${{ github.repository }}
-          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           REPO_DOWNCASE=$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          cosign sign --yes "ghcr.io/${REPO_DOWNCASE}/charts/kube-agents:${VERSION}"
+          cosign sign --yes "ghcr.io/${REPO_DOWNCASE}/charts/kube-agents@${CHART_DIGEST}"
