@@ -1,0 +1,31 @@
+# Required
+project_id   = "my-gcp-project"
+cluster_name = "kube-agents"
+location     = "us-central1"
+
+# Required: the harness API server key. Generate a strong random value, e.g.
+#   openssl rand -hex 32
+api_server_key = "REPLACE_WITH_A_STRONG_RANDOM_KEY"
+
+# Model-provider credential(s) — set at least one so the agent can run.
+# Empty keys are omitted from the Secret.
+# anthropic_api_key = "sk-ant-..."
+# gemini_api_key    = "..."
+# openai_api_key    = "sk-..."
+
+# Image tag for the operator and platform agent. Defaults to "latest";
+# pin a vX.Y.Z release tag for production.
+# image_tag = "vX.Y.Z"
+
+# Cluster tuning
+# deletion_protection = true
+# release_channel     = "REGULAR"
+# namespace           = "kubeagents-system"
+
+# Optional Google Chat backend (Pub/Sub topic + subscription, Chat APIs).
+# See the README: the PlatformAgent CR's googleChat section must be patched
+# manually afterwards.
+# enable_google_chat = true
+
+# Optional GitHub token minter backend (GSA + KMS signing key).
+# enable_github_minter = true

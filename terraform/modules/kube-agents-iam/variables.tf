@@ -33,9 +33,11 @@ variable "project_roles" {
     (k8s-operator/scripts/provision_04_gcp_iam.sh, PLATFORM_AGENT_PERMISSION_SET
     read-only, which is also that script's default); see the security-and-iam
     reference for what each role is used for. Set to [] to grant nothing and
-    manage roles outside the module.
+    manage roles outside the module. Passing null selects this default
+    (nullable = false), which lets root modules expose a passthrough variable.
   EOT
   type        = list(string)
+  nullable    = false
   default = [
     "roles/container.clusterViewer",
     "roles/container.viewer",
