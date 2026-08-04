@@ -62,14 +62,27 @@ fine for evaluation; pin a `vX.Y.Z` release tag for production.
 With `enable_google_chat = true` the composition provisions the GCP backend
 (topic, subscription, IAM) **and** enables the CR's `googleChat` integration
 with the created topic/subscription — restrict access with
-`google_chat_allowed_users` (empty = everyone). The Chat app itself must still
-be registered on the Google Chat API configuration page (see the provisioning
-docs); that step is inherently manual.
+`google_chat_allowed_users` (empty = everyone).
 
 Set `github_repo` to wire the agent's GitOps target repository
 (`spec.integration.github.gitRepo`). Slack can be enabled directly through
 chart values (`platformAgent.integration.slack.*`) once the Slack tokens are
 present in the credentials Secret.
+
+**Manual steps that no IaC can perform** — canonical walkthrough:
+[INSTALL.md § Enable Google Chat & Slack Integrations](../../../INSTALL.md#step-5-enable-google-chat--slack-integrations-manual-required-steps):
+
+- **Google Chat:** register the Chat app on the Chat API configuration page —
+  select Cloud Pub/Sub and enter the created topic (the `chat_topic_name`
+  output, as `projects/<project>/topics/<topic>`), set visibility, and verify
+  a **Service account email** appears under Connection settings after saving
+  (if it stays blank, Chat silently delivers no events). Then DM the bot; on
+  first contact, optionally approve the pairing code via
+  `hermes pairing approve google_chat <CODE>` in the gateway pod.
+- **Slack:** in the Slack app console enable Socket Mode and grant the bot
+  scopes listed in the walkthrough, then put `SLACK_BOT_TOKEN` /
+  `SLACK_APP_TOKEN` into the credentials Secret; pairing approval works the
+  same way (`hermes pairing approve slack <CODE>`).
 
 ## Standalone use outside this repository
 

@@ -73,6 +73,12 @@ helm install kube-agents ./charts/kube-agents \
 - **GitHub** — `platformAgent.integration.github.gitRepo` sets the agent's
   GitOps target repository.
 
+Chat and Slack each need a one-time manual registration that no install
+automation can perform (the Chat app on the Chat API console page pointed at
+the Pub/Sub topic; Socket Mode + bot scopes in the Slack app console) —
+[INSTALL.md § Enable Google Chat & Slack Integrations](../../INSTALL.md#step-5-enable-google-chat--slack-integrations-manual-required-steps)
+is the canonical walkthrough, including the pairing-code approval.
+
 ### ServiceAccount ownership
 
 Exactly one owner creates the agent's KSA, depending on
