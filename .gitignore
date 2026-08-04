@@ -17,3 +17,11 @@ __pycache__/
 # lock files are only meaningful in root configurations, not shipped modules)
 .terraform/
 .terraform.lock.hcl
+
+# Terraform state and variable files hold credentials and infrastructure
+# details — never commit them. Committed examples keep the .example suffix.
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+terraform.tfvars.json

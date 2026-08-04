@@ -90,6 +90,10 @@ resource "helm_release" "kube_agents" {
         tag = var.image_tag
       }
     }
+    litellm = {
+      modelProvider    = var.model_provider
+      modelDefaultName = var.model_default_name
+    }
     platformAgent = {
       harness = {
         clusterName = module.gke_cluster.cluster_name

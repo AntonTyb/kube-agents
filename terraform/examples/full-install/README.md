@@ -24,9 +24,12 @@ same cluster, service accounts, and IAM bindings.
   ([`github-minter`](../../modules/github-minter) module): minter service
   account plus a KMS key ring and signing key.
 - The [`kube-agents` Helm chart](../../../charts/kube-agents) (operator +
-  `PlatformAgent` CR) via `helm_release`, installed straight from this
-  repository checkout with Workload Identity annotations and the credentials
-  Secret composed from your variables.
+  `PlatformAgent` CR + the LiteLLM gateway the agent's default model endpoint
+  requires) via `helm_release`, installed straight from this repository
+  checkout with Workload Identity annotations and the credentials Secret
+  composed from your variables. `model_provider` selects which provider
+  LiteLLM routes `model-default` to (set the matching `*_api_key` variable);
+  `model_default_name` overrides the per-provider default model.
 
 ## Prerequisites
 

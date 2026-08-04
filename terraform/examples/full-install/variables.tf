@@ -43,6 +43,23 @@ variable "image_tag" {
   default     = "latest"
 }
 
+variable "model_provider" {
+  description = "Model provider the LiteLLM gateway routes model-default to (gemini, anthropic, or openai — chatgpt needs the kustomize overlay and is rejected by the chart). Set the matching *_api_key variable."
+  type        = string
+  default     = "gemini"
+
+  validation {
+    condition     = contains(["gemini", "anthropic", "openai"], var.model_provider)
+    error_message = "model_provider must be one of gemini, anthropic, or openai."
+  }
+}
+
+variable "model_default_name" {
+  description = "Model name behind model-default. Empty selects the chart's per-provider default (which mirrors the provisioning scripts)."
+  type        = string
+  default     = ""
+}
+
 variable "api_server_key" {
   description = "API_SERVER_KEY for the agent harness (required; stored in the platform-agent-secrets Secret)"
   type        = string

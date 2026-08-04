@@ -59,6 +59,18 @@ helm install kube-agents ./charts/kube-agents \
   --set platformAgent.deployment.image.tag=latest
 ```
 
+### LiteLLM gateway
+
+The agent's baked default model endpoint is
+`http://litellm.<namespace>.svc.cluster.local/v1`, so the chart deploys the
+LiteLLM gateway by default (`litellm.enabled=true`), mirroring
+`k8s-operator/config/integrations/litellm/base`. `litellm.modelProvider`
+(gemini/anthropic/openai) picks which provider `model-default` routes to — the
+matching API key must be in the credentials Secret; `litellm.modelDefaultName`
+overrides the per-provider default model. `chatgpt` mode is rejected (it needs
+the OAuth-token PVC from the kustomize overlay). Set `litellm.enabled=false`
+only if you operate your own gateway at that address.
+
 ### Integrations
 
 - **Google Chat** — `platformAgent.integration.googleChat.enabled=true` plus the

@@ -13,6 +13,36 @@ operator:
       cpu: 10m
       memory: 64Mi
 
+litellm:
+  # The agent's baked default model endpoint is
+  # http://litellm.kubeagents-system.svc.cluster.local/v1 (see
+  # deploy/shared/defaults/config.yaml), so a working install needs this
+  # gateway. Disable only if you run your own LiteLLM (or point the agent
+  # elsewhere). Mirrors k8s-operator/config/integrations/litellm/base.
+  enabled: true
+  # model-default routes to <modelProvider>/<modelDefaultName>. Providers:
+  # gemini, anthropic, openai (chatgpt needs the kustomize overlay and is
+  # rejected). The provider's API key must exist in the credentials Secret.
+  modelProvider: gemini
+  # Empty selects the per-provider default (mirrors common.sh).
+  modelDefaultName: ""
+  image:
+    repository: ghcr.io/berriai/litellm
+    tag: v1.92.0
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 2Gi
+  # NetworkPolicy and GKE managed-Prometheus PodMonitoring for the gateway;
+  # disable podMonitoring off-GKE (the CRD is GKE-managed).
+  networkPolicy: true
+  podMonitoring: true
+
 platformAgent:
   enabled: true
   name: platform-agent
