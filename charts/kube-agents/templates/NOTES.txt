@@ -1,4 +1,12 @@
 {{ .Chart.Name }} {{ .Chart.Version }} (app {{ .Chart.AppVersion }}) installed in namespace {{ .Release.Namespace }}.
+{{- if and .Values.litellm.enabled (ne .Release.Namespace "kubeagents-system") }}
+
+WARNING: this release is not in the kubeagents-system namespace, but the
+agent's baked default model endpoint is
+http://litellm.kubeagents-system.svc.cluster.local/v1 — the agent will NOT
+reach the LiteLLM gateway installed here ({{ .Release.Namespace }}). Install
+into kubeagents-system, or override the agent's model endpoint.
+{{- end }}
 
 {{- if .Values.platformAgent.enabled }}
 

@@ -5,10 +5,11 @@
 {{- end }}
 {{- /* Per-provider default model names mirror k8s-operator/scripts/common.sh. */}}
 {{- $defaultModels := dict "gemini" "gemini-3.5-flash" "anthropic" "claude-sonnet-4-5-20250929" "openai" "gpt-5.4" }}
-{{- $model := .Values.litellm.modelDefaultName | default (get $defaultModels $provider) }}
-{{- if not $model }}
-{{- fail (printf "litellm.modelDefaultName is required for provider %q (no built-in default)" $provider) }}
+{{- if not (hasKey $defaultModels $provider) }}
+{{- fail (printf "litellm.modelProvider %q is not one of gemini, anthropic, openai — a typo here would otherwise fail only at runtime" $provider) }}
 {{- end }}
+{{- $model := .Values.litellm.modelDefaultName | default (get $defaultModels $provider) }}
+{{- $callbacks := ternary `["otel", "prometheus"]` `["prometheus"]` .Values.litellm.otel }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,7 +25,7 @@ data:
         litellm_params:
           model: {{ printf "%s/%s" $provider $model }}
     litellm_settings:
-      callbacks: ["otel", "prometheus"]
+      callbacks: {{ $callbacks }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -50,7 +51,7 @@ spec:
         app: litellm
       annotations:
         # Roll the pods when the rendered LiteLLM config changes.
-        checksum/config: {{ printf "%s/%s" $provider $model | sha256sum }}
+        checksum/config: {{ printf "%s/%s/%s" $provider $model $callbacks | sha256sum }}
     spec:
       containers:
         - name: litellm-container
@@ -78,6 +79,7 @@ spec:
                   name: {{ .Values.platformAgent.credentials.secretName | quote }}
                   key: OPENAI_API_KEY
                   optional: true
+            {{- if .Values.litellm.otel }}
             - name: LITELLM_OTEL_V2
               value: "true"
             - name: LITELLM_OTEL_INTEGRATION_ENABLE_METRICS
@@ -88,6 +90,7 @@ spec:
               value: http/protobuf
             - name: OTEL_SERVICE_NAME
               value: litellm
+            {{- end }}
           ports:
             - containerPort: 4000
           volumeMounts:

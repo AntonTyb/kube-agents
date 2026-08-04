@@ -69,7 +69,10 @@ LiteLLM gateway by default (`litellm.enabled=true`), mirroring
 matching API key must be in the credentials Secret; `litellm.modelDefaultName`
 overrides the per-provider default model. `chatgpt` mode is rejected (it needs
 the OAuth-token PVC from the kustomize overlay). Set `litellm.enabled=false`
-only if you operate your own gateway at that address.
+only if you operate your own gateway at that address. LLM-call telemetry to
+the GKE Managed OpenTelemetry collector is opt-in (`litellm.otel=true`) —
+enable it only on clusters that run the managed collector, since without it
+the otel callback aborts every LLM request on DNS failure.
 
 ### Integrations
 

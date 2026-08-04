@@ -26,7 +26,16 @@ litellm:
   # deploy/shared/defaults/config.yaml), so a working install needs this
   # gateway. Disable only if you run your own LiteLLM (or point the agent
   # elsewhere). Mirrors k8s-operator/config/integrations/litellm/base.
+  # NOTE: the namespace in that endpoint is baked — installing the release
+  # into any namespace other than kubeagents-system leaves the agent unable
+  # to reach the gateway rendered here.
   enabled: true
+  # LLM-call telemetry to the GKE Managed OpenTelemetry collector
+  # (Cloud Trace/Logging). Off by default: on clusters without the collector
+  # (no gke-managed-otel namespace — e.g. a fresh gke-cluster-module cluster)
+  # the otel callback's DNS failure aborts every LLM request. Enable it once
+  # the managed collector exists; the NetworkPolicy already allows the egress.
+  otel: false
   # model-default routes to <modelProvider>/<modelDefaultName>. Providers:
   # gemini, anthropic, openai (chatgpt needs the kustomize overlay and is
   # rejected). The provider's API key must exist in the credentials Secret.
@@ -46,7 +55,9 @@ litellm:
       cpu: 500m
       memory: 2Gi
   # NetworkPolicy and GKE managed-Prometheus PodMonitoring for the gateway;
-  # disable podMonitoring off-GKE (the CRD is GKE-managed).
+  # disable podMonitoring off-GKE — the PodMonitoring CRD is GKE-managed, and
+  # helm template/lint cannot catch its absence: a non-GKE install fails at
+  # apply time.
   networkPolicy: true
   podMonitoring: true
 
