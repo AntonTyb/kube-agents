@@ -61,7 +61,7 @@ Invoked by the [`security-patch-orchestrator`](/kube-agents/concepts/autonomous-
 
 ### `standardization_validator_sop.md`
 
-Weekly deep-diff of live cluster configuration against corporate architectural patterns. Verifies that deployments and services carry the standard metadata labels (`app.kubernetes.io/name`, `owner`, `environment`), flags any dev-namespace Service exposing a public external LoadBalancer IP without the `platform.harness.io/public-exposition-approved: "true"` annotation, and enforces immutable SemVer image tags in staging and production namespaces (prohibiting `:latest` or mutable commit SHAs).
+Weekly deep-diff of live cluster configuration against corporate architectural patterns. Verifies that deployments and services carry the standard metadata labels (`app.kubernetes.io/name`, `owner`, `environment`), flags any dev-namespace Service exposing a public external LoadBalancer IP without the `platform.harness.io/public-exposition-approved: "true"` annotation, and enforces SemVer image tags in staging and production namespaces (prohibiting `:latest` and bare commit-SHA tags, which are immutable but not comparable or auditable as releases).
 
 Invoked by the [`standardization-validator`](/kube-agents/concepts/autonomous-watchdogs/) watchdog weekly on Sunday 10:00.
 
