@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,8 +39,21 @@ var (
 	// DefaultPlatformAgentVersion is injected at build time via -ldflags "-X ...DefaultPlatformAgentVersion=vX.Y.Z"
 	// or defaults to "latest" during local development.
 	DefaultPlatformAgentVersion = "latest"
-	defaultPlatformAgentImage   = "ghcr.io/gke-labs/kube-agents/platform-agent:" + DefaultPlatformAgentVersion
+
+	// fallbackPlatformAgentImage derives its tag from DefaultPlatformAgentVersion
+	// at runtime init, so release builds default to the matching versioned image.
+	fallbackPlatformAgentImage = "ghcr.io/gke-labs/kube-agents/platform-agent:" + DefaultPlatformAgentVersion
 )
+
+const (
+	fallbackFluentBitImage = "fluent/fluent-bit:5.0.7"
+
+	// Operator-level image overrides for installs that mirror images into a
+	// private registry. Set on the controller-manager Deployment; a CR's
+	// spec.deployment.image still takes precedence over PLATFORM_AGENT_IMAGE.
+	platformAgentImageEnvVar   = "PLATFORM_AGENT_IMAGE"
+	credentialProxyImageEnvVar = "CREDENTIAL_PROXY_IMAGE"
+	fluentBitImageEnvVar       = "FLUENT_BIT_IMAGE"
 
 const (
 	// managedOTelEndpoint is the OTLP/HTTP endpoint of the GKE Managed OpenTelemetry
@@ -76,6 +90,25 @@ func otelTelemetryEnvVars(agentType, name, namespace string) []corev1.EnvVar {
 			),
 		},
 	}
+}
+
+// defaultPlatformAgentImage returns the agent image used when a CR omits
+// spec.deployment.image: the PLATFORM_AGENT_IMAGE env var if set, else the
+// public ghcr.io default.
+func defaultPlatformAgentImage() string {
+	if img := os.Getenv(platformAgentImageEnvVar); img != "" {
+		return img
+	}
+	return fallbackPlatformAgentImage
+}
+
+// fluentBitImage returns the logging sidecar image: the FLUENT_BIT_IMAGE env
+// var if set, else the public Docker Hub default.
+func fluentBitImage() string {
+	if img := os.Getenv(fluentBitImageEnvVar); img != "" {
+		return img
+	}
+	return fallbackFluentBitImage
 }
 
 // resolveAgentImage determines the full image reference using the optional deployment spec and a fallback default.
