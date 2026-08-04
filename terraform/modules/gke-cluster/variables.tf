@@ -9,12 +9,28 @@ variable "cluster_name" {
 }
 
 variable "location" {
-  description = "GCP location (region or zone)"
+  description = "GCP region for the cluster. Autopilot clusters are regional, so a zone (e.g. us-central1-a) is rejected."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]+$", var.location))
+    error_message = "location must be a region (e.g. us-central1); GKE Autopilot does not support zonal clusters."
+  }
 }
 
 variable "deletion_protection" {
   description = "Whether deletion protection is enabled on the cluster"
   type        = bool
   default     = true
+}
+
+variable "release_channel" {
+  description = "GKE release channel for the cluster"
+  type        = string
+  default     = "REGULAR"
+
+  validation {
+    condition     = contains(["RAPID", "REGULAR", "STABLE", "EXTENDED"], var.release_channel)
+    error_message = "release_channel must be one of RAPID, REGULAR, STABLE, or EXTENDED."
+  }
 }

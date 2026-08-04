@@ -11,6 +11,6 @@ resource "google_container_cluster" "autopilot" {
   }
 
   release_channel {
-    channel = "REGULAR"
+    channel = var.release_channel
   }
 }

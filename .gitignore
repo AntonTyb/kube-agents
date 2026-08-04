@@ -12,3 +12,8 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .venv/
+
+# Terraform working directories (providers are re-fetched by terraform init;
+# lock files are only meaningful in root configurations, not shipped modules)
+.terraform/
+.terraform.lock.hcl
