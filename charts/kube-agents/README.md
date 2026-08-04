@@ -42,6 +42,34 @@ helm install kube-agents oci://ghcr.io/gke-labs/kube-agents/charts/kube-agents \
 `platformAgent.harness.{clusterName,location,projectId}` are required and have
 no defaults — rendering fails until they are set.
 
+### Installing from a repository checkout
+
+The `appVersion` in a checkout's `Chart.yaml` is a placeholder that never
+corresponds to a published image tag, so checkout installs must override
+**both** image tags with tags that exist (`latest` or a commit SHA — published
+on every push to `main`):
+
+```bash
+helm install kube-agents ./charts/kube-agents \
+  --namespace kubeagents-system --create-namespace \
+  --set platformAgent.harness.clusterName=my-cluster \
+  --set platformAgent.harness.location=us-central1 \
+  --set platformAgent.harness.projectId=my-gcp-project \
+  --set operator.image.tag=latest \
+  --set platformAgent.deployment.image.tag=latest
+```
+
+### ServiceAccount ownership
+
+Exactly one owner creates the agent's KSA, depending on
+`platformAgent.security.serviceAccountAnnotations`:
+
+- **Annotations set** (the Workload Identity case): the **operator** creates
+  and manages the KSA with those annotations.
+- **No annotations**: the operator treats the named KSA as user-managed and
+  does not create it — the **chart** renders it instead, so a default install
+  still starts.
+
 ## Uninstalling
 
 The `PlatformAgent` resource carries a finalizer that only the operator can

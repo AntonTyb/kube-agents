@@ -30,6 +30,9 @@ platformAgent:
     # Kubernetes ServiceAccount the agent pod runs as. The Workload Identity
     # binding must target this KSA (see the chart README); the default matches
     # the provisioning scripts (k8s-operator/scripts/common.sh).
+    # Ownership: with serviceAccountAnnotations set, the OPERATOR creates and
+    # manages the KSA; with no annotations, the operator treats it as
+    # user-managed and the CHART creates it instead.
     serviceAccountName: kubeagents-platform-agent
     # Annotations applied to that KSA, e.g. for Workload Identity:
     #   iam.gke.io/gcp-service-account: <GSA>@<project>.iam.gserviceaccount.com
