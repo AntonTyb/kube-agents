@@ -59,6 +59,20 @@ helm install kube-agents ./charts/kube-agents \
   --set platformAgent.deployment.image.tag=latest
 ```
 
+### Integrations
+
+- **Google Chat** — `platformAgent.integration.googleChat.enabled=true` plus the
+  topic/subscription names (defaults match the provisioning scripts and the
+  `chat-pubsub` Terraform module). Requires the Chat Pub/Sub backend to exist
+  (`provision_05_gcp_gchat.sh` or `terraform/modules/chat-pubsub`); `projectId`
+  is taken from `platformAgent.harness.projectId`. Restrict access via
+  `allowedUsers` (empty = everyone).
+- **Slack** — `platformAgent.integration.slack.enabled=true`; the bot/app
+  tokens are read from the credentials Secret's `SLACK_BOT_TOKEN` /
+  `SLACK_APP_TOKEN` keys (the CRD requires both refs when Slack is enabled).
+- **GitHub** — `platformAgent.integration.github.gitRepo` sets the agent's
+  GitOps target repository.
+
 ### ServiceAccount ownership
 
 Exactly one owner creates the agent's KSA, depending on
@@ -83,14 +97,18 @@ helm uninstall kube-agents -n kubeagents-system
 
 ## Notes
 
-- **Admission webhooks are not part of chart installs.** The chart ships no
-  webhook Service, certificate, or `*WebhookConfiguration`, and pins
+- **Admission webhooks are not part of chart installs** (deliberate follow-up
+  scope, not an oversight: they need cert-manager wiring and carry
+  `failurePolicy: Fail` risk, so they warrant their own change). The chart
+  ships no webhook Service, certificate, or `*WebhookConfiguration`, and pins
   `ENABLE_WEBHOOKS=false` on the manager; CR validation, defaulting, and
   delete-protection therefore don't apply. The provisioning-script / kustomize
   install path provides them.
 - **CRDs** live in `crds/` and are installed by Helm on first install but never
-  upgraded — apply `k8s-operator/config/crd/bases/` manually when upgrading
-  across CRD changes.
+  upgraded (a Helm limitation) — apply `k8s-operator/config/crd/bases/`
+  manually when upgrading across CRD changes. Automating this (pre-upgrade
+  hook) is deliberate follow-up scope; it first matters when upgrading between
+  two published releases.
 - The CRD and RBAC manifests under this chart are generated copies of
   `k8s-operator/config/` — edit the source and run `make chart-sync` (CI
   enforces this via `make chart-check`).

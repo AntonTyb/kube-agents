@@ -57,13 +57,19 @@ a published image tag — so the chart's usual tag defaulting cannot work here
 (see the [chart README](../../../charts/kube-agents/README.md)). `latest` is
 fine for evaluation; pin a `vX.Y.Z` release tag for production.
 
-### Google Chat caveat: manual CR wiring
+### Google Chat and GitHub integrations
 
-The chart's `PlatformAgent` CR template does not yet expose the `googleChat`
-integration values, so with `enable_google_chat = true` this composition can
-only provision the GCP backend (topic, subscription, IAM). Wiring the CR's
-`googleChat` section is chart follow-up scope; until then, patch the CR
-manually with the `chat_topic_name` and `chat_subscription_name` outputs.
+With `enable_google_chat = true` the composition provisions the GCP backend
+(topic, subscription, IAM) **and** enables the CR's `googleChat` integration
+with the created topic/subscription — restrict access with
+`google_chat_allowed_users` (empty = everyone). The Chat app itself must still
+be registered on the Google Chat API configuration page (see the provisioning
+docs); that step is inherently manual.
+
+Set `github_repo` to wire the agent's GitOps target repository
+(`spec.integration.github.gitRepo`). Slack can be enabled directly through
+chart values (`platformAgent.integration.slack.*`) once the Slack tokens are
+present in the credentials Secret.
 
 ## Standalone use outside this repository
 

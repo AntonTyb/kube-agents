@@ -47,3 +47,27 @@ platformAgent:
     # Prefer a pre-created Secret (external secret management) in production.
     create: false
     data: {}
+  integration:
+    github:
+      # Target GitOps repository for the GitHub integration (owner/repo or
+      # URL). Empty leaves the GitHub integration unconfigured.
+      gitRepo: ""
+    googleChat:
+      # Requires the Chat Pub/Sub backend (provision_05_gcp_gchat.sh or
+      # terraform/modules/chat-pubsub). projectId is taken from
+      # platformAgent.harness.projectId.
+      enabled: false
+      topicName: platform-agent-chat-events
+      subscriptionName: platform-agent-chat-events-sub
+      # Empty list = all users allowed.
+      allowedUsers: []
+      homeChannel: ""
+      # "default" (quiet) or "debug" (full verbosity).
+      mode: default
+    slack:
+      # Bot/app tokens are read from credentials.secretName under the
+      # SLACK_BOT_TOKEN / SLACK_APP_TOKEN keys.
+      enabled: false
+      allowedUsers: []
+      homeChannel: ""
+      homeChannelName: ""

@@ -26,4 +26,49 @@ spec:
     serviceAccountAnnotations:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+  {{- $integ := .Values.platformAgent.integration }}
+  {{- if or $integ.github.gitRepo $integ.googleChat.enabled $integ.slack.enabled }}
+  integration:
+    {{- with $integ.github.gitRepo }}
+    github:
+      gitRepo: {{ . | quote }}
+    {{- end }}
+    {{- if $integ.googleChat.enabled }}
+    googleChat:
+      enabled: true
+      projectId: {{ .Values.platformAgent.harness.projectId | quote }}
+      topicName: {{ required "platformAgent.integration.googleChat.topicName is required when googleChat is enabled" $integ.googleChat.topicName | quote }}
+      subscriptionName: {{ required "platformAgent.integration.googleChat.subscriptionName is required when googleChat is enabled" $integ.googleChat.subscriptionName | quote }}
+      {{- with $integ.googleChat.allowedUsers }}
+      allowedUsers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $integ.googleChat.homeChannel }}
+      homeChannel: {{ . | quote }}
+      {{- end }}
+      mode: {{ $integ.googleChat.mode | default "default" | quote }}
+    {{- end }}
+    {{- if $integ.slack.enabled }}
+    slack:
+      enabled: true
+      # The CRD requires both token refs when Slack is enabled; they point
+      # into the credentials Secret by convention.
+      botTokenSecretRef:
+        name: {{ .Values.platformAgent.credentials.secretName | quote }}
+        key: SLACK_BOT_TOKEN
+      appTokenSecretRef:
+        name: {{ .Values.platformAgent.credentials.secretName | quote }}
+        key: SLACK_APP_TOKEN
+      {{- with $integ.slack.allowedUsers }}
+      allowedUsers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $integ.slack.homeChannel }}
+      homeChannel: {{ . | quote }}
+      {{- end }}
+      {{- with $integ.slack.homeChannelName }}
+      homeChannelName: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
 {{- end }}

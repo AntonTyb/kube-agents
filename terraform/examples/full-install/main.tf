@@ -113,6 +113,19 @@ resource "helm_release" "kube_agents" {
         create = true
         data   = local.credentials
       }
+      integration = merge(
+        var.enable_google_chat ? {
+          googleChat = {
+            enabled          = true
+            topicName        = module.chat_pubsub[0].topic_name
+            subscriptionName = module.chat_pubsub[0].subscription_name
+            allowedUsers     = var.google_chat_allowed_users
+          }
+        } : {},
+        var.github_repo != "" ? {
+          github = { gitRepo = var.github_repo }
+        } : {}
+      )
     }
   })]
 

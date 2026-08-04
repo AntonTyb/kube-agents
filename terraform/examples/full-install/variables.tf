@@ -71,9 +71,21 @@ variable "openai_api_key" {
 }
 
 variable "enable_google_chat" {
-  description = "Provision the Google Chat backend (Pub/Sub topic and subscription, Chat APIs). See the README: the chart does not yet wire the CR's googleChat section, so the CR must be patched manually."
+  description = "Provision the Google Chat backend (Pub/Sub topic and subscription, Chat APIs) and enable the CR's googleChat integration with the created topic/subscription."
   type        = bool
   default     = false
+}
+
+variable "google_chat_allowed_users" {
+  description = "Google Chat users allowed to talk to the agent (empty list = all users allowed). Only used when enable_google_chat is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "github_repo" {
+  description = "Target GitOps repository for the agent's GitHub integration (owner/repo or URL). Empty leaves the GitHub integration unconfigured. Independent of enable_github_minter, which only provisions the minter's GCP identity."
+  type        = string
+  default     = ""
 }
 
 variable "enable_github_minter" {
