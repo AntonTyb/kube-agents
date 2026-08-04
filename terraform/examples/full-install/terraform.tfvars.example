@@ -22,10 +22,21 @@ api_server_key = "REPLACE_WITH_A_STRONG_RANDOM_KEY"
 # release_channel     = "REGULAR"
 # namespace           = "kubeagents-system"
 
-# Optional Google Chat backend (Pub/Sub topic + subscription, Chat APIs).
-# See the README: the PlatformAgent CR's googleChat section must be patched
-# manually afterwards.
-# enable_google_chat = true
+# Optional Google Chat backend (Pub/Sub topic + subscription, Chat APIs);
+# the CR's googleChat integration is wired to the created topic/subscription
+# automatically. Only the Chat-app registration in the console stays manual
+# (see the README).
+# enable_google_chat        = true
+# google_chat_allowed_users = ["you@example.com"]
+
+# GitOps target repository for the agent's GitHub integration.
+# github_repo = "my-org/my-gitops-repo"
+
+# Model routing for the bundled LiteLLM gateway (defaults: gemini and the
+# provider's default model; set the matching *_api_key above).
+# model_provider     = "gemini"
+# model_default_name = ""
+
 
 # Optional GitHub token minter backend (GSA + KMS signing key).
 # enable_github_minter = true

@@ -125,4 +125,4 @@ For development iteration, `make dev-rebuild-agent` (from `k8s-operator/`) is th
 
 ## CI
 
-Docker builds are validated on every PR via [`.github/workflows/docker-build.yml`](https://github.com/gke-labs/kube-agents/blob/main/.github/workflows/docker-build.yml) — the image builds but doesn't publish. Publication happens only on push to `main`.
+Docker builds are validated on every PR via [`.github/workflows/docker-build.yml`](https://github.com/gke-labs/kube-agents/blob/main/.github/workflows/docker-build.yml) — the image builds but doesn't publish. Publication happens on push to `main` and on `v*.*.*` tag pushes.

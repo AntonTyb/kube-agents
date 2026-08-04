@@ -54,6 +54,12 @@ awk -v rolefile="$ROLE_SRC" '
   !skip { print }
 ' "$RBAC_TPL" >"$tmp"
 
+# Sanity-check the splice: a missing END marker would truncate the template,
+# and a reformatted role.yaml (e.g. "rules:" no longer at column 0) would
+# splice zero rules into the ClusterRole.
+grep -q '# END GENERATED RULES' "$tmp" || { rm -f "$tmp"; fail "splice lost the END marker in $RBAC_TPL"; }
+grep -q '^  - apiGroups:' "$tmp" || { rm -f "$tmp"; fail "splice produced no rules — check $ROLE_SRC formatting"; }
+
 if $check; then
   diff -u "$RBAC_TPL" "$tmp" >&2 || { rm -f "$tmp"; fail "chart ClusterRole rules out of date vs $ROLE_SRC"; }
   rm -f "$tmp"

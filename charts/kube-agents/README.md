@@ -119,9 +119,10 @@ helm uninstall kube-agents -n kubeagents-system
   scope, not an oversight: they need cert-manager wiring and carry
   `failurePolicy: Fail` risk, so they warrant their own change). The chart
   ships no webhook Service, certificate, or `*WebhookConfiguration`, and pins
-  `ENABLE_WEBHOOKS=false` on the manager; CR validation, defaulting, and
-  delete-protection therefore don't apply. The provisioning-script / kustomize
-  install path provides them.
+  `ENABLE_WEBHOOKS=false` on the manager; the webhooks' validation, defaulting,
+  and delete-protection therefore don't apply (CRD-level CEL validation and
+  OpenAPI defaulting still do). The provisioning-script / kustomize install
+  path provides them.
 - **CRDs** live in `crds/` and are installed by Helm on first install but never
   upgraded (a Helm limitation) — apply `k8s-operator/config/crd/bases/`
   manually when upgrading across CRD changes. Automating this (pre-upgrade

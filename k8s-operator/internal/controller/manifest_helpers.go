@@ -39,11 +39,14 @@ var (
 	// DefaultPlatformAgentVersion is injected at build time via -ldflags "-X ...DefaultPlatformAgentVersion=vX.Y.Z"
 	// or defaults to "latest" during local development.
 	DefaultPlatformAgentVersion = "latest"
-
-	// fallbackPlatformAgentImage derives its tag from DefaultPlatformAgentVersion
-	// at runtime init, so release builds default to the matching versioned image.
-	fallbackPlatformAgentImage = "ghcr.io/gke-labs/kube-agents/platform-agent:" + DefaultPlatformAgentVersion
 )
+
+// fallbackPlatformAgentImage derives its tag from DefaultPlatformAgentVersion
+// at call time (not folded at init), so release builds default to the matching
+// versioned image and tests can pin the derivation by overriding the variable.
+func fallbackPlatformAgentImage() string {
+	return "ghcr.io/gke-labs/kube-agents/platform-agent:" + DefaultPlatformAgentVersion
+}
 
 const (
 	fallbackFluentBitImage = "fluent/fluent-bit:5.0.7"
@@ -98,7 +101,7 @@ func defaultPlatformAgentImage() string {
 	if img := os.Getenv(platformAgentImageEnvVar); img != "" {
 		return img
 	}
-	return fallbackPlatformAgentImage
+	return fallbackPlatformAgentImage()
 }
 
 // fluentBitImage returns the logging sidecar image: the FLUENT_BIT_IMAGE env

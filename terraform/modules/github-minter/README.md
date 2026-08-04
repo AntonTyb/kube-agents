@@ -4,6 +4,13 @@ Reusable Terraform module for provisioning the GitHub token minter's Google Serv
 
 The KMS key is created **import-only and empty** (`skip_initial_version_creation = true`): importing the GitHub App private key PEM into it is a separate manual step, performed via `k8s-operator/scripts/provision_10_deploy_github_minter.sh`, which uses the Minty CLI for the cryptographic wrapping.
 
+> **KMS resources cannot be deleted.** Cloud KMS key rings and keys are never actually
+> destroyed — `terraform destroy` only removes them from state, and a subsequent apply
+> with the same names fails with a 409 (the provisioning scripts sidestep this by
+> check-then-create). Recover by importing the existing resources back into state
+> (`terraform import module.<name>.google_kms_key_ring.minter ...`) or by choosing new
+> `kms_keyring_name`/`kms_key_name` values.
+
 ## Relationship to the provisioning scripts
 
 This module creates the **same** GSA, Workload Identity binding, key ring, and key that

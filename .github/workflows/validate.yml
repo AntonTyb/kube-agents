@@ -54,17 +54,21 @@ jobs:
         with:
           terraform_version: "1.15.8"
 
+      - name: Enable Terraform plugin cache
+        # Terraform does not tilde-expand TF_PLUGIN_CACHE_DIR, so the path
+        # must be absolute — set it from $HOME at runtime.
+        run: |
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.terraform.d/plugin-cache"
+
       - name: Cache Terraform providers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.terraform.d/plugin-cache
-          key: terraform-plugins-${{ runner.os }}-${{ hashFiles('terraform/modules/*/versions.tf') }}
+          key: terraform-plugins-${{ runner.os }}-${{ hashFiles('terraform/modules/*/versions.tf', 'terraform/examples/*/providers.tf') }}
 
       - name: Validate Terraform Modules
-        env:
-          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
         run: |
-          mkdir -p ~/.terraform.d/plugin-cache
           terraform fmt -check -recursive terraform/
           for dir in terraform/modules/* terraform/examples/*; do
             if [ -d "$dir" ]; then

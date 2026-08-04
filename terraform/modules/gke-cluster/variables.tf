@@ -30,7 +30,9 @@ variable "release_channel" {
   default     = "REGULAR"
 
   validation {
-    condition     = contains(["RAPID", "REGULAR", "STABLE", "EXTENDED"], var.release_channel)
-    error_message = "release_channel must be one of RAPID, REGULAR, STABLE, or EXTENDED."
+    # EXTENDED is deliberately not accepted: it is not supported for this
+    # module's Autopilot clusters and would only fail later at plan/apply.
+    condition     = contains(["RAPID", "REGULAR", "STABLE"], var.release_channel)
+    error_message = "release_channel must be one of RAPID, REGULAR, or STABLE."
   }
 }

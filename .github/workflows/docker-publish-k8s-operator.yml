@@ -51,6 +51,10 @@ jobs:
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Note: ref_type == 'branch' also holds for workflow_dispatch runs
+          # from non-main branches, which would republish :latest — pushes
+          # only trigger from main, so this matters for manual dispatch; use
+          # it with care.
           tags: |
             ${{ github.ref_type == 'branch' && format('ghcr.io/{0}/k8s-operator:latest', env.IMAGE_REPOSITORY) || '' }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.sha }}

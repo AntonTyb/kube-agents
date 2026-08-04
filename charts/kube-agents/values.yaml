@@ -1,5 +1,12 @@
 operator:
   enabled: true
+  # Extra environment variables for the controller manager, e.g. the
+  # private-registry image overrides PLATFORM_AGENT_IMAGE /
+  # CREDENTIAL_PROXY_IMAGE / FLUENT_BIT_IMAGE:
+  #   extraEnv:
+  #     - name: FLUENT_BIT_IMAGE
+  #       value: registry.corp/mirror/fluent-bit:5.0.7
+  extraEnv: []
   image:
     repository: ghcr.io/gke-labs/kube-agents/k8s-operator
     tag: "" # defaults to Chart.appVersion

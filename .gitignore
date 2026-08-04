@@ -13,8 +13,9 @@ __pycache__/
 .pytest_cache/
 .venv/
 
-# Terraform working directories (providers are re-fetched by terraform init;
-# lock files are only meaningful in root configurations, not shipped modules)
+# Terraform working directories. Lock files are ignored because this repo
+# ships modules and a copy-paste example, not a deployed root configuration —
+# consumers should commit their own multi-platform lock in their own repo.
 .terraform/
 .terraform.lock.hcl
 
@@ -25,3 +26,6 @@ __pycache__/
 *.tfvars
 !*.tfvars.example
 terraform.tfvars.json
+
+# Local helm package output
+*.tgz

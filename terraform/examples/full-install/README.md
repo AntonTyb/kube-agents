@@ -111,6 +111,7 @@ can clear, so destroying first strands the CR and hangs the namespace
 deletion. Delete the CR and wait for it to disappear **before** destroying:
 
 ```bash
+# Use your namespace value if you overrode the kubeagents-system default.
 kubectl delete platformagent platform-agent -n kubeagents-system --wait
 terraform destroy
 ```

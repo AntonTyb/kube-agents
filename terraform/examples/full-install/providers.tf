@@ -11,12 +11,10 @@ terraform {
       version = ">= 5.30, < 8.0"
     }
     helm = {
-      source  = "hashicorp/helm"
-      version = ">= 2.12, < 4.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = ">= 2.25, < 3.0"
+      source = "hashicorp/helm"
+      # The kubernetes = { ... } attribute syntax below is helm-provider-3.x
+      # only, so the floor must exclude 2.x.
+      version = ">= 3.0, < 4.0"
     }
   }
 }
@@ -32,15 +30,9 @@ provider "google-beta" {
   project = var.project_id
 }
 
-# Both in-cluster providers authenticate against the cluster this
-# configuration itself creates, using the caller's ADC token.
+# The helm provider authenticates against the cluster this configuration
+# itself creates, using the caller's ADC token.
 data "google_client_config" "default" {}
-
-provider "kubernetes" {
-  host                   = "https://${module.gke_cluster.cluster_endpoint}"
-  token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(module.gke_cluster.cluster_ca_certificate)
-}
 
 provider "helm" {
   kubernetes = {

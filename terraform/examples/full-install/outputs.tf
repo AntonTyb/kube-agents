@@ -14,12 +14,12 @@ output "agent_service_account_email" {
 }
 
 output "chat_topic_name" {
-  description = "Pub/Sub topic for Google Chat events (null when Chat is disabled); patch it into the PlatformAgent CR's googleChat section"
+  description = "Pub/Sub topic for Google Chat events (null when Chat is disabled); already wired into the PlatformAgent CR's googleChat section"
   value       = try(module.chat_pubsub[0].topic_name, null)
 }
 
 output "chat_subscription_name" {
-  description = "Pub/Sub subscription for Google Chat events (null when Chat is disabled); patch it into the PlatformAgent CR's googleChat section"
+  description = "Pub/Sub subscription for Google Chat events (null when Chat is disabled); already wired into the PlatformAgent CR's googleChat section"
   value       = try(module.chat_pubsub[0].subscription_name, null)
 }
 

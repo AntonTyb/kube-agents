@@ -58,7 +58,13 @@ jobs:
           helm package charts/kube-agents --version "$VERSION" --app-version "$REF_NAME" --destination /tmp/charts
           # Capture the pushed digest so the sign step can sign exactly this
           # artifact rather than whatever the mutable version tag points at.
-          PUSH_OUTPUT=$(helm push "/tmp/charts/kube-agents-${VERSION}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts" 2>&1)
+          # (Guarded assignment: under set -e a plain VAR=$(...) would exit
+          # before the output could be echoed on failure.)
+          if ! PUSH_OUTPUT=$(helm push "/tmp/charts/kube-agents-${VERSION}.tgz" "oci://ghcr.io/${REPO_DOWNCASE}/charts" 2>&1); then
+            echo "$PUSH_OUTPUT"
+            echo "helm push failed" >&2
+            exit 1
+          fi
           echo "$PUSH_OUTPUT"
           CHART_DIGEST=$(echo "$PUSH_OUTPUT" | awk '/^Digest:/ {print $2}')
           if [ -z "$CHART_DIGEST" ]; then
