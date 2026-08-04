@@ -126,6 +126,9 @@ func resolveAgentImage(deployment *agentv1alpha1.DeploymentSpec, defaultImage st
 		}
 
 		if !hasTagOrDigest {
+			// Deliberately "latest", not DefaultPlatformAgentVersion: this is a
+			// user-supplied image, and our release version must not be stamped
+			// on third-party repositories.
 			tag := "latest"
 			if deployment.Tag != nil && *deployment.Tag != "" {
 				tag = *deployment.Tag

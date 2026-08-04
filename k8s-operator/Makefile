@@ -1,6 +1,9 @@
-# Image URL to use all building/pushing image targets
-IMG ?= ghcr.io/gke-labs/kube-agents/k8s-operator:latest
+# VERSION is the release version injected into the binary and, by default, the image tag.
 VERSION ?= latest
+# Image URL to use all building/pushing image targets
+IMG ?= ghcr.io/gke-labs/kube-agents/k8s-operator:$(VERSION)
+# Unlike the Dockerfile's ldflags, -s -w is deliberately omitted here so locally
+# built binaries keep their symbol tables for dlv debugging.
 LDFLAGS ?= -ldflags "-X github.com/gke-labs/kube-agents/k8s-operator/internal/controller.DefaultPlatformAgentVersion=$(VERSION)"
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)

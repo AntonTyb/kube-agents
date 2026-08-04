@@ -269,3 +269,29 @@ func TestMergeAnnotations(t *testing.T) {
 		t.Errorf("expected nil when both defaults and custom are nil, got %v", nilResult)
 	}
 }
+
+// TestVersionedDefaultImage pins the wiring that lets a release build change the
+// default agent image tag via -ldflags "-X ...DefaultPlatformAgentVersion=vX.Y.Z":
+// fallbackPlatformAgentImage must derive from the variable at runtime init, so
+// whatever value the linker injects flows through defaultPlatformAgentImage().
+// (The test binary itself is built without the flag, so the value is "latest"
+// here; the assertions guard the derivation, not a specific version.)
+func TestVersionedDefaultImage(t *testing.T) {
+	t.Setenv(platformAgentImageEnvVar, "")
+	t.Setenv(credentialProxyImageEnvVar, "")
+
+	want := "ghcr.io/gke-labs/kube-agents/platform-agent:" + DefaultPlatformAgentVersion
+	if fallbackPlatformAgentImage != want {
+		t.Errorf("fallbackPlatformAgentImage = %q, want it derived from DefaultPlatformAgentVersion (%q)", fallbackPlatformAgentImage, want)
+	}
+	if got := defaultPlatformAgentImage(); got != want {
+		t.Errorf("defaultPlatformAgentImage() = %q, want %q", got, want)
+	}
+
+	// The credential-proxy sidecar must carry the same tag as the defaulted
+	// agent image, so a versioned release rolls both together.
+	wantSidecar := "ghcr.io/gke-labs/kube-agents/credential-proxy:" + DefaultPlatformAgentVersion
+	if got := resolveCredentialProxyImage(nil); got != wantSidecar {
+		t.Errorf("resolveCredentialProxyImage(nil) = %q, want %q", got, wantSidecar)
+	}
+}
