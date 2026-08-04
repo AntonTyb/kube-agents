@@ -5,15 +5,18 @@ metadata:
   name: {{ .Release.Name }}-operator-sa
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ .Release.Name }}-operator
+    app.kubernetes.io/name: {{ .Chart.Name }}-operator
+    {{- include "kube-agents.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}-operator-role
   labels:
-    app.kubernetes.io/name: {{ .Release.Name }}-operator
+    app.kubernetes.io/name: {{ .Chart.Name }}-operator
+    {{- include "kube-agents.labels" . | nindent 4 }}
 rules:
+  # BEGIN GENERATED RULES from k8s-operator/config/rbac/role.yaml — do not edit by hand; run `make chart-sync`.
   - apiGroups:
       - ""
     resources:
@@ -76,6 +79,23 @@ rules:
   - apiGroups:
       - kubeagents.x-k8s.io
     resources:
+      - agentplugins
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - kubeagents.x-k8s.io
+    resources:
+      - agentplugins/status
+      - platformagents/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - kubeagents.x-k8s.io
+    resources:
       - platformagents
     verbs:
       - create
@@ -90,14 +110,6 @@ rules:
     resources:
       - platformagents/finalizers
     verbs:
-      - update
-  - apiGroups:
-      - kubeagents.x-k8s.io
-    resources:
-      - platformagents/status
-    verbs:
-      - get
-      - patch
       - update
   - apiGroups:
       - networking.k8s.io
@@ -127,7 +139,6 @@ rules:
       - rolebindings
       - roles
     verbs:
-      - bind
       - create
       - delete
       - get
@@ -135,13 +146,23 @@ rules:
       - patch
       - update
       - watch
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resourceNames:
+      - view
+    resources:
+      - clusterroles
+    verbs:
+      - bind
+  # END GENERATED RULES
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: {{ .Release.Name }}-operator-rolebinding
   labels:
-    app.kubernetes.io/name: {{ .Release.Name }}-operator
+    app.kubernetes.io/name: {{ .Chart.Name }}-operator
+    {{- include "kube-agents.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

@@ -23,10 +23,27 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      - name: Check chart CRD/RBAC copies are in sync
+        run: make chart-check
+
       - name: Validate Helm Chart
         run: |
-          helm lint charts/kube-agents
-          helm template test-release charts/kube-agents > /dev/null
+          # clusterName/location/projectId are required values with no
+          # defaults, so lint and render need them set.
+          SET_FLAGS="--set platformAgent.harness.clusterName=ci-cluster \
+            --set platformAgent.harness.location=us-central1 \
+            --set platformAgent.harness.projectId=ci-project"
+          helm lint charts/kube-agents $SET_FLAGS
+          helm template test-release charts/kube-agents $SET_FLAGS > /dev/null
+          # Render again with explicit image tags to cover the override path.
+          helm template test-release charts/kube-agents $SET_FLAGS \
+            --set operator.image.tag=v9.9.9 \
+            --set platformAgent.deployment.image.tag=v9.9.9 > /dev/null
+          # Rendering without the required values must fail.
+          if helm template test-release charts/kube-agents > /dev/null 2>&1; then
+            echo "expected 'required' guards to fail the render" >&2
+            exit 1
+          fi
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2

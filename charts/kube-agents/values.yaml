@@ -1,6 +1,5 @@
 operator:
   enabled: true
-  enableWebhooks: false
   image:
     repository: ghcr.io/gke-labs/kube-agents/k8s-operator
     tag: "" # defaults to Chart.appVersion
@@ -18,11 +17,30 @@ platformAgent:
   enabled: true
   name: platform-agent
   harness:
-    clusterName: "my-cluster"
-    location: "us-central1"
-    projectId: "my-project"
+    # Required — the install fails fast when these are left empty.
+    clusterName: ""
+    location: ""
+    projectId: ""
   deployment:
     image:
       repository: ghcr.io/gke-labs/kube-agents/platform-agent
       tag: "" # defaults to Chart.appVersion
       pullPolicy: IfNotPresent
+  security:
+    # Kubernetes ServiceAccount the agent pod runs as. The Workload Identity
+    # binding must target this KSA (see the chart README); the default matches
+    # the provisioning scripts (k8s-operator/scripts/common.sh).
+    serviceAccountName: kubeagents-platform-agent
+    # Annotations applied to that KSA, e.g. for Workload Identity:
+    #   iam.gke.io/gcp-service-account: <GSA>@<project>.iam.gserviceaccount.com
+    serviceAccountAnnotations: {}
+  credentials:
+    # Secret holding the agent's credential keys: API_SERVER_KEY plus the
+    # model-provider key(s) (ANTHROPIC_API_KEY / GEMINI_API_KEY /
+    # OPENAI_API_KEY) and optional SLACK_BOT_TOKEN / SLACK_APP_TOKEN. It must
+    # exist in the release namespace before the agent pod can start.
+    secretName: platform-agent-secrets
+    # Convenience for dev installs: create the Secret from `data` below.
+    # Prefer a pre-created Secret (external secret management) in production.
+    create: false
+    data: {}

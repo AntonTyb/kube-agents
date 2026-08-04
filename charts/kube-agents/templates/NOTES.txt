@@ -1,0 +1,25 @@
+{{ .Chart.Name }} {{ .Chart.Version }} (app {{ .Chart.AppVersion }}) installed in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.platformAgent.enabled }}
+
+Before the agent pod can start, the Secret "{{ .Values.platformAgent.credentials.secretName }}"
+must exist in {{ .Release.Namespace }} with an API_SERVER_KEY entry plus your
+model-provider key (ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY).
+{{- if .Values.platformAgent.credentials.create }}
+This release created it from platformAgent.credentials.data.
+{{- end }}
+
+For GCP access, bind your Google Service Account to the agent's KSA
+"{{ .Values.platformAgent.security.serviceAccountName }}" via Workload Identity
+(see the chart README).
+{{- end }}
+
+NOTE — uninstalling: the PlatformAgent custom resource carries a finalizer that
+only the operator can clear. Delete the PlatformAgent and wait for it to go
+away BEFORE `helm uninstall {{ .Release.Name }}`, otherwise the CR strands:
+
+  kubectl delete platformagent {{ .Values.platformAgent.name }} -n {{ .Release.Namespace }} --wait
+  helm uninstall {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Admission webhooks (CR validation, defaulting, delete-protection) are not part
+of chart installs; the provisioning scripts / kustomize path provides them.

@@ -4,13 +4,26 @@ kind: PlatformAgent
 metadata:
   name: {{ .Values.platformAgent.name }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    {{- include "kube-agents.labels" . | nindent 4 }}
 spec:
   harness:
     clusterName: {{ required "platformAgent.harness.clusterName is required" .Values.platformAgent.harness.clusterName | quote }}
     location: {{ required "platformAgent.harness.location is required" .Values.platformAgent.harness.location | quote }}
     projectId: {{ required "platformAgent.harness.projectId is required" .Values.platformAgent.harness.projectId | quote }}
+    hermes:
+      apiServerSecretRef:
+        name: {{ .Values.platformAgent.credentials.secretName | quote }}
+        key: API_SERVER_KEY
   deployment:
     image: {{ .Values.platformAgent.deployment.image.repository | quote }}
     tag: {{ .Values.platformAgent.deployment.image.tag | default .Chart.AppVersion | quote }}
     imagePullPolicy: {{ .Values.platformAgent.deployment.image.pullPolicy }}
+  security:
+    serviceAccountName: {{ .Values.platformAgent.security.serviceAccountName | quote }}
+    {{- with .Values.platformAgent.security.serviceAccountAnnotations }}
+    serviceAccountAnnotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
 {{- end }}
