@@ -25,8 +25,9 @@ provider "google" {
   project = var.project_id
 }
 
-# The chat-pubsub module's Google Workspace Add-on resource requires the
-# google-beta provider; it inherits this default configuration.
+# The chat-pubsub module's service-identity resources (Workspace Add-ons and
+# the Chat API) require the google-beta provider; it inherits this default
+# configuration.
 provider "google-beta" {
   project = var.project_id
 }
