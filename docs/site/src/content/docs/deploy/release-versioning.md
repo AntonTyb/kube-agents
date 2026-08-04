@@ -9,19 +9,19 @@ sidebar:
 
 ## Promotion from Release Candidate (RC) to SemVer
 
-1. **RC Testing**: Pre-release builds use `rc_YYMMDDHHMM_<short_sha>`. Once end-to-end suite validation succeeds, the commit receives the `*_validated` tag.
-2. **SemVer Publication**: Tagging a commit with `vX.Y.Z` triggers GitHub Actions to publish immutable artifacts:
+1. **RC Testing**: Pre-release builds are validated by the automated RC pipeline —
+   [`scripts/release/README.md`](https://github.com/gke-labs/kube-agents/tree/main/scripts/release) is the canonical reference for how `rc_YYMMDDHHMM_<short_sha>` builds are created, tested end-to-end, and tagged `*_validated` on success.
+2. **SemVer Publication**: Tagging a validated commit with `vX.Y.Z` triggers GitHub Actions to publish immutable artifacts (example for `v1.2.0`):
    - **GHCR Images**: `ghcr.io/gke-labs/kube-agents/platform-agent:v1.2.0`
    - **OCI Helm Charts**: `oci://ghcr.io/gke-labs/kube-agents/charts/kube-agents:1.2.0`
    - **Terraform Modules**: Sourced via Git tag reference `?ref=v1.2.0`
 
-## Helm Chart Versioning Matrix
+## Helm Chart Versioning
 
-| Chart `version` | Chart `appVersion` | Trigger Condition                                           |
-| :-------------- | :----------------- | :---------------------------------------------------------- |
-| `1.0.0`         | `v1.0.0`           | Initial production release                                  |
-| `1.0.1`         | `v1.0.0`           | Chart template or documentation bugfix (no image change)    |
-| `1.1.0`         | `v1.1.0`           | Application release with new features and updated image tag |
+The chart `version` tracks the application `appVersion`: the release workflow packages the
+chart with `version` set to the git tag (minus the `v` prefix) and `appVersion` set to the
+tag itself, so every chart release corresponds to exactly one application release. There is
+no chart-only release train — a chart-template fix ships with the next `vX.Y.Z` tag.
 
 ## Pinning Terraform Module Versions in GitOps
 

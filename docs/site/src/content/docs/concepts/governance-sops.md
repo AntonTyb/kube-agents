@@ -53,12 +53,6 @@ Hourly propagation of platform default policies. Reads the baseline `NetworkPoli
 
 Invoked by the [`policy-propagation`](/kube-agents/concepts/autonomous-watchdogs/) watchdog hourly.
 
-### `release_validation_sop.md`
-
-Pre-release operational playbook executed before promoting a release candidate to an immutable SemVer release tag (`vMAJOR.MINOR.PATCH`). Verifies that candidate container images exist in GHCR, canonical OCI Helm charts pass linting, and reusable Terraform modules validate syntactically.
-
-Invoked on demand prior to release tag promotion.
-
 ### `security_patch_orchestrator_sop.md`
 
 Daily audit of GKE control plane and node versions against the latest available security patches (queried via `gcloud container get-server-config`), as well as checking GitHub Releases for new `kube-agents` SemVer releases (`vX.Y.Z`). When an upgrade is required it proposes a staggered rollout — dev/staging cluster first, then production once the dev change is merged and healthy — as GitHub PRs via `submit-suggestion`, never applying upgrades directly.
