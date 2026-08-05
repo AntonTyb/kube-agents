@@ -182,10 +182,20 @@ If you enabled Google Chat (`GOOGLE_CHAT_ENABLED=true`) or Slack (`SLACK_ENABLED
      ```bash
      kubectl exec -it deploy/platform-agent-gateway -n kubeagents-system -- hermes pairing approve slack <PAIRING_CODE>
      ```
-   - Re-display these instructions at any time from the `k8s-operator` directory:
+4. **Register the Native Slash Commands (Optional)**:
+   - Slack routes a leading-slash message to the app's slash handler only if that slash is registered on the app. Generate the manifest:
      ```bash
-     ./scripts/print_instructions_slack.sh
+     kubectl exec deploy/platform-agent-gateway -n kubeagents-system -- hermes slack manifest
      ```
+   - Paste the JSON into the Slack App Console (**Features → App Manifest → Edit**), save, and reinstall when Slack prompts. That manifest replaces the whole app definition — to keep an app you have already configured, add `--slashes-only` and merge the printed array into the existing `features.slash_commands`.
+   - This adds Slack's autocomplete, not the behaviour: a typed `/hermes <subcommand>` works either way, because the Chat Agent's `legacy_slash_commands` plugin unwraps it before the gateway resolves the command.
+5. **Set the Home Channel (if you left `SLACK_HOME_CHANNEL` empty)**:
+   - Scheduled audits have nowhere to post until one is set. From the Slack channel you want, run `/sethome` (or `/hermes sethome`). It takes effect immediately and persists across restarts.
+
+- Re-display these instructions at any time from the `k8s-operator` directory:
+  ```bash
+  ./scripts/print_instructions_slack.sh
+  ```
 
 ---
 

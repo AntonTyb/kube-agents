@@ -47,25 +47,36 @@ prettier-check:
 prettier-write:
 	npx prettier --write "**/*.md" "**/*.yaml" "**/*.yml"
 
-# Unit tests for the helper scripts that ship inside the agent skills. These are
-# stdlib-only by nature -- the helpers shell out to gh/kubectl rather than
-# importing SDKs -- so no dependency install is needed. The Python under
-# k8s-operator/ has its own target there.
+# Unit tests for every Python helper outside k8s-operator/, which has its own
+# target. Mostly stdlib-only -- the skill helpers shell out to gh/kubectl
+# rather than importing SDKs -- but the agent scripts do import a few third
+# party packages; CI installs those (.github/workflows/python-tests.yml) and
+# a local run needs them on the path too.
 #
-# The wildcard is what keeps this honest: a new skill's tests are picked up
-# without editing this file. Discovery is then run once per scripts directory
-# rather than once over the tree, because the skill directories are not
-# packages -- `unittest discover` pointed at agents/platform/skills finds
-# nothing and still exits 0, which reads as a passing suite.
-SKILL_TEST_DIRS := $(sort $(dir $(wildcard agents/*/skills/*/scripts/test_*.py)))
+# The wildcards are what keep this honest: a new skill's tests are picked up
+# without editing this file. Five globs rather than one because the tests do
+# not all live under skills -- the agent scripts the skills share, the Chat
+# Agent plugins, the image patches and the repository's own tooling in
+# scripts/ each hold their own. That last one is here because it was not: the
+# tests for the upstream-skill sync sat in scripts/ outside every glob, so
+# they had never once run in CI. Discovery is then run once per directory
+# rather than once over the tree, because none of them are packages --
+# `unittest discover` pointed at agents/platform/skills finds nothing and
+# still exits 0, which reads as a passing suite.
+PYTHON_TEST_DIRS := $(sort $(dir \
+	$(wildcard agents/*/skills/*/scripts/test_*.py) \
+	$(wildcard agents/*/scripts/test_*.py) \
+	$(wildcard agents/*/defaults/plugins/*/test_*.py) \
+	$(wildcard deploy/docker/patches/test_*.py) \
+	$(wildcard scripts/test_*.py)))
 
 test-python:
-	@if [ -z "$(SKILL_TEST_DIRS)" ]; then \
-		echo "Error: no agents/*/skills/*/scripts/test_*.py files found."; \
-		echo "Either the tests moved or the glob is stale -- failing rather than reporting success."; \
+	@if [ -z "$(PYTHON_TEST_DIRS)" ]; then \
+		echo "Error: no test_*.py files found under agents/, deploy/docker/patches or scripts/."; \
+		echo "Either the tests moved or the globs are stale -- failing rather than reporting success."; \
 		exit 1; \
 	fi
-	@set -e; for dir in $(SKILL_TEST_DIRS); do \
+	@set -e; for dir in $(PYTHON_TEST_DIRS); do \
 		echo "==> $$dir"; \
 		(cd $$dir && python3 -m unittest discover -p "test_*.py"); \
 	done
