@@ -33,10 +33,21 @@ for src in "$CRD_SRC"/*.yaml; do
 done
 for dst in "$CRD_DST"/*.yaml; do
   src="$CRD_SRC/$(basename "$dst")"
-  [[ -f "$src" ]] || fail "stale chart CRD with no source: $dst"
+  if [[ ! -f "$src" ]]; then
+    if $check; then
+      fail "stale chart CRD with no source: $dst"
+    else
+      rm -f "$dst"
+      echo "Removed stale chart CRD copy: $dst"
+    fi
+  fi
 done
 
 # ClusterRole rules: splice role.yaml's rules block between the markers.
+# Without the BEGIN marker the awk pass would copy the template unchanged and
+# both modes would silently pass with stale rules, so fail up front.
+grep -q '# BEGIN GENERATED RULES' "$RBAC_TPL" ||
+  fail "missing BEGIN GENERATED RULES marker in $RBAC_TPL"
 tmp=$(mktemp)
 awk -v rolefile="$ROLE_SRC" '
   /# BEGIN GENERATED RULES/ {

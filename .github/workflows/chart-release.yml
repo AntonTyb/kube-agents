@@ -5,7 +5,8 @@ on:
     tags:
       - "v*.*.*"
 
-# Queue rather than cancel: every publish should complete, but not interleave.
+# Queue rather than cancel re-runs of the same tag. Different tags still run
+# in parallel, which is fine: each publishes its own immutable chart version.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false

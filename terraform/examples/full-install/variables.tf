@@ -20,13 +20,13 @@ variable "deletion_protection" {
 }
 
 variable "release_channel" {
-  description = "GKE release channel for the cluster (RAPID, REGULAR, STABLE, or EXTENDED)"
+  description = "GKE release channel for the cluster (RAPID, REGULAR, or STABLE; the gke-cluster module rejects EXTENDED, which its Autopilot clusters do not support)"
   type        = string
   default     = "REGULAR"
 }
 
 variable "namespace" {
-  description = "Kubernetes namespace the kube-agents release is installed into and the Workload Identity binding targets"
+  description = "Kubernetes namespace the kube-agents release is installed into and the Workload Identity binding targets. Leave at the default: the agent's model-gateway endpoint is hard-wired to kubeagents-system (see the chart's values.yaml), so a release in any other namespace leaves the agent unable to reach the gateway."
   type        = string
   default     = "kubeagents-system"
 }
@@ -64,6 +64,13 @@ variable "api_server_key" {
   description = "API_SERVER_KEY for the agent harness (required; stored in the platform-agent-secrets Secret)"
   type        = string
   sensitive   = true
+
+  validation {
+    # An empty string would be silently dropped from the credentials Secret
+    # (see local.credentials) and only fail at agent runtime.
+    condition     = length(var.api_server_key) > 0
+    error_message = "api_server_key must be non-empty — without it the platform-agent Secret lacks API_SERVER_KEY and the agent pod cannot start."
+  }
 }
 
 variable "anthropic_api_key" {

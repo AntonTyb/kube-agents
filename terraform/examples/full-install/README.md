@@ -32,6 +32,13 @@ same cluster, service accounts, and IAM bindings.
   LiteLLM routes `model-default` to (set the matching `*_api_key` variable);
   `model_default_name` overrides the per-provider default model.
 
+> [!WARNING]
+> The credential variables (`api_server_key`, `*_api_key`, Slack tokens) are
+> marked `sensitive`, which redacts plan output — but like every secret passed
+> through Terraform they are stored **in plaintext in the Terraform state**.
+> Keep the state in a protected backend (e.g. a GCS bucket with tight IAM),
+> not on a shared disk or in version control.
+
 ## Prerequisites
 
 - A GCP project you can administer.

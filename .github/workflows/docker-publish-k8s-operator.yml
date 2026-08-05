@@ -51,12 +51,11 @@ jobs:
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Note: ref_type == 'branch' also holds for workflow_dispatch runs
-          # from non-main branches, which would republish :latest — pushes
-          # only trigger from main, so this matters for manual dispatch; use
-          # it with care.
+          # :latest only ever tracks main. Gating on the ref (not ref_type)
+          # keeps a workflow_dispatch run from a non-main branch from
+          # republishing :latest with unreviewed code.
           tags: |
-            ${{ github.ref_type == 'branch' && format('ghcr.io/{0}/k8s-operator:latest', env.IMAGE_REPOSITORY) || '' }}
+            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/{0}/k8s-operator:latest', env.IMAGE_REPOSITORY) || '' }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/k8s-operator:${{ github.sha }}
             ${{ github.ref_type == 'tag' && format('ghcr.io/{0}/k8s-operator:{1}', env.IMAGE_REPOSITORY, github.ref_name) || '' }}
           build-args: |

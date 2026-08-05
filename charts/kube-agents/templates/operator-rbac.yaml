@@ -173,4 +173,42 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Release.Name }}-operator-sa
     namespace: {{ .Release.Namespace }}
+---
+# Namespaced counterpart of config/rbac/leader_election_role.yaml: the lease
+# verbs are already in the ClusterRole above, but event emission by the
+# leader-election recorder needs create/patch, which role.yaml only grants
+# read-only. Kept namespaced to match the kustomize install's scope.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-operator-leader-election-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}-operator
+    {{- include "kube-agents.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-operator-leader-election-rolebinding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}-operator
+    {{- include "kube-agents.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-operator-leader-election-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-operator-sa
+    namespace: {{ .Release.Namespace }}
 {{- end }}

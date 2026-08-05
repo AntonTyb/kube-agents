@@ -357,7 +357,7 @@ install should live in version-controlled IaC (GitOps, CI-driven environments) i
 the interactive pipeline.
 
 - **Canonical guide (self-contained):** [`terraform/examples/full-install/README.md`](terraform/examples/full-install/README.md)
-- Pick **one** path per project — Method 1 and Method 4 create the same GCP resources.
+- Pick **one** path per project — Method 1 and Method 4 create equivalent GCP resources (same IAM, Pub/Sub, and identifiers; the Terraform module provisions an Autopilot cluster where the scripts provision Standard).
 - The manual Chat/Slack registrations in
   [Step 5 of Method 1](#step-5-enable-google-chat--slack-integrations-manual-required-steps)
   apply to this method too.
