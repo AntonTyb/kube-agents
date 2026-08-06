@@ -177,16 +177,16 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     if not text or not isinstance(text, str):
         return ""
 
-    # 1. Strip ANSI escape sequences and non-printable control characters
+    # 1. Strip ANSI escape sequences and non-printable control characters (including C1 controls U+0080-U+009F)
     cleaned = re.sub(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", text)
     cleaned = "".join(
-        ch for ch in cleaned if ch == "\n" or ch == "\t" or (ord(ch) >= 32 and ord(ch) != 127)
+        ch for ch in cleaned if ch == "\n" or ch == "\t" or (ord(ch) >= 32 and ord(ch) != 127 and not (128 <= ord(ch) <= 159))
     )
 
-    # 2. Strip Unicode zero-width spaces and direction override characters
-    cleaned = re.sub(r"[\u200B-\u200D\uFEFF\u202A-\u202E]", "", cleaned)
+    # 2. Strip Unicode zero-width spaces, direction overrides, soft hyphens, and bidi isolates
+    cleaned = re.sub(r"[\u200B-\u200D\uFEFF\u202A-\u202E\u2060\u2066-\u2069\u00AD\u180E]", "", cleaned)
 
-    # 3. Neutralize prompt injection delimiter tags and fake system headers
+    # 3. Neutralize prompt injection delimiter tags, instruction markers, and fake system headers
     cleaned = re.sub(
         r"<\s*/?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)\s*>",
         r"[\1_tag_neutralized]",
@@ -196,6 +196,12 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     cleaned = re.sub(
         r"```+\s*(system|instruction|prompt)",
         r"```text",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\[INST\]|\[/INST\]|<<SYS>>|<\|im_start\|>|<\|im_end\|>|###\s*system:",
+        "[instruction_marker_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
     )
@@ -246,14 +252,12 @@ def calculate_issue_priority(issue: dict) -> tuple[int, str]:
         for l in ["priority:high", "priority:p1", "severity:high"]
     ):
         score += 500
-        if priority_label == "UNLABELLED":
-            priority_label = "P1"
+        priority_label = "P1"
     elif any(
         l in label_names for l in ["priority:medium", "priority:p2", "bug"]
     ):
         score += 100
-        if priority_label == "UNLABELLED":
-            priority_label = "P2"
+        priority_label = "P2"
     elif any(
         l in label_names
         for l in [
@@ -264,8 +268,7 @@ def calculate_issue_priority(issue: dict) -> tuple[int, str]:
         ]
     ):
         score += 10
-        if priority_label == "UNLABELLED":
-            priority_label = "P3"
+        priority_label = "P3"
 
     return score, priority_label
 
@@ -367,25 +370,27 @@ def handle_poll(args):
         print(json.dumps({"status": "NO_ISSUES", "repository": repo}))
         return
 
-    # Select issue by highest priority score, then lowest issue number (FIFO tie-breaker)
-    issues.sort(
-        key=lambda x: (
-            -calculate_issue_priority(x)[0],
-            int(x["number"]),
-        )
-    )
-    target = issues[0]
-    score, priority_label = calculate_issue_priority(target)
-    risk_tier = evaluate_risk_tier(target)
+    # Select issue by highest priority score, then earliest creation date and lowest issue number (FIFO tie-breaker)
+    scored_issues = []
+    for x in issues:
+        score, label = calculate_issue_priority(x)
+        tier = evaluate_risk_tier(x)
+        created_at = x.get("createdAt") or ""
+        scored_issues.append((score, created_at, int(x["number"]), label, tier, x))
+
+    scored_issues.sort(key=lambda item: (-item[0], item[1], item[2]))
+
+    target_score, target_created, target_num, priority_label, risk_tier, target = scored_issues[0]
 
     comments = []
     for c in target.get("comments") or []:
-        author = c.get("author", {}).get("login", "unknown")
+        raw_author = c.get("author", {}).get("login", "unknown") if isinstance(c.get("author"), dict) else "unknown"
+        author_sanitized = f"<untrusted_author>{sanitize_untrusted_text(raw_author)}</untrusted_author>"
         body = c.get("body") or ""
         created = c.get("createdAt", "")
         comments.append(
             {
-                "author": author,
+                "author": author_sanitized,
                 "createdAt": created,
                 "body": f"<untrusted_comment>{sanitize_untrusted_text(body)}</untrusted_comment>",
             }
