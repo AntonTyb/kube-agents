@@ -188,7 +188,7 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
 
     # 3. Neutralize prompt injection delimiter tags and fake system headers
     cleaned = re.sub(
-        r"<\s*/?\s*(system|instruction|prompt|context|admin)\s*>",
+        r"<\s*/?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)\s*>",
         r"[\1_tag_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
@@ -274,11 +274,6 @@ def evaluate_risk_tier(issue: dict) -> str:
     """Evaluates the risk tier of an issue based on content keywords and labels.
     Returns one of: TIER_1_READ_ONLY, TIER_2_NON_DESTRUCTIVE, TIER_3_MUTATING.
     """
-    text_parts = [issue.get("title") or "", issue.get("body") or ""]
-    for c in issue.get("comments") or []:
-        text_parts.append(c.get("body") or "")
-    content = " ".join(str(p) for p in text_parts).lower()
-
     labels_raw = issue.get("labels") or []
     label_names = set()
     for l in labels_raw:
@@ -291,36 +286,28 @@ def evaluate_risk_tier(issue: dict) -> str:
         if name:
             label_names.add(name.lower())
 
-    # Check for destructive/mutating/privileged actions -> Tier 3
-    tier3_keywords = [
-        "delete",
-        "remove",
-        "drop",
-        "destroy",
-        "kill",
-        "exec",
-        "drain",
-        "patch",
-        "apply",
-        "scale",
-        "rbac",
-        "secret",
-        "credential",
-        "format",
-        "truncate",
-        "overwrite",
-        "privilege",
-        "admin",
-    ]
-    if any(
-        re.search(r"\b" + re.escape(kw) + r"\b", content)
-        for kw in tier3_keywords
-    ):
-        return "TIER_3_MUTATING"
+    # Security labels -> Tier 3
     if any(
         l in label_names
         for l in ["security", "security-risk", "privilege-escalation"]
     ):
+        return "TIER_3_MUTATING"
+
+    text_parts = [issue.get("title") or "", issue.get("body") or ""]
+    for c in issue.get("comments") or []:
+        text_parts.append(c.get("body") or "")
+    raw_content = " ".join(str(p) for p in text_parts)
+
+    # Strip code blocks and inline snippets to avoid false positives on logs / error messages
+    prose_content = re.sub(r"```[\s\S]*?```", "", raw_content)
+    prose_content = re.sub(r"`[^`]+`", "", prose_content).lower()
+
+    # Explicit destructive / mutating action verbs or privileged request patterns
+    tier3_patterns = [
+        r"\b(delete|remove|destroy|drop|kill|drain|truncate|format|overwrite|purge|wipe|cleanup|clean\s+up)\b",
+        r"\b(grant\s+admin|escalate\s+privilege|dump\s+secret|export\s+credential)\b",
+    ]
+    if any(re.search(pat, prose_content) for pat in tier3_patterns):
         return "TIER_3_MUTATING"
 
     # Check for non-destructive mutations -> Tier 2
@@ -332,9 +319,11 @@ def evaluate_risk_tier(issue: dict) -> str:
         "edit",
         "pr",
         "pull request",
+        "fix",
+        "resolve",
     ]
     if any(
-        re.search(r"\b" + re.escape(kw) + r"\b", content)
+        re.search(r"\b" + re.escape(kw) + r"\b", prose_content)
         for kw in tier2_keywords
     ):
         return "TIER_2_NON_DESTRUCTIVE"
