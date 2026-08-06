@@ -27,10 +27,9 @@ Use this to remove the agent while leaving the GKE cluster and operator in place
 
    ```bash
    kubectl delete clusterrolebinding \
-     kubeagents:viewer:kubeagents-system:platform-agent \
-     kubeagents:explorer:kubeagents-system:platform-agent --ignore-not-found=true
+     kubeagents:minimal:kubeagents-system:platform-agent --ignore-not-found=true
    kubectl delete clusterrole \
-     kubeagents:explorer:kubeagents-system:platform-agent --ignore-not-found=true
+     kubeagents:minimal:kubeagents-system:platform-agent --ignore-not-found=true
    ```
 
 3. **Delete the agent secrets.**
