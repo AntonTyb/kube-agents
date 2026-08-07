@@ -476,9 +476,10 @@ func (r *PlatformAgentReconciler) cleanupAgentRBAC(ctx context.Context, agent *a
 		}
 	}
 
+	instLabel := instanceLabel(agent.Namespace, agent.Name)
 	var legacyLabeledCRBs rbacv1.ClusterRoleBindingList
 	if err := r.List(ctx, &legacyLabeledCRBs, client.MatchingLabels{
-		"app.kubernetes.io/instance": fmt.Sprintf("%s-%s", agent.Namespace, agent.Name),
+		"app.kubernetes.io/instance": instLabel,
 		"app.kubernetes.io/part-of":  "kube-agents",
 	}); err != nil {
 		return fmt.Errorf("failed to list legacy labeled ClusterRoleBindings: %w", err)
@@ -498,7 +499,7 @@ func (r *PlatformAgentReconciler) cleanupAgentRBAC(ctx context.Context, agent *a
 	// 2. Dynamic cleanup of ClusterRoles using label selector
 	var legacyClusterRoles rbacv1.ClusterRoleList
 	if err := r.List(ctx, &legacyClusterRoles, client.MatchingLabels{
-		"app.kubernetes.io/instance": fmt.Sprintf("%s-%s", agent.Namespace, agent.Name),
+		"app.kubernetes.io/instance": instLabel,
 		"app.kubernetes.io/part-of":  "kube-agents",
 	}); err != nil {
 		return fmt.Errorf("failed to list legacy ClusterRoles: %w", err)
