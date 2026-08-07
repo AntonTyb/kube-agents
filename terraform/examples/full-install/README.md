@@ -144,3 +144,10 @@ terraform destroy
 
 The cluster is created with `deletion_protection = true` by default; set the
 variable to `false` (and apply) before a destroy can remove the cluster.
+
+> [!NOTE]
+> Cloud KMS key rings and crypto keys (for GKE CMEK and optional GitHub minter)
+> cannot be deleted from GCP. `terraform destroy` removes them from state, but
+> re-applying with the same names requires either importing them back into state
+> (`terraform import module.gke_cluster.google_kms_key_ring.gke_keyring[0] ...`)
+> or choosing new key/keyring names.

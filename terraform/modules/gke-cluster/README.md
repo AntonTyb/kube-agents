@@ -4,6 +4,13 @@ Reusable Terraform module for provisioning a GKE Autopilot cluster configured fo
 
 By default (`enable_database_encryption = true`), the module provisions a Cloud KMS Keyring and CryptoKey, binds `roles/cloudkms.cryptoKeyEncrypterDecrypter` to the GKE Service Agent, and enables etcd database encryption (CMEK).
 
+> **KMS resources cannot be deleted.** Cloud KMS key rings and keys are never actually
+> destroyed — `terraform destroy` only removes them from state, and a subsequent apply
+> with the same names fails with a 409 (the provisioning scripts sidestep this by
+> check-then-create). Recover by importing the existing resources back into state
+> (`terraform import module.<name>.google_kms_key_ring.gke_keyring ...`) or by choosing new
+> `kms_keyring_name`/`kms_key_name` values.
+
 ## Usage
 
 ```hcl
