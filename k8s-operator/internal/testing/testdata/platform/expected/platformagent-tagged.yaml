@@ -118,7 +118,7 @@ metadata:
   creationTimestamp: null
   labels:
     app.kubernetes.io/instance: kubeagents-system-platformagent
-    app.kubernetes.io/managed-by: kube-agents-operator
+    app.kubernetes.io/managed-by: platformagent-controller
     app.kubernetes.io/name: platform-agent
     app.kubernetes.io/part-of: kube-agents
     kubeagents.x-k8s.io/agent-name: platformagent
@@ -168,7 +168,7 @@ metadata:
   creationTimestamp: null
   labels:
     app.kubernetes.io/instance: kubeagents-system-platformagent
-    app.kubernetes.io/managed-by: kube-agents-operator
+    app.kubernetes.io/managed-by: platformagent-controller
     app.kubernetes.io/name: platform-agent
     app.kubernetes.io/part-of: kube-agents
     kubeagents.x-k8s.io/agent-name: platformagent

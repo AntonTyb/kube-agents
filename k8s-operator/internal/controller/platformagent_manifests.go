@@ -2276,7 +2276,6 @@ func buildClusterRoleBinding(agent *agentv1alpha1.PlatformAgent, bindingName, ro
 			Labels: map[string]string{
 				"kubeagents.x-k8s.io/agent-name":      agent.Name,
 				"kubeagents.x-k8s.io/agent-namespace": agent.Namespace,
-				"app.kubernetes.io/managed-by":        "kube-agents-operator",
 			},
 		},
 		Subjects: []rbacv1.Subject{
@@ -2312,7 +2311,6 @@ func buildRoleBinding(agent *agentv1alpha1.PlatformAgent, bindingName, roleName 
 			Labels: map[string]string{
 				"kubeagents.x-k8s.io/agent-name":      agent.Name,
 				"kubeagents.x-k8s.io/agent-namespace": agent.Namespace,
-				"app.kubernetes.io/managed-by":        "kube-agents-operator",
 			},
 		},
 		Subjects: []rbacv1.Subject{
