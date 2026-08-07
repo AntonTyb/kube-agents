@@ -186,7 +186,7 @@ Local configuration and state saved during installer execution (`k8s-operator/sc
 
 - **File Permissions**: State files are created with strict POSIX permissions (`umask 077` and `chmod 600`), preventing non-owner access.
 - **`PERSIST_SECRETS_ON_DISK`**: By default (`PERSIST_SECRETS_ON_DISK=true`), credentials entered during provisioning are stored in `vars.sh` for non-interactive re-runs. Set `PERSIST_SECRETS_ON_DISK=false` to prevent writing sensitive credentials to disk.
-- **Interactive Teardown Confirmation**: During teardown (`teardown_07_gcp_k8s_secrets.sh`), secret sanitization is interactive so users can choose whether to keep or wipe credentials when retaining local state.
+- **Interactive Teardown Confirmation**: During standalone teardown (`teardown_07_gcp_k8s_secrets.sh`), secret sanitization is interactive so users can choose whether to keep or wipe credentials when retaining local state (orchestrated `teardown.sh` sanitizes credentials automatically).
 
 ## Where to go next
 

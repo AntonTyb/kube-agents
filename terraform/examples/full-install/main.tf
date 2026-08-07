@@ -12,9 +12,8 @@ locals {
     "chat.googleapis.com",
     "gsuiteaddons.googleapis.com",
   ] : []
-  minter_apis = []
 
-  required_apis = toset(concat(local.base_apis, local.chat_apis, local.minter_apis))
+  required_apis = toset(concat(local.base_apis, local.chat_apis))
 
   # Only non-empty credential keys end up in the Secret, so an unset optional
   # provider key does not create an empty entry.
