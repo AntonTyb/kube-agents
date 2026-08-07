@@ -1,5 +1,12 @@
 bin/
 
+# Provisioning & Secret State Files
+vars.sh
+**/vars.sh
+vars.sh.tmp
+**/vars.sh.tmp
+*.vars.sh
+
 # Environment Files
 .env
 .env.*

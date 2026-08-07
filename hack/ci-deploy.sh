@@ -35,6 +35,7 @@ export AGENT_TAG="${TAG}"
 
 export MODEL_PROVIDER="gemini"
 export MODEL_DEFAULT_NAME="gemini-3.1-pro-preview"
+export ALLOW_UNENCRYPTED_SECRETS="${ALLOW_UNENCRYPTED_SECRETS:-false}"
 
 export KSA_NAME="kubeagents-platform-agent"
 export GSA_NAME="kubeagents-platform-gsa"
