@@ -23,10 +23,12 @@ misconfigurations:
   - id: GCP-0048
     paths:
       - "k8s-operator/testing/**"
+      - "terraform/**"
       - "tests/**"
   - id: GCP-0061
     paths:
       - "k8s-operator/testing/**"
+      - "terraform/**"
       - "tests/**"
 
   # Ignore KSV-0056: manager-role requires networkpolicies access to manage agent sandboxes
