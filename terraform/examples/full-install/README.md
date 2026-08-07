@@ -9,10 +9,10 @@ same cluster, service accounts, and IAM bindings.
 ## What it provisions
 
 - The required Google APIs (`google_project_service`, never disabled on
-  destroy), including the Chat and KMS APIs only when the matching feature is
-  enabled.
+  destroy), including the Cloud KMS API for GKE database encryption and the Chat
+  API when Google Chat is enabled.
 - A GKE Autopilot cluster ([`gke-cluster`](../../modules/gke-cluster) module)
-  with Workload Identity enabled.
+  with Workload Identity and Cloud KMS database encryption (CMEK) enabled.
 - The agent's GCP identity ([`kube-agents-iam`](../../modules/kube-agents-iam)
   module): the `kubeagents-platform-gsa` service account, its read-only
   project roles, and the Workload Identity binding to the

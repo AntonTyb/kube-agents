@@ -2,6 +2,8 @@
 
 Reusable Terraform module for provisioning a GKE Autopilot cluster configured for Kube-Agents workloads. Autopilot clusters are regional: `location` must be a region (a zone is rejected at plan time).
 
+By default (`enable_database_encryption = true`), the module provisions a Cloud KMS Keyring and CryptoKey, binds `roles/cloudkms.cryptoKeyEncrypterDecrypter` to the GKE Service Agent, and enables etcd database encryption (CMEK).
+
 ## Usage
 
 ```hcl
