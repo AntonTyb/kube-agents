@@ -1,5 +1,6 @@
 # GKE Service Agent identity for KMS access
 resource "google_project_service_identity" "gke_service_agent" {
+  count    = var.enable_database_encryption ? 1 : 0
   provider = google-beta
   project  = var.project_id
   service  = "container.googleapis.com"
@@ -24,7 +25,7 @@ resource "google_kms_crypto_key_iam_member" "gke_kms_binding" {
   count         = var.enable_database_encryption ? 1 : 0
   crypto_key_id = google_kms_crypto_key.gke_key[0].id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
-  member        = "serviceAccount:${google_project_service_identity.gke_service_agent.email}"
+  member        = "serviceAccount:${google_project_service_identity.gke_service_agent[0].email}"
 }
 
 resource "google_container_cluster" "autopilot" {
