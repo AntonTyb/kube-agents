@@ -270,3 +270,39 @@ RUN curl -sSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dear
     rm -f /tmp/gh.deb && \
     rm -rf /var/lib/apt/lists/* && \
     chmod 755 /etc/envoy /usr/local/bin/envoy /usr/local/bin/envoy-credential-sidecar
+
+
+# --- ENTRYPOINT GATE TEST TARGET ---
+# Not shipped, and not a layer of anything that is. Built only by
+# `--target entrypoint-gate-test`, where the RUN either passes or fails the build.
+#
+# It exists because the unit tests structurally cannot cover this. They run the entrypoint
+# on a developer host, where every step below the shared-state gate is guarded on
+# /opt/defaults or /opt/hermes and therefore does nothing — so they pin which branch the
+# gate takes, and nothing about what the branch does. Inside the image both halves are
+# real, which is the only place the two can be checked against each other.
+#
+# Everything the check needs is already in the `platform` stage above, so this reuses its
+# cache entirely: on a build that has just produced `platform`, the marginal cost is one
+# COPY, one RUN, and a few seconds.
+FROM platform AS entrypoint-gate-test
+
+COPY --chmod=0755 deploy/shared/entrypoint_gate_check.sh /usr/local/bin/entrypoint-gate-check
+
+# As the runtime UID, not as root, and the difference decides whether this stage tests
+# anything at all. The `platform` stage is still USER root from the base image's setup, but
+# no container ever runs it that way: the operator pins runAsUser/fsGroup 10000 with
+# runAsNonRoot, so every pod executes the entrypoint as hermes.
+#
+# Step 1 of the entrypoint runs upstream's stage2-hook.sh, which branches on exactly this:
+#
+#     as_hermes() { [ "$(id -u)" = 0 ] || { "$@"; return; }; s6-setuidgid hermes "$@"; }
+#
+# As hermes that short-circuits. As root it reaches for s6-setuidgid, which lives in
+# /command and is on no PATH outside s6-overlay's own init — so the hook exits non-zero,
+# the entrypoint's `set -eu` takes the script down at step 1, and all sixteen checks fail
+# having never reached the gate they exist to test. A green build here has to mean the gate
+# is right, not that the image happened to be assembled by the same user that runs it.
+USER 10000
+
+RUN /usr/local/bin/entrypoint-gate-check
