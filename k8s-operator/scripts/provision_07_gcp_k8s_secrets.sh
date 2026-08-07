@@ -97,69 +97,6 @@ else
   save_secret_var "ANTHROPIC_API_KEY" "${ANTHROPIC_API_KEY:-}"
 fi
 
-if [ -z "${API_SERVER_KEY:-}" ]; then
-  # If secret already exists in K8s, preserve existing key to prevent breaking running pods
-  EXISTING_KEY=""
-  if [ "${DRY_RUN:-0}" -ne 1 ]; then
-    EXISTING_KEY=$(kubectl get secret platform-agent-secrets -n "$NAMESPACE" -o jsonpath='{.data.API_SERVER_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-  fi
-  if [ -n "$EXISTING_KEY" ]; then
-    print_info "Preserving existing API_SERVER_KEY from Kubernetes Secret..."
-    save_secret_var "API_SERVER_KEY" "$EXISTING_KEY"
-  else
-    print_info "Generating a secure random API_SERVER_KEY..."
-    save_secret_var "API_SERVER_KEY" "$(openssl rand -hex 16)"
-  fi
-else
-  save_secret_var "API_SERVER_KEY" "${API_SERVER_KEY}"
-fi
-
-# Handle Slack Bot and App Tokens (preserve existing from K8s if not in vars.sh / env)
-if is_truthy "${SLACK_ENABLED:-false}"; then
-  if [ -z "${SLACK_BOT_TOKEN:-}" ]; then
-    EXISTING_BOT_TOKEN=""
-    if [ "${DRY_RUN:-0}" -ne 1 ]; then
-      EXISTING_BOT_TOKEN=$(kubectl get secret platform-agent-secrets -n "$NAMESPACE" -o jsonpath='{.data.SLACK_BOT_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-    fi
-    if [ -n "$EXISTING_BOT_TOKEN" ]; then
-      print_info "Preserving existing SLACK_BOT_TOKEN from Kubernetes Secret..."
-      save_secret_var "SLACK_BOT_TOKEN" "$EXISTING_BOT_TOKEN"
-    elif [ "${DRY_RUN:-0}" -eq 1 ] || is_ci_pipeline || [ ! -t 0 ]; then
-      save_secret_var "SLACK_BOT_TOKEN" "${SLACK_BOT_TOKEN:-}"
-    else
-      echo -ne "  ${C_CYAN}Enter your SLACK_BOT_TOKEN (xoxb-...): ${C_RESET}"
-      read -s -r INPUT_BOT_TOKEN
-      echo ""
-      save_secret_var "SLACK_BOT_TOKEN" "${INPUT_BOT_TOKEN:-}"
-    fi
-  else
-    save_secret_var "SLACK_BOT_TOKEN" "${SLACK_BOT_TOKEN}"
-  fi
-
-  if [ -z "${SLACK_APP_TOKEN:-}" ]; then
-    EXISTING_APP_TOKEN=""
-    if [ "${DRY_RUN:-0}" -ne 1 ]; then
-      EXISTING_APP_TOKEN=$(kubectl get secret platform-agent-secrets -n "$NAMESPACE" -o jsonpath='{.data.SLACK_APP_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-    fi
-    if [ -n "$EXISTING_APP_TOKEN" ]; then
-      print_info "Preserving existing SLACK_APP_TOKEN from Kubernetes Secret..."
-      save_secret_var "SLACK_APP_TOKEN" "$EXISTING_APP_TOKEN"
-    elif [ "${DRY_RUN:-0}" -eq 1 ] || is_ci_pipeline || [ ! -t 0 ]; then
-      save_secret_var "SLACK_APP_TOKEN" "${SLACK_APP_TOKEN:-}"
-    else
-      echo -ne "  ${C_CYAN}Enter your SLACK_APP_TOKEN (xapp-...): ${C_RESET}"
-      read -s -r INPUT_APP_TOKEN
-      echo ""
-      save_secret_var "SLACK_APP_TOKEN" "${INPUT_APP_TOKEN:-}"
-    fi
-  else
-    save_secret_var "SLACK_APP_TOKEN" "${SLACK_APP_TOKEN}"
-  fi
-else
-  save_secret_var "SLACK_BOT_TOKEN" "${SLACK_BOT_TOKEN:-}"
-  save_secret_var "SLACK_APP_TOKEN" "${SLACK_APP_TOKEN:-}"
-fi
-
 # ─── Step Implementations ─────────────────────────────────────────────────────
 
 # Step 1: Connect kubectl
@@ -208,6 +145,69 @@ execute_k8s_secrets() {
     else
       print_warning "Cluster database encryption is not ENCRYPTED ('${enc_state:-UNKNOWN}'), but ALLOW_UNENCRYPTED_SECRETS=true is set. Proceeding..."
     fi
+  fi
+
+  # Recover or generate API_SERVER_KEY on the connected target cluster
+  if [ -z "${API_SERVER_KEY:-}" ]; then
+    local existing_key=""
+    if [ "${DRY_RUN:-0}" -ne 1 ]; then
+      existing_key=$(kubectl get secret platform-agent-secrets -n "$NAMESPACE" -o jsonpath='{.data.API_SERVER_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    fi
+    if [ -n "$existing_key" ]; then
+      print_info "Preserving existing API_SERVER_KEY from Kubernetes Secret..."
+      save_secret_var "API_SERVER_KEY" "$existing_key"
+    else
+      print_info "Generating a secure random API_SERVER_KEY..."
+      save_secret_var "API_SERVER_KEY" "$(openssl rand -hex 16)"
+    fi
+  else
+    save_secret_var "API_SERVER_KEY" "${API_SERVER_KEY}"
+  fi
+
+  # Recover or prompt for Slack tokens on the connected target cluster
+  if is_truthy "${SLACK_ENABLED:-false}"; then
+    if [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+      local existing_bot_token=""
+      if [ "${DRY_RUN:-0}" -ne 1 ]; then
+        existing_bot_token=$(kubectl get secret platform-agent-secrets -n "$NAMESPACE" -o jsonpath='{.data.SLACK_BOT_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+      fi
+      if [ -n "$existing_bot_token" ]; then
+        print_info "Preserving existing SLACK_BOT_TOKEN from Kubernetes Secret..."
+        save_secret_var "SLACK_BOT_TOKEN" "$existing_bot_token"
+      elif [ "${DRY_RUN:-0}" -eq 1 ] || is_ci_pipeline || [ ! -t 0 ]; then
+        save_secret_var "SLACK_BOT_TOKEN" "${SLACK_BOT_TOKEN:-}"
+      else
+        echo -ne "  ${C_CYAN}Enter your SLACK_BOT_TOKEN (xoxb-...): ${C_RESET}"
+        read -s -r input_bot_token
+        echo ""
+        save_secret_var "SLACK_BOT_TOKEN" "${input_bot_token:-}"
+      fi
+    else
+      save_secret_var "SLACK_BOT_TOKEN" "${SLACK_BOT_TOKEN}"
+    fi
+
+    if [ -z "${SLACK_APP_TOKEN:-}" ]; then
+      local existing_app_token=""
+      if [ "${DRY_RUN:-0}" -ne 1 ]; then
+        existing_app_token=$(kubectl get secret platform-agent-secrets -n "$NAMESPACE" -o jsonpath='{.data.SLACK_APP_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+      fi
+      if [ -n "$existing_app_token" ]; then
+        print_info "Preserving existing SLACK_APP_TOKEN from Kubernetes Secret..."
+        save_secret_var "SLACK_APP_TOKEN" "$existing_app_token"
+      elif [ "${DRY_RUN:-0}" -eq 1 ] || is_ci_pipeline || [ ! -t 0 ]; then
+        save_secret_var "SLACK_APP_TOKEN" "${SLACK_APP_TOKEN:-}"
+      else
+        echo -ne "  ${C_CYAN}Enter your SLACK_APP_TOKEN (xapp-...): ${C_RESET}"
+        read -s -r input_app_token
+        echo ""
+        save_secret_var "SLACK_APP_TOKEN" "${input_app_token:-}"
+      fi
+    else
+      save_secret_var "SLACK_APP_TOKEN" "${SLACK_APP_TOKEN}"
+    fi
+  else
+    save_secret_var "SLACK_BOT_TOKEN" "${SLACK_BOT_TOKEN:-}"
+    save_secret_var "SLACK_APP_TOKEN" "${SLACK_APP_TOKEN:-}"
   fi
 
   for key in GEMINI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY API_SERVER_KEY SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
