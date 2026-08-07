@@ -170,6 +170,24 @@ The agent never has direct write access to running infrastructure — see [Decla
   - **Caveat: list merges are additive.** When a plugin supplies a list under an allowlisted key, its entries are unioned into the operator's list rather than replacing it. A plugin can therefore add a toolset to `platform_toolsets` but cannot remove one the operator configured.
   - **`spec.env` overrides operator-set variables.** Plugin-supplied environment variables take precedence over variables of the same name set by the operator, and secret references resolve against any Secret in the agent's namespace. Four names are exceptions: the operator appends `CREDENTIAL_PROXY_URL`, `AGENT_SHARED_STATE_SETUP`, `PATH`, and `PYTHONPATH` _after_ the merge, so a plugin's copy of any of them loses. The first keeps a plugin from redirecting the credential proxy; the second keeps it from switching off the container-startup setup that populates `$HERMES_HOME` (see [Container entrypoint](/kube-agents/deploy/docker-images/#container-entrypoint)), which would surface as plugins mounted but never enabled, far from the plugin that caused it. Secrets referenced this way land in the agent container's environment: this is a supported way to supply a plugin its own API token, not a preservation of the credential-proxy boundary, which only covers the credentials the proxy itself brokers. See [Credential isolation](/kube-agents/reference/credential-isolation/).
 
+## Secrets Encryption & Local State Security
+
+### GKE etcd Database Encryption (CMEK)
+
+The provisioning pipeline (`provision_01_gcp_cluster.sh` and `provision_07_gcp_k8s_secrets.sh`) enforces Customer-Managed Encryption Keys (CMEK) for GKE database encryption:
+
+- **Automated Cloud KMS Setup**: A dedicated Cloud KMS keyring (`GKE_DB_KMS_KEYRING`) and crypto key (`GKE_DB_KMS_KEY`) are automatically created and granted `roles/cloudkms.cryptoKeyEncrypterDecrypter` for the GKE service agent (`container.googleapis.com`).
+- **Pre-flight Encryption Gate**: `provision_07_gcp_k8s_secrets.sh` verifies that GKE etcd encryption is active (`ENCRYPTED` or `ALL_OBJECTS_ENCRYPTION_ENABLED`) before writing any Kubernetes secrets (`platform-agent-secrets`).
+- **`ALLOW_UNENCRYPTED_SECRETS` Override**: When provisioning on existing clusters or local test environments where CMEK is disabled, export `ALLOW_UNENCRYPTED_SECRETS=true` to bypass the mandatory encryption gate.
+
+### Local State Security (`vars.sh`)
+
+Local configuration and state saved during installer execution (`k8s-operator/scripts/vars.sh`) are hardened as follows:
+
+- **File Permissions**: State files are created with strict POSIX permissions (`umask 077` and `chmod 600`), preventing non-owner access.
+- **`PERSIST_SECRETS_ON_DISK`**: By default (`PERSIST_SECRETS_ON_DISK=true`), credentials entered during provisioning are stored in `vars.sh` for non-interactive re-runs. Set `PERSIST_SECRETS_ON_DISK=false` to prevent writing sensitive credentials to disk.
+- **Interactive Teardown Confirmation**: During standalone teardown (`teardown_07_gcp_k8s_secrets.sh`), secret sanitization is interactive so users can choose whether to keep or wipe credentials when retaining local state (orchestrated `teardown.sh` sanitizes credentials automatically).
+
 ## Where to go next
 
 - [Credential isolation](/kube-agents/reference/credential-isolation/) — how credentials are kept out of the agent sandbox container.
