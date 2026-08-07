@@ -456,7 +456,7 @@ func (r *PlatformAgentReconciler) cleanupAgentRBAC(ctx context.Context, agent *a
 	localBindingName := fmt.Sprintf("kubeagents:local:%s:%s", agent.Namespace, agent.Name)
 	leaderBindingName := fmt.Sprintf("kubeagents:leader:%s:%s", agent.Namespace, agent.Name)
 
-	// 1. Fast cleanup of ClusterRoleBindings using label selector
+	// 1. Fast, dynamic cleanup of ClusterRoleBindings using targeted label selectors (current and legacy instance labels)
 	var labeledClusterRoleBindings rbacv1.ClusterRoleBindingList
 	if err := r.List(ctx, &labeledClusterRoleBindings, client.MatchingLabels{
 		"kubeagents.x-k8s.io/agent-name":      agent.Name,
@@ -476,48 +476,41 @@ func (r *PlatformAgentReconciler) cleanupAgentRBAC(ctx context.Context, agent *a
 		}
 	}
 
-	// 2. Fallback scan for unlabeled legacy ClusterRoleBindings (with SA swap protection)
-	var existingClusterRoleBindings rbacv1.ClusterRoleBindingList
-	if err := r.List(ctx, &existingClusterRoleBindings); err != nil {
-		return fmt.Errorf("failed to list ClusterRoleBindings: %w", err)
+	var legacyLabeledCRBs rbacv1.ClusterRoleBindingList
+	if err := r.List(ctx, &legacyLabeledCRBs, client.MatchingLabels{
+		"app.kubernetes.io/instance": fmt.Sprintf("%s-%s", agent.Namespace, agent.Name),
+		"app.kubernetes.io/part-of":  "kube-agents",
+	}); err != nil {
+		return fmt.Errorf("failed to list legacy labeled ClusterRoleBindings: %w", err)
 	}
-	for i := range existingClusterRoleBindings.Items {
-		crb := &existingClusterRoleBindings.Items[i]
+	for i := range legacyLabeledCRBs.Items {
+		crb := &legacyLabeledCRBs.Items[i]
 		if !deleteAll && crb.Name == minimalBindingName {
 			continue
 		}
-		isTargetSA := false
-		for _, subj := range crb.Subjects {
-			if subj.Kind == "ServiceAccount" && subj.Namespace == agent.Namespace &&
-				(subj.Name == saName || subj.Name == agent.Name) {
-				isTargetSA = true
-				break
-			}
-		}
-		if isTargetSA && (strings.HasPrefix(crb.Name, "kubeagents:") || strings.HasPrefix(crb.Name, "kubeagents-")) && crb.DeletionTimestamp.IsZero() {
+		if (strings.HasPrefix(crb.Name, "kubeagents:") || strings.HasPrefix(crb.Name, "kubeagents-")) && crb.DeletionTimestamp.IsZero() {
 			if err := client.IgnoreNotFound(r.Delete(ctx, crb)); err != nil {
 				return fmt.Errorf("failed to clean up legacy ClusterRoleBinding %s: %w", crb.Name, err)
 			}
 		}
 	}
 
-	// 3. Clean up legacy ClusterRoles (explorer/viewer, and minimal if deleteAll)
-	legacyClusterRoles := []string{
-		fmt.Sprintf("kubeagents:explorer:%s:%s", agent.Namespace, agent.Name),
-		fmt.Sprintf("kubeagents:viewer:%s:%s", agent.Namespace, agent.Name),
+	// 2. Dynamic cleanup of ClusterRoles using label selector
+	var legacyClusterRoles rbacv1.ClusterRoleList
+	if err := r.List(ctx, &legacyClusterRoles, client.MatchingLabels{
+		"app.kubernetes.io/instance": fmt.Sprintf("%s-%s", agent.Namespace, agent.Name),
+		"app.kubernetes.io/part-of":  "kube-agents",
+	}); err != nil {
+		return fmt.Errorf("failed to list legacy ClusterRoles: %w", err)
 	}
-	if deleteAll {
-		legacyClusterRoles = append(legacyClusterRoles, fmt.Sprintf("kubeagents:minimal:%s:%s", agent.Namespace, agent.Name))
-	}
-	for _, roleName := range legacyClusterRoles {
-		var legacyClusterRole rbacv1.ClusterRole
-		if err := r.Get(ctx, types.NamespacedName{Name: roleName}, &legacyClusterRole); err != nil {
-			if !errors.IsNotFound(err) {
-				return fmt.Errorf("failed to get legacy ClusterRole %s: %w", roleName, err)
-			}
-		} else if legacyClusterRole.DeletionTimestamp.IsZero() {
-			if err := client.IgnoreNotFound(r.Delete(ctx, &legacyClusterRole)); err != nil {
-				return fmt.Errorf("failed to delete legacy ClusterRole %s: %w", roleName, err)
+	for i := range legacyClusterRoles.Items {
+		cr := &legacyClusterRoles.Items[i]
+		if !deleteAll && cr.Name == fmt.Sprintf("kubeagents:minimal:%s:%s", agent.Namespace, agent.Name) {
+			continue
+		}
+		if (strings.HasPrefix(cr.Name, "kubeagents:") || strings.HasPrefix(cr.Name, "kubeagents-")) && cr.DeletionTimestamp.IsZero() {
+			if err := client.IgnoreNotFound(r.Delete(ctx, cr)); err != nil {
+				return fmt.Errorf("failed to delete legacy ClusterRole %s: %w", cr.Name, err)
 			}
 		}
 	}

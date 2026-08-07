@@ -282,14 +282,34 @@ func TestReconcileRBAC_DeletesLegacyRBAC(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-agent", Namespace: "test-ns"},
 	}
 	legacyViewer := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "kubeagents:viewer:test-ns:test-agent"},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "test-agent", Namespace: "test-ns"}},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kubeagents:viewer:test-ns:test-agent",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "test-ns-test-agent",
+				"app.kubernetes.io/part-of":  "kube-agents",
+			},
+		},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "test-agent", Namespace: "test-ns"}},
 	}
 	legacyExplorerCRB := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "kubeagents:explorer:test-ns:test-agent"},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "test-agent", Namespace: "test-ns"}},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kubeagents:explorer:test-ns:test-agent",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "test-ns-test-agent",
+				"app.kubernetes.io/part-of":  "kube-agents",
+			},
+		},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "test-agent", Namespace: "test-ns"}},
 	}
-	legacyExplorerCR := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "kubeagents:explorer:test-ns:test-agent"}}
+	legacyExplorerCR := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kubeagents:explorer:test-ns:test-agent",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "test-ns-test-agent",
+				"app.kubernetes.io/part-of":  "kube-agents",
+			},
+		},
+	}
 	legacyRoleBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "kubeagents-test-agent-rolebinding", Namespace: "test-ns"},
 		Subjects: []rbacv1.Subject{
@@ -1701,8 +1721,15 @@ func TestCleanupAgentRBAC_ReconcilePreservesActiveRBACAndDeletesLegacy(t *testin
 	leaderBindingName := "kubeagents:leader:test-ns:test-agent"
 	legacyRoleName := "kubeagents:explorer:test-ns:test-agent"
 	legacyBindingName := "kubeagents-legacy-binding"
-
-	activeMinimalRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: minimalRoleName}}
+	activeMinimalRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: minimalRoleName,
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "test-ns-test-agent",
+				"app.kubernetes.io/part-of":  "kube-agents",
+			},
+		},
+	}
 	activeMinimalBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: minimalBindingName,
@@ -1738,7 +1765,15 @@ func TestCleanupAgentRBAC_ReconcilePreservesActiveRBACAndDeletesLegacy(t *testin
 			{Kind: "ServiceAccount", Name: "test-agent", Namespace: "test-ns"},
 		},
 	}
-	legacyClusterRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: legacyRoleName}}
+	legacyClusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: legacyRoleName,
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "test-ns-test-agent",
+				"app.kubernetes.io/part-of":  "kube-agents",
+			},
+		},
+	}
 	legacyBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: legacyBindingName,
@@ -1799,7 +1834,15 @@ func TestCleanupAgentRBAC_DeletionPurgesAllRBAC(t *testing.T) {
 	leaderRoleName := "kubeagents:leader:test-ns:test-agent"
 	leaderBindingName := "kubeagents:leader:test-ns:test-agent"
 
-	activeMinimalRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: minimalRoleName}}
+	activeMinimalRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: minimalRoleName,
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "test-ns-test-agent",
+				"app.kubernetes.io/part-of":  "kube-agents",
+			},
+		},
+	}
 	activeMinimalBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: minimalBindingName,
