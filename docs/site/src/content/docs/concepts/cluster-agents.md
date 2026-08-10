@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-A **Cluster Agent** is a read-only SRE scoped to exactly one GKE cluster. It is a Hermes profile (`cluster-<project>-<cluster>-<location>`, sanitized to 63 characters) that the [Platform Agent](/kube-agents/concepts/platform-agent/) scaffolds at runtime inside its own pod — one per managed cluster, persisting on the data volume until that cluster is deleted. `SOUL.md §6` makes delegation the default: work scoped to a single cluster's live runtime (crash loops, OOMs, scheduling failures, mount errors, connectivity, autoscaling, storage, observability gaps) belongs to that cluster's Cluster Agent, while fleet-wide audits, provisioning, and the GitOps write path stay with the Platform Agent.
+A **Cluster Agent** is a read-only SRE scoped to exactly one GKE cluster. It is a Hermes profile (`cluster-<project>-<cluster>-<location>`, sanitized to 63 characters) that the [Platform Agent](/kube-agents/concepts/platform-agent/) scaffolds at runtime inside its own pod — one per managed cluster, persisting on the data volume until that cluster is deleted. `SOUL.md §7` makes delegation the default: work scoped to a single cluster's live runtime (crash loops, OOMs, scheduling failures, mount errors, connectivity, autoscaling, storage, observability gaps) belongs to that cluster's Cluster Agent, while fleet-wide audits, provisioning, and the GitOps write path stay with the Platform Agent.
 
 ## Scoped by construction
 
@@ -17,7 +17,7 @@ Each profile is stamped from the [`agents/cluster/`](https://github.com/gke-labs
 
 ## Lifecycle
 
-A managed cluster and its Cluster Agent profile are created together and deleted together (`SOUL.md §6`). Three paths maintain that invariant:
+A managed cluster and its Cluster Agent profile are created together and deleted together (`SOUL.md §7`). Three paths maintain that invariant:
 
 1. **Onboarding.** When the Platform Agent provisions a cluster (`gke-cluster-creation`) or first brings one under management, the `cluster-agent-lifecycle` skill creates the profile.
 2. **On request.** "Manage my cluster `X` in `Y`" invokes the `manage-cluster` skill, which verifies the cluster exists and creates its profile (idempotent).

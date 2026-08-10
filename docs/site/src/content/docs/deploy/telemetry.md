@@ -38,7 +38,7 @@ Chat session context (space ID, user, thread) flows through Hermes as OTel span 
 
 ## Console links
 
-The persona ([`SOUL.md §5`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/SOUL.md)) surfaces direct Cloud Console URLs in Chat replies. Templates are documented on [Concepts → Observability](/kube-agents/concepts/observability/#inline-console-links).
+The persona ([`SOUL.md §6`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/SOUL.md)) surfaces direct Cloud Console URLs in Chat replies. Templates are documented on [Concepts → Observability](/kube-agents/concepts/observability/#inline-console-links).
 
 ## Non-GKE clusters
 

@@ -81,8 +81,8 @@ flowchart TB
 2. Google Chat publishes the event to a Pub/Sub topic; Slack routes via Socket Mode. `provision_05_gcp_gchat.sh` sets up the topic and subscription.
 3. The **Chat Agent** (the pod's `default` Hermes profile, image `nousresearch/hermes-agent`) consumes the event through Hermes' bundled Google Chat adapter, patched for credential-free operation by `google_chat_relay_patch.py` (Slack uses `slack_relay_patch.py` in Socket Mode).
 4. The Chat Agent holds no infrastructure tools. It discovers the available specialists via its `router` MCP tool (`list_agents`, descriptions from each agent's `CAPABILITIES.md`) and files a kanban card with the full request context (`kanban_create`); the originating chat session is auto-subscribed to the card.
-5. The gateway's kanban dispatcher spawns the **Platform Agent** (`hermes -p platform chat -q "work kanban task <id>"`), which runs the tool-calling loop: system prompt (`SOUL.md`) + card body + available tools. Cluster reads go through the `gke` MCP server; mutations that touch infra route through the `submit-suggestion` skill (see flow 3) rather than direct `kubectl`. Work scoped to one cluster's live runtime is delegated onward as a nested kanban card to that cluster's read-only [Cluster Agent](/kube-agents/concepts/cluster-agents/) (`SOUL.md §6`).
-6. The worker's `kanban_complete` summary — plus any staged child-card completions along the way — posts back into the same Chat thread, relayed by the Chat Agent. Long operations return a summary; console links are built from the shared templates in `agents/platform/docs/gcp-console-links.md` (per `SOUL.md §5`).
+5. The gateway's kanban dispatcher spawns the **Platform Agent** (`hermes -p platform chat -q "work kanban task <id>"`), which runs the tool-calling loop: system prompt (`SOUL.md`) + card body + available tools. Cluster reads go through the `gke` MCP server; mutations that touch infra route through the `submit-suggestion` skill (see flow 3) rather than direct `kubectl`. Work scoped to one cluster's live runtime is delegated onward as a nested kanban card to that cluster's read-only [Cluster Agent](/kube-agents/concepts/cluster-agents/) (`SOUL.md §7`).
+6. The worker's `kanban_complete` summary — plus any staged child-card completions along the way — posts back into the same Chat thread, relayed by the Chat Agent. Long operations return a summary; console links are built from the shared templates in `agents/platform/docs/gcp-console-links.md` (per `SOUL.md §6`).
 
 ### 2. Cron tick → autonomous run
 
@@ -121,7 +121,7 @@ For production, prefer a **dedicated cluster** for the harness. The agent GSA ca
 
 ## Failure modes worth knowing
 
-- **LLM outage.** LiteLLM proxies retries and can fall back to a secondary provider if configured. `SOUL.md §4` retries via the recovery ladder; the agent will report the failure in Chat rather than hang.
+- **LLM outage.** LiteLLM proxies retries and can fall back to a secondary provider if configured. `SOUL.md §5` retries via the recovery ladder; the agent will report the failure in Chat rather than hang.
 - **Silent kanban workers.** A delegated card only reaches the chat thread on completion or block. The Platform Agent is instructed (`SOUL.md §0`) to stage long jobs into child cards and propagate the chat subscription onto each so progress stays visible; a worker that exits without `kanban_complete`/`kanban_block` fails the task.
 - **Cron overlap.** A long-running fleet audit can still be going when the next job fires — the audit schedules are staggered by 30 minutes, and `github-issue-resolver` runs every 30 minutes regardless. Hermes serializes messages per session, so overlap manifests as queueing, not concurrency.
 - **Minty token exhaustion.** GitHub App installation tokens are 1-hour scoped. Minty caches and re-mints as needed; if the token refresher fails, `submit-suggestion` will surface it and route through the recovery ladder.

@@ -102,7 +102,7 @@ Minty is a small in-cluster service that brokers GitHub App installation tokens 
 
 ### Recovery
 
-If a git operation fails with an auth error (e.g. `fatal: Authentication failed`, `could not read Username`), `SOUL.md §3` requires the agent to run the packaged token refresher:
+If a git operation fails with an auth error (e.g. `fatal: Authentication failed`, `could not read Username`), `SOUL.md §4` requires the agent to run the packaged token refresher:
 
 ```bash
 # outside a git repo
@@ -111,7 +111,7 @@ If a git operation fails with an auth error (e.g. `fatal: Authentication failed`
 ./scripts/github_token_refresh.py
 ```
 
-which triggers a fresh mint from Minty and caches it, then retries the command. The recovery ladder (`§4`) caps retries at **5 iterations or ~10 minutes per distinct blocker** before escalating.
+which triggers a fresh mint from Minty and caches it, then retries the command. The recovery ladder (`§5`) caps retries at **5 iterations or ~10 minutes per distinct blocker** before escalating.
 
 ## Complementary integrations
 
@@ -121,7 +121,7 @@ Alongside GitHub PR flows, the persona explicitly names other declarative pipeli
 - **ArgoCD / Flux** — inspecting `RootSync` state and Application health as part of diagnostics.
 - **GKE Hub fleet membership / Connect Gateway** — for multi-cluster targeting.
 
-`SOUL.md §4` requires the agent to inspect these before manual intervention.
+`SOUL.md §5` requires the agent to inspect these before manual intervention.
 
 ## Anti-patterns
 
@@ -129,7 +129,7 @@ Explicitly called out as forbidden in `SOUL.md`:
 
 - Running raw `kubectl apply` against a live cluster for infrastructure changes.
 - Configuring `git` credential helpers manually.
-- Running ad-hoc `git clone` against the GitOps repo for change submission, or driving `git`/`gh` directly to open a PR or file an issue. `SOUL.md §3.2` names exactly two packaged skills that may own the write path: `submit-suggestion` for a one-off change, `fleet-audit` for a scheduled audit run.
+- Running ad-hoc `git clone` against the GitOps repo for change submission, or driving `git`/`gh` directly to open a PR or file an issue. `SOUL.md §4.2` names exactly two packaged skills that may own the write path: `submit-suggestion` for a one-off change, `fleet-audit` for a scheduled audit run.
 - Outputting raw tool schemas, JSON payloads, or exit codes in user-facing messages.
 
 ## Where to go next

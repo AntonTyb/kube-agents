@@ -56,9 +56,9 @@ The chat-ingress plugins (`session_store`, `session_otel_bridge`) run on the Cha
 
 ## Behavioral shape
 
-- **Delegation-first for single-cluster runtime work.** `SOUL.md §6` makes the Platform Agent the fleet orchestrator, not a per-workload operator: work scoped to one cluster's live runtime (crash loops, OOMs, scheduling failures) is delegated to that cluster's read-only [Cluster Agent](/kube-agents/concepts/cluster-agents/) over the kanban board. Fleet-wide audits, provisioning, and the GitOps write path stay with the Platform Agent.
-- **Incident triage discipline.** `SOUL.md §7` codifies how the agent communicates during triage — findings first, concrete evidence, no raw dumps.
-- **Human-readable reports.** Raw JSON, tool schemas, and CLI exit codes never appear in the agent's user-facing messages. Console links are built from the shared URL templates in [`agents/platform/docs/gcp-console-links.md`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/docs/gcp-console-links.md) (baked into the image at `/opt/defaults/docs/`), per `SOUL.md §5`.
+- **Delegation-first for single-cluster runtime work.** `SOUL.md §7` makes the Platform Agent the fleet orchestrator, not a per-workload operator: work scoped to one cluster's live runtime (crash loops, OOMs, scheduling failures) is delegated to that cluster's read-only [Cluster Agent](/kube-agents/concepts/cluster-agents/) over the kanban board. Fleet-wide audits, provisioning, and the GitOps write path stay with the Platform Agent.
+- **Incident triage discipline.** `SOUL.md §8` codifies how the agent communicates during triage — findings first, concrete evidence, no raw dumps.
+- **Human-readable reports.** Raw JSON, tool schemas, and CLI exit codes never appear in the agent's user-facing messages. Console links are built from the shared URL templates in [`agents/platform/docs/gcp-console-links.md`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/docs/gcp-console-links.md) (baked into the image at `/opt/defaults/docs/`), per `SOUL.md §6`.
 
 ## Where to go next
 

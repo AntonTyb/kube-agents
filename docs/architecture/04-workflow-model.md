@@ -57,7 +57,7 @@ Intent (human chat, event trigger, cron, heartbeat, or escalation)
   Outcome reported back (human-readable) + audited (trace/session/requester)
 ```
 
-This is mandated by `SOUL.md §1, §3`: agents are "strictly forbidden from executing direct, manual
+This is mandated by `SOUL.md §1, §4`: agents are "strictly forbidden from executing direct, manual
 cluster mutations." The `submit-suggestion` skill is the reference implementation of the "propose"
 step (branch → stage _only_ targeted files → commit → PR); actuation is handled by whatever CI/CD the
 customer already runs — the shape is the same.
