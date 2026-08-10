@@ -1,16 +1,11 @@
 # zizmor: ignore[dependabot-cooldown]
 version: 2
-# zizmor: ignore[dependabot-cooldown]
-updates: # zizmor: ignore[dependabot-cooldown]
+updates:
   # GitHub Actions Workflows
-  # zizmor: ignore[dependabot-cooldown]
-  - package-ecosystem: "github-actions" # zizmor: ignore[dependabot-cooldown]
-    # zizmor: ignore[dependabot-cooldown]
+  - package-ecosystem: "github-actions"
     directory: "/"
-    # zizmor: ignore[dependabot-cooldown]
-    schedule: # zizmor: ignore[dependabot-cooldown]
-      # zizmor: ignore[dependabot-cooldown]
-      interval: "weekly" # zizmor: ignore[dependabot-cooldown]
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -19,14 +14,10 @@ updates: # zizmor: ignore[dependabot-cooldown]
       prefix: "ci"
 
   # Go Ecosystem (Operator)
-  # zizmor: ignore[dependabot-cooldown]
-  - package-ecosystem: "gomod" # zizmor: ignore[dependabot-cooldown]
-    # zizmor: ignore[dependabot-cooldown]
+  - package-ecosystem: "gomod"
     directory: "/k8s-operator"
-    # zizmor: ignore[dependabot-cooldown]
-    schedule: # zizmor: ignore[dependabot-cooldown]
-      # zizmor: ignore[dependabot-cooldown]
-      interval: "weekly" # zizmor: ignore[dependabot-cooldown]
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -35,14 +26,10 @@ updates: # zizmor: ignore[dependabot-cooldown]
       prefix: "deps"
 
   # Python Ecosystem (E2E Tests)
-  # zizmor: ignore[dependabot-cooldown]
-  - package-ecosystem: "pip" # zizmor: ignore[dependabot-cooldown]
-    # zizmor: ignore[dependabot-cooldown]
+  - package-ecosystem: "pip"
     directory: "/tests/e2e"
-    # zizmor: ignore[dependabot-cooldown]
-    schedule: # zizmor: ignore[dependabot-cooldown]
-      # zizmor: ignore[dependabot-cooldown]
-      interval: "weekly" # zizmor: ignore[dependabot-cooldown]
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -51,14 +38,10 @@ updates: # zizmor: ignore[dependabot-cooldown]
       prefix: "deps"
 
   # Node.js Ecosystem (Docs Site)
-  # zizmor: ignore[dependabot-cooldown]
-  - package-ecosystem: "npm" # zizmor: ignore[dependabot-cooldown]
-    # zizmor: ignore[dependabot-cooldown]
+  - package-ecosystem: "npm"
     directory: "/docs/site"
-    # zizmor: ignore[dependabot-cooldown]
-    schedule: # zizmor: ignore[dependabot-cooldown]
-      # zizmor: ignore[dependabot-cooldown]
-      interval: "weekly" # zizmor: ignore[dependabot-cooldown]
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -67,14 +50,10 @@ updates: # zizmor: ignore[dependabot-cooldown]
       prefix: "deps"
 
   # Docker Ecosystems
-  # zizmor: ignore[dependabot-cooldown]
-  - package-ecosystem: "docker" # zizmor: ignore[dependabot-cooldown]
-    # zizmor: ignore[dependabot-cooldown]
+  - package-ecosystem: "docker"
     directory: "/deploy/docker"
-    # zizmor: ignore[dependabot-cooldown]
-    schedule: # zizmor: ignore[dependabot-cooldown]
-      # zizmor: ignore[dependabot-cooldown]
-      interval: "weekly" # zizmor: ignore[dependabot-cooldown]
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -82,17 +61,14 @@ updates: # zizmor: ignore[dependabot-cooldown]
     commit-message:
       prefix: "ci"
 
-  # zizmor: ignore[dependabot-cooldown]
-  - package-ecosystem: "docker" # zizmor: ignore[dependabot-cooldown]
-    # zizmor: ignore[dependabot-cooldown]
+  - package-ecosystem: "docker"
     directory: "/agents/platform"
-    # zizmor: ignore[dependabot-cooldown]
-    schedule: # zizmor: ignore[dependabot-cooldown]
-      # zizmor: ignore[dependabot-cooldown]
-      interval: "weekly" # zizmor: ignore[dependabot-cooldown]
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "docker"
     commit-message:
       prefix: "ci"
+
