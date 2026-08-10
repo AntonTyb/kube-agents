@@ -346,7 +346,7 @@ class TestSessionKVServer(unittest.TestCase):
         }
         found_paths = set()
         for route in getattr(session_kv_server.app, "routes", []):
-            if route.path == "/healthz":
+            if route.path in ("/healthz", "/docs", "/redoc", "/openapi.json"):
                 continue
             found_paths.add(route.path)
             deps = [getattr(d, "dependency", None) for d in getattr(route, "dependencies", [])]

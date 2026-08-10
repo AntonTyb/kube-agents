@@ -36,7 +36,7 @@ try:
 except Exception:
     pass
 
-app = FastAPI()
+app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
 
 SESSION_KV_DB_PATH = os.getenv("SESSION_KV_DB_PATH", "/var/lib/kube-agents/session/session_kv.db")
 CLEANUP_TTL_DAYS = int(os.getenv("SESSION_KV_CLEANUP_TTL_DAYS", "14"))
@@ -62,9 +62,9 @@ def verify_api_key(
         )
 
     provided = None
-    if x_api_key:
+    if isinstance(x_api_key, str) and x_api_key.strip():
         provided = x_api_key.strip()
-    elif authorization:
+    elif isinstance(authorization, str) and authorization.strip():
         parts = authorization.strip().split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             provided = parts[1]
