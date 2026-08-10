@@ -202,4 +202,3 @@ Local configuration and state saved during installer execution (`k8s-operator/sc
 - [User attribution](/kube-agents/reference/attribution/) — tracing an action back to the human who requested it.
 - [Provisioning scripts](/kube-agents/operator/provisioning-scripts/) — where the IAM and RBAC are laid down.
 - [`docs/security-requirements.md`](https://github.com/gke-labs/kube-agents/blob/main/docs/security-requirements.md) — the provider-neutral security configuration model: the permission / interaction / authorization dimensions, what is current behaviour versus planned capability, and the acceptance criteria.
-

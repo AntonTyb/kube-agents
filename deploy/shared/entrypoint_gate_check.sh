@@ -93,6 +93,17 @@ reap_scratch() {
     done
 }
 
+# Clean up scratch directories safely, restoring write permissions if the setup
+# applied read-only provenance attributes to skill trees.
+cleanup_scratch() {
+    for target in "$@"; do
+        if [ -e "$target" ] || [ -L "$target" ]; then
+            chmod -R u+w "$target" 2>/dev/null || true
+            rm -rf "$target"
+        fi
+    done
+}
+
 # The single door to the entrypoint. Every case goes through it, so the scratch HOME and
 # the reap cannot be forgotten at a call site — which is exactly how the real ~/.hermes
 # came to be in scope in the first place.
@@ -155,7 +166,7 @@ check() {
         printf 'FAIL  %-44s the gate announced no decision (or both)\n' "$name"
         sed 's/^/        /' "$err" | head -5
         failures=$((failures + 1))
-        rm -rf "$home" "$out" "$err"
+        cleanup_scratch "$home" "$out" "$err"
         return 0
     fi
 
@@ -174,7 +185,7 @@ check() {
         printf 'ok    %-44s %s\n' "$name" "$said"
     fi
 
-    rm -rf "$home" "$out" "$err"
+    cleanup_scratch "$home" "$out" "$err"
 }
 
 echo "== shared-state gate, in-image =="
@@ -239,7 +250,7 @@ else
     sed 's/^/        /' "$home.out" "$home.err" 2>/dev/null | head -6
     failures=$((failures + 1))
 fi
-rm -rf "$home" "$wrapper" "$home.out" "$home.err"
+cleanup_scratch "$home" "$wrapper" "$home.out" "$home.err"
 
 # The trap this file exists for, asserted rather than described: a skipped container must
 # leave none of the gated artifacts behind, whatever else step 1 put there.
@@ -255,7 +266,7 @@ else
     echo "      (^ that listing is step 1 running above the gate in every container;"
     echo "         it is why \$PLATFORM_AGENT_HOME/logs is not evidence the setup ran)"
 fi
-rm -rf "$home"
+cleanup_scratch "$home"
 
 # The two ways a run escapes its scratch tree, checked instead of promised. Both matter
 # most in the place the header recommends running this — a live pod — and neither is

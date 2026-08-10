@@ -123,4 +123,3 @@ execution_bounds:
       - "/opt/cluster-template"
       - "/opt/defaults"
       - "/etc"
-
