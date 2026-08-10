@@ -112,7 +112,7 @@ class TestSessionManagerPII(unittest.TestCase):
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform" / "scripts"))
         from session_manager import SessionManager
         sm = SessionManager()
-        headers = sm.delegation_headers({"metadata": {"user_email_hash": "hash123"}})
+        headers = sm.signed_delegation_headers({"metadata": {"user_email_hash": "hash123"}}, api_key="test-key")
         self.assertEqual(headers.get("X-Hermes-User-Email-Hash"), "hash123")
         self.assertNotIn("X-Hermes-User-Email", headers)
 

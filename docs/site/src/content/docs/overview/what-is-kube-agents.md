@@ -23,7 +23,7 @@ The `PlatformAgent` CR reconciles into a Deployment running the [Hermes runtime]
 - **Routing description (`CAPABILITIES.md`)** — the one-liner the Chat Agent's `list_agents` uses to decide what to route here.
 - **Skills** (`agents/platform/skills/*/SKILL.md`) — Claude-style skill bundles the agent loads on demand.
 - **Governance SOPs** (`agents/platform/governance/*.md`) — standard operating procedures the cron watchdogs invoke.
-- **Cron watchdogs** (`agents/platform/cron/jobs.json`) — scheduled autonomous jobs, each pointing at a governance SOP.
+- **Cron watchdogs** (`agents/chat/defaults/cron/jobs.json`) — scheduled autonomous jobs, each pointing at a governance SOP. They are scheduled on the Chat Agent, which owns the only ticking gateway, and dispatched here as kanban cards.
 - **MCP servers** — declared in `agents/platform/config.yaml`. Shipping today: `platform_control` (an in-pod Python MCP server for session and agent-internal tooling) and `gke` (the [remote GKE MCP server](https://container.googleapis.com/mcp) via `mcp-remote`).
 - **Toolsets** — `cli` and `api_server` variants aggregate the MCP servers into what the Hermes CLI and REST API surface, plus a `kanban` toolset for creating and routing delegation cards.
 
@@ -55,8 +55,7 @@ Once the [provisioning script](/kube-agents/install/quickstart-gke/) finishes, y
 
 ## What is _not_ included
 
-- **No Helm chart** — install is via `make gcp-provision` + Kustomize. A GKE-oriented chart and a Terraform module have been proposed but are not in `main`.
-- **No local Kind path** — there is no `kind` workflow in the repo and no scripted installer outside `k8s-operator/scripts/`. You need a real GKE cluster.
+- **No local Kind path** — there is no `kind` workflow in the repo and no scripted installer outside `k8s-operator/scripts/`. You need a real GKE cluster. (For versioned Helm/Terraform installs on GKE, see [Helm and Kind](/kube-agents/install/helm-and-kind/).)
 - **No web UI or CLI beyond `kubectl` port-forward + the Hermes API** — chat is the primary user interface.
 - **No cross-cloud abstractions** — the shipping MCP toolset, IAM assumptions, and provisioning scripts all target GKE. The runtime and persona are cluster-agnostic; the skill catalog is not.
 
