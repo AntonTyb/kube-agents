@@ -71,6 +71,11 @@ start_event_watcher() {
   # EVENT_WATCHER_CLUSTER_NAME, which it always sets. No default is applied
   # here on purpose: guessing a name would mislabel every payload and metric,
   # so an unset value should fail loudly in the watcher's own validation.
+  #
+  # --token-env names SESSION_KV_API_KEY rather than API_SERVER_KEY: the latter
+  # is the loopback sentinel `cluster-internal-trusted`, which authenticates
+  # nothing. The watcher refuses to start when the named variable is empty,
+  # which is the behaviour we want — the Session KV server fails closed too.
 
   # An empty value disables persistence, which is what should happen if the
   # directory cannot be created: the watcher still dedups in memory, and losing
@@ -95,7 +100,7 @@ start_event_watcher() {
         --dedup-persist="${dedup_persist}" \
         --in-cluster \
         --daemon-url=http://127.0.0.1:8699 \
-        --token-env=API_SERVER_KEY \
+        --token-env=SESSION_KV_API_KEY \
         --owner=platform \
         --reason=Failed,FailedToDrainNode,CrashLoopBackOff,BackOff,ImagePullBackOff,ErrImagePull,OOMKilled || true
       ran=$(( SECONDS - started ))

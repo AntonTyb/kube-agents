@@ -609,11 +609,33 @@ func TestBuildDeployment(t *testing.T) {
 		if seen[env.Name] {
 			t.Errorf("duplicate env var found: %s", env.Name)
 		}
-		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+		// The allowlist is two entries long and stays that way unless someone
+		// argues the same case again. Both are pod-scoped: SESSION_KV_API_KEY
+		// authenticates callers of the Session KV server on this pod's
+		// loopback, and SESSION_KV_SALT is the HMAC salt for pseudonymising
+		// chat identities, which has to be here because the hashing is here.
+		// Neither reaches a cloud API, a repository, or anything off the pod —
+		// which is what the isolation boundary is for. A Secret-backed variable
+		// that does not meet that bar belongs in the credential-proxy container.
+		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil &&
+			env.Name != "SESSION_KV_API_KEY" && env.Name != "SESSION_KV_SALT" {
 			t.Errorf("sandbox must not receive Secret-backed environment variable %s", env.Name)
 		}
 		seen[env.Name] = true
 		envMap[env.Name] = env
+	}
+
+	for _, name := range []string{"SESSION_KV_API_KEY", "SESSION_KV_SALT"} {
+		ref := envMap[name].ValueFrom
+		if ref == nil || ref.SecretKeyRef == nil {
+			t.Fatalf("expected sandbox %s to come from a Secret, got %v", name, envMap[name])
+		}
+		if ref.SecretKeyRef.Name != "platform-agent-secrets" || ref.SecretKeyRef.Key != name {
+			t.Errorf("expected sandbox %s from platform-agent-secrets/%s, got %v", name, name, ref.SecretKeyRef)
+		}
+		if ref.SecretKeyRef.Optional == nil || !*ref.SecretKeyRef.Optional {
+			t.Errorf("expected sandbox %s to be optional so a missing key degrades rather than blocks startup", name)
+		}
 	}
 
 	if envMap["PLATFORM_AGENT_HOME"].Value != "/var/agent" {
@@ -665,6 +687,19 @@ func TestBuildDeployment(t *testing.T) {
 	apiKeyRef := proxyEnv["API_SERVER_EXTERNAL_KEY"].ValueFrom.SecretKeyRef
 	if apiKeyRef.Name != "secrets" || apiKeyRef.Key != "api-key" {
 		t.Errorf("expected external API key only in credential sidecar, got %#v", apiKeyRef)
+	}
+	// The watcher hosted here posts to the Session KV server in the sandbox
+	// container, and that server authenticates now. Both containers must resolve
+	// the same Secret key, or the watcher's every POST is a 401 and no incident
+	// is ever triaged — a failure that is silent from the outside.
+	proxySessionKV := proxyEnv["SESSION_KV_API_KEY"].ValueFrom
+	if proxySessionKV == nil || proxySessionKV.SecretKeyRef == nil {
+		t.Fatalf("expected credential proxy SESSION_KV_API_KEY from a Secret, got %#v", proxyEnv["SESSION_KV_API_KEY"])
+	}
+	sandboxSessionKV := envMap["SESSION_KV_API_KEY"].ValueFrom.SecretKeyRef
+	if *proxySessionKV.SecretKeyRef != *sandboxSessionKV {
+		t.Errorf("sandbox and credential proxy disagree on the Session KV key: %#v vs %#v",
+			sandboxSessionKV, proxySessionKV.SecretKeyRef)
 	}
 	for _, mount := range container.VolumeMounts {
 		if mount.Name == "credential-proxy-ksa-token" || strings.Contains(mount.MountPath, "serviceaccount") {

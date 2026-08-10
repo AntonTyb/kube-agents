@@ -17,7 +17,7 @@ class SessionManager:
         "session_id",
         "platform",
         "user_id",
-        "user_email",
+        "user_email_hash",
         "user_resource",
         "chat_id",
         "thread_id",
@@ -86,7 +86,11 @@ class SessionManager:
         )
         metadata = self.metadata_for_session(session_id)
         platform = metadata.get("platform") or ""
-        sender_id = metadata.get("user_id") or metadata.get("user_email") or ""
+        # `user_email_hash`, never `user_email`: the store writes only the hash
+        # now, and rows written before that are purged of the plaintext field on
+        # server start. Falling back to a plaintext address here would put one
+        # back into the delegation headers.
+        sender_id = metadata.get("user_id") or metadata.get("user_email_hash") or ""
         user_id = os.environ.get("HERMES_USER_ID") or os.environ.get("HERMES_SENDER_ID") or sender_id
         if user_id and platform and ":" not in str(user_id):
             user_id = f"{platform}:{user_id}"
@@ -126,8 +130,11 @@ class SessionManager:
             headers["X-Hermes-User-Id"] = str(context["user_id"])
         if context.get("sender_id"):
             headers["X-Hermes-Sender-Id"] = str(context["sender_id"])
-        if metadata.get("user_email"):
-            headers["X-Hermes-User-Email"] = str(metadata["user_email"])
+        # X-Hermes-User-Email is gone rather than hashed. It existed so a
+        # downstream agent could show who asked; a hash cannot do that, and the
+        # pseudonymised id in X-Hermes-Sender-Id already correlates turns.
+        if metadata.get("user_email_hash"):
+            headers["X-Hermes-User-Email-Hash"] = str(metadata["user_email_hash"])
         if context.get("chat_id"):
             headers["X-Hermes-Chat-Id"] = str(context["chat_id"])
         if context.get("thread_id"):

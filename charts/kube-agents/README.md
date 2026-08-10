@@ -25,6 +25,18 @@ Canonical GKE-oriented Helm chart for deploying the Kube-Agents Kubernetes Opera
   `SLACK_APP_TOKEN`. For dev installs the chart can create it from values
   (`platformAgent.credentials.create=true` + `platformAgent.credentials.data`).
 
+  Two further keys are read from the same Secret but generated rather than
+  asked for, since no value an operator could choose is better than a random
+  one: `SESSION_KV_API_KEY` (bearer token for the pod-local Session KV server)
+  and `SESSION_KV_SALT` (HMAC salt for pseudonymising chat identities). With
+  `create=true` the chart generates them on install and carries the existing
+  values forward on upgrade — rotating the salt would re-anonymise every user,
+  severing their past sessions from their future ones. With `create=false`,
+  whatever created the Secret supplies them; `provision_07_gcp_k8s_secrets.sh`
+  and the Terraform example both do. Both are optional: absent, the Session KV
+  server answers `503` and identity hashing falls back to a per-pod salt with a
+  warning, rather than the pod failing to start.
+
 ## Usage
 
 Helm installs OCI charts directly (there is no `helm repo add` for OCI

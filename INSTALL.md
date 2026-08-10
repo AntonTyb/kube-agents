@@ -293,8 +293,18 @@ kubectl create secret generic platform-agent-secrets \
   --from-literal=GEMINI_API_KEY="your-gemini-api-key" \
   --from-literal=API_SERVER_KEY="your-api-server-key" \
   --from-literal=ANTHROPIC_API_KEY="your-anthropic-api-key" \
-  --from-literal=OPENAI_API_KEY="your-openai-api-key"
+  --from-literal=OPENAI_API_KEY="your-openai-api-key" \
+  --from-literal=SESSION_KV_API_KEY="$(openssl rand -hex 32)" \
+  --from-literal=SESSION_KV_SALT="$(openssl rand -hex 32)"
 ```
+
+The last two are generated, not chosen: `SESSION_KV_API_KEY` is the bearer token
+for the pod-local Session KV server, and `SESSION_KV_SALT` is the HMAC salt that
+pseudonymises chat identities before they are written to disk. Both are
+optional — without them the agent still runs, but the Session KV server rejects
+every request and identity pseudonyms stop being stable across pod restarts.
+Keep the salt: rotating it re-anonymises every user, severing their past
+sessions from their future ones.
 
 ### Step 3: Build & Push the Operator Image
 

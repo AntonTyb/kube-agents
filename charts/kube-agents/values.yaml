@@ -93,6 +93,18 @@ platformAgent:
     secretName: platform-agent-secrets
     # Convenience for dev installs: create the Secret from `data` below.
     # Prefer a pre-created Secret (external secret management) in production.
+    #
+    # Two further keys are read from this Secret and generated rather than
+    # required, because nobody has to choose their value:
+    #   SESSION_KV_API_KEY  bearer token for the pod-local Session KV server
+    #   SESSION_KV_SALT     HMAC salt for pseudonymising chat identities
+    # With create=true they are generated on install and carried forward on
+    # upgrade. With create=false (the production path) they come from whatever
+    # created the Secret — provision_07_gcp_k8s_secrets.sh and the
+    # kube-agents-iam Terraform module both generate them. If they are absent
+    # the agent still runs: the Session KV server refuses every authenticated
+    # request and says so, and identity hashing falls back to a per-pod random
+    # salt with a warning.
     create: false
     data: {}
   integration:

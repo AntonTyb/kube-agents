@@ -1211,6 +1211,30 @@ func buildPodTemplateSpec(agent *agentv1alpha1.PlatformAgent, configHash, fluent
 		},
 	}
 
+	// The two exceptions to "no credentials in the sandbox", both of them
+	// pod-scoped and useless outside this pod's loopback interface:
+	//
+	//   SESSION_KV_API_KEY  authenticates callers of the Session KV server on
+	//                       127.0.0.1:8699. This container both serves it and
+	//                       calls it (platform_mcp_server, incident_context).
+	//   SESSION_KV_SALT     the HMAC salt for pseudonymising chat identities.
+	//                       It has to be here because the hashing happens here,
+	//                       at the point the identity is first seen.
+	//
+	// Neither grants access to any cloud API, any repository, or anything
+	// outside the pod, which is the property the isolation boundary protects.
+	// See docs/credential-isolation-design.md.
+	envVars = append(envVars,
+		corev1.EnvVar{
+			Name:      "SESSION_KV_API_KEY",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: sessionKVApiKeySecretRef(agent)},
+		},
+		corev1.EnvVar{
+			Name:      "SESSION_KV_SALT",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: sessionKVSaltSecretRef(agent)},
+		},
+	)
+
 	envVars = append(envVars, otelTelemetryEnvVars("platform", agent.Name, agent.Namespace)...)
 	if agent.Spec.Deployment != nil {
 		envVars = mergeEnvVars(envVars, safeSandboxEnvOverrides(agent.Spec.Deployment.Env))
@@ -1700,6 +1724,26 @@ func buildCredentialProxySidecar(agent *agentv1alpha1.PlatformAgent, homeDir str
 	}
 }
 
+// sessionKVApiKeySecretRef resolves the Secret key holding the bearer token for
+// the pod-local Session KV server. Both containers that touch that server take
+// the value from here, so they cannot disagree about which key is in force.
+func sessionKVApiKeySecretRef(agent *agentv1alpha1.PlatformAgent) *corev1.SecretKeySelector {
+	if harness := agent.Spec.Harness; harness != nil && harness.Hermes != nil && harness.Hermes.SessionKVApiKeySecretRef != nil {
+		return harness.Hermes.SessionKVApiKeySecretRef
+	}
+	return defaultSecretRef(nil, defaultPlatformAgentSecrets, "SESSION_KV_API_KEY")
+}
+
+// sessionKVSaltSecretRef resolves the Secret key holding the identity-hashing
+// salt. Optional by construction: a pod that starts without it degrades to a
+// per-pod random salt and says so, rather than refusing to serve chat.
+func sessionKVSaltSecretRef(agent *agentv1alpha1.PlatformAgent) *corev1.SecretKeySelector {
+	if harness := agent.Spec.Harness; harness != nil && harness.Hermes != nil && harness.Hermes.SessionKVSaltSecretRef != nil {
+		return harness.Hermes.SessionKVSaltSecretRef
+	}
+	return defaultSecretRef(nil, defaultPlatformAgentSecrets, "SESSION_KV_SALT")
+}
+
 func buildCredentialProxyEnv(agent *agentv1alpha1.PlatformAgent) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
 		{Name: "PLATFORM_AGENT_HOME", Value: "/tmp/credential-proxy"},
@@ -1730,6 +1774,13 @@ func buildCredentialProxyEnv(agent *agentv1alpha1.PlatformAgent) []corev1.EnvVar
 		ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: apiServerSecretRef,
 		},
+	})
+	// The k8s-event-watcher hosted here posts events to the Session KV server
+	// in the sandbox container over the shared pod loopback, and that server
+	// now authenticates. start-services.sh passes this name to --token-env.
+	envVars = append(envVars, corev1.EnvVar{
+		Name:      "SESSION_KV_API_KEY",
+		ValueFrom: &corev1.EnvVarSource{SecretKeyRef: sessionKVApiKeySecretRef(agent)},
 	})
 	if harness := agent.Spec.Harness; harness != nil && harness.ProjectID != "" && harness.Location != "" && harness.ClusterName != "" {
 		envVars = append(envVars,
