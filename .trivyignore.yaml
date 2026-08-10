@@ -1,32 +1,40 @@
 # .trivyignore.yaml
 # Scoped vulnerability and misconfiguration ignore rules for Trivy scanner.
 misconfigurations:
-  # Ignore sample, testing, and legacy test-workload misconfigurations in repository manifests
+  # Ignore sample, testing, plugin scratch bundles, and legacy test-workload misconfigurations in repository manifests
   - id: DS-0002
     paths:
+      - "agentplugins/**"
       - "examples/**"
       - "k8s-operator/config/samples/**"
+      - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "tests/**"
   - id: KSV-0014
     paths:
       - "examples/**"
+      - "k8s-operator/config/integrations/**"
       - "k8s-operator/config/samples/**"
+      - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "tests/**"
   - id: KSV-0050
     paths:
       - "examples/**"
+      - "k8s-operator/config/integrations/**"
       - "k8s-operator/config/samples/**"
+      - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "tests/**"
   - id: GCP-0048
     paths:
+      - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "terraform/**"
       - "tests/**"
   - id: GCP-0061
     paths:
+      - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "terraform/**"
       - "tests/**"
@@ -36,10 +44,14 @@ misconfigurations:
     paths:
       - "k8s-operator/config/**"
 
-  # Ignore KSV-0118: kustomize overlay patches do not define full security contexts
+  # Ignore KSV-0118: sample manifests, testdata, and kustomize overlays do not define full security contexts
   - id: KSV-0118
     paths:
+      - "examples/**"
       - "k8s-operator/config/integrations/**"
+      - "k8s-operator/internal/testing/**"
+      - "k8s-operator/testing/**"
+      - "tests/**"
 
   # Ignore KSV-0046: read-only explorer ClusterRoles in sample manifests use wildcard resource read
   - id: KSV-0046

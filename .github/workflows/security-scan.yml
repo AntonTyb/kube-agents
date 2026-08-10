@@ -18,10 +18,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Run gosec
-        uses: securego/gosec@e0cca6fe95306b7e7790d6f1bf6a7bec6d622459 # v2.22.0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          args: "./k8s-operator/..."
+          go-version-file: "k8s-operator/go.mod"
+          cache: true
+          cache-dependency-path: "k8s-operator/go.sum"
+      - name: Run gosec
+        working-directory: k8s-operator
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.0 ./...
 
   trivy-scan:
     name: Container & Manifest Scan (trivy)
