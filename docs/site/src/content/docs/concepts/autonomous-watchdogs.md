@@ -28,19 +28,20 @@ The Chat Agent cannot run an audit itself, and is not asked to. Its toolsets are
 
 ## The shipping jobs
 
-The roster, with exact cron expressions, enabled state, and prompts, is generated from `jobs.json` on [Reference → Cron jobs](/kube-agents/reference/cron-jobs/). Six jobs ship, all enabled: the five fleet audits below and `github-issue-resolver`.
+The roster, with exact cron expressions, enabled state, and prompts, is generated from `jobs.json` on [Reference → Cron jobs](/kube-agents/reference/cron-jobs/). Seven jobs ship, all enabled: the six fleet audits below and `github-issue-resolver`.
 
-### The five fleet audits
+### The six fleet audits
 
 Each audit reads its SOP, executes read-only checks against the fleet, writes a validated findings file, and hands it to the [`fleet-audit`](/kube-agents/skills/) skill's `audit_report.py` helper. The helper owns every git and `gh` operation and renders every body itself — the model never writes one.
 
-| Job                           | SOP                                  | Audits                                                                    |
-| ----------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
-| `compliance-audit`            | `compliance_audit_sop.md`            | Security and RBAC posture across the fleet                                |
-| `obtainability-audit`         | `obtainability_audit_sop.md`         | Workload reliability: requests, PDBs, HPAs, probes, scheduling rigidity   |
-| `security-patch-orchestrator` | `security_patch_orchestrator_sop.md` | Version currency and upgrade-policy hygiene against the cluster's channel |
-| `fleet-wide-cost-analysis`    | `fleet_wide_cost_analysis_sop.md`    | Observable waste, in resource units — no billing export required          |
-| `fleet-consistency-drift`     | `fleet_consistency_drift_sop.md`     | Clusters diverging from a baseline derived from the fleet itself          |
+| Job                           | SOP                                  | Audits                                                                     |
+| ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| `compliance-audit`            | `compliance_audit_sop.md`            | Security and RBAC posture across the fleet                                 |
+| `obtainability-audit`         | `obtainability_audit_sop.md`         | Workload reliability: requests, PDBs, HPAs, probes, scheduling rigidity    |
+| `security-patch-orchestrator` | `security_patch_orchestrator_sop.md` | Version currency and upgrade-policy hygiene against the cluster's channel  |
+| `fleet-wide-cost-analysis`    | `fleet_wide_cost_analysis_sop.md`    | Observable waste, in resource units — no billing export required           |
+| `fleet-consistency-drift`     | `fleet_consistency_drift_sop.md`     | Clusters diverging from a baseline derived from the fleet itself           |
+| `stockout-prevention`         | `stockout_prevention_sop.md`         | Capacity obtainability, ComputeClass resilience, and single-zone stockouts |
 
 Two properties matter more than the check lists:
 

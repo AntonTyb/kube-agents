@@ -13,6 +13,8 @@ mcp_servers:
       HERMES_HOME: "${HERMES_HOME}"
       GOOGLE_CHAT_PROJECT_ID: "${GOOGLE_CHAT_PROJECT_ID}"
       GOOGLE_CHAT_SUBSCRIPTION_NAME: "${GOOGLE_CHAT_SUBSCRIPTION_NAME}"
+      GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}"
+      GCP_PROJECT_ID: "${GCP_PROJECT_ID}"
       # Hermes hands a stdio MCP server only a safe baseline (PATH, HOME, …) plus the
       # keys named here (`_build_safe_env` in hermes `tools/mcp_tool.py`), so without
       # this line the `hermes send` behind send_notification has no home channel and
