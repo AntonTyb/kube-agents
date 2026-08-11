@@ -262,10 +262,22 @@ class TestSessionKvServerAuth(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_a_non_ascii_key_is_rejected_rather_than_crashing(self):
-        """Starlette decodes headers as latin-1, and `compare_digest` refuses
-        non-ASCII `str` — comparing as bytes keeps that a 401, not a 500."""
-        response = self.client.get("/v1/sessions", headers={"X-Api-Key": "café"})
-        self.assertEqual(response.status_code, 401)
+        """A 0x80–0xFF byte in the header must be a 401, not a 500.
+
+        Starlette decodes header values as latin-1, so such a byte reaches the
+        dependency as a non-ASCII `str`, and `hmac.compare_digest` raises
+        TypeError on those rather than returning False — escaping as a 500 with
+        a traceback. The dependency is called directly because the test client
+        cannot deliver the header: httpx encodes header values as ASCII and
+        rejects the request before the server sees it.
+        """
+        with self.assertRaises(session_kv_server.HTTPException) as caught:
+            session_kv_server.verify_api_key(authorization="", x_api_key="café")
+        self.assertEqual(caught.exception.status_code, 401)
+
+        with self.assertRaises(session_kv_server.HTTPException) as caught:
+            session_kv_server.verify_api_key(authorization="Bearer café", x_api_key="")
+        self.assertEqual(caught.exception.status_code, 401)
 
     def test_unconfigured_key_fails_closed(self):
         """A deployment that never received the Secret must not serve the data."""
