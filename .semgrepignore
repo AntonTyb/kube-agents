@@ -1,0 +1,17 @@
+# Test suites and fixtures
+tests/
+**/test_*.py
+**/*_test.py
+**/*_test.go
+k8s-operator/internal/testing/
+
+# Platform scripts, plugins, and observability helpers talking to localhost/unix daemons
+agents/platform/scripts/
+agents/platform/plugins/
+agents/platform/skills/kube-agents-observability/scripts/
+agentplugins/
+
+# Patch and evaluation helper scripts
+deploy/docker/patches/
+hack/
+bench/
