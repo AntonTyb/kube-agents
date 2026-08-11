@@ -6,7 +6,6 @@ misconfigurations:
     paths:
       - "agentplugins/**"
       - "examples/**"
-      - "k8s-operator/config/samples/**"
       - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "tests/**"
@@ -14,7 +13,6 @@ misconfigurations:
     paths:
       - "examples/**"
       - "k8s-operator/config/integrations/**"
-      - "k8s-operator/config/samples/**"
       - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "tests/**"
@@ -22,7 +20,6 @@ misconfigurations:
     paths:
       - "examples/**"
       - "k8s-operator/config/integrations/**"
-      - "k8s-operator/config/samples/**"
       - "k8s-operator/internal/testing/**"
       - "k8s-operator/testing/**"
       - "tests/**"

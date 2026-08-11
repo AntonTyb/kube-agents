@@ -56,23 +56,11 @@ jobs:
           FILTER_GITHUB: ${{ steps.filter.outputs.github }}
         run: |
           if [ "${FORCE_DEPLOY}" = "true" ]; then
-            {
-              echo "litellm<<EOF"
-              echo "true"
-              echo "EOF"
-              echo "github<<EOF"
-              echo "true"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+            echo "litellm=true" >> "$GITHUB_OUTPUT"
+            echo "github=true" >> "$GITHUB_OUTPUT"
           else
-            {
-              echo "litellm<<EOF"
-              echo "${FILTER_LITELLM}"
-              echo "EOF"
-              echo "github<<EOF"
-              echo "${FILTER_GITHUB}"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+            echo "litellm=${FILTER_LITELLM}" >> "$GITHUB_OUTPUT"
+            echo "github=${FILTER_GITHUB}" >> "$GITHUB_OUTPUT"
           fi
 
   provision-secrets:
@@ -225,11 +213,7 @@ jobs:
           done
 
           if [ ${#missing[@]} -gt 0 ]; then
-            {
-              echo "configured<<EOF"
-              echo "false"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "⚠️ GitHub Token Minter deployment will be skipped because required repository variables are not configured: ${missing[*]}"
             echo "::notice title=GitHub Minter Skipped::GitHub Token Minter files changed, but deployment will be skipped because required repository variables are not configured: ${missing[*]}"
             echo "### ⚠️ GitHub Token Minter Deployment Skipped" >> "$GITHUB_STEP_SUMMARY"
@@ -238,11 +222,7 @@ jobs:
               echo "- \`$var\`" >> "$GITHUB_STEP_SUMMARY"
             done
           else
-            {
-              echo "configured<<EOF"
-              echo "true"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+            echo "configured=true" >> "$GITHUB_OUTPUT"
             echo "✅ All required repository variables (GH_ORG, GH_REPO, GH_APP_ID) for GitHub Token Minter deployment are set. Proceeding with deployment."
             echo "### ✅ GitHub Token Minter Configured" >> "$GITHUB_STEP_SUMMARY"
             echo "All required repository variables (GH_ORG, GH_REPO, GH_APP_ID) for GitHub Token Minter deployment are set." >> "$GITHUB_STEP_SUMMARY"

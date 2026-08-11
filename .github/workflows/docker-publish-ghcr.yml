@@ -95,9 +95,9 @@ jobs:
       - name: Sign the images
         env:
           PLATFORM_DIGEST: ${{ steps.build-platform.outputs.digest }}
-          REPLAY_DIGEST: ${{ steps.build-replay-proxy.outputs.digest }}
-          CREDENTIAL_DIGEST: ${{ steps.build-credential-proxy.outputs.digest }}
+          REPLAY_PROXY_DIGEST: ${{ steps.build-replay-proxy.outputs.digest }}
+          CREDENTIAL_PROXY_DIGEST: ${{ steps.build-credential-proxy.outputs.digest }}
         run: |
           cosign sign --yes "ghcr.io/${IMAGE_REPOSITORY}/platform-agent@${PLATFORM_DIGEST}"
-          cosign sign --yes "ghcr.io/${IMAGE_REPOSITORY}/replay-proxy@${REPLAY_DIGEST}"
-          cosign sign --yes "ghcr.io/${IMAGE_REPOSITORY}/credential-proxy@${CREDENTIAL_DIGEST}"
+          cosign sign --yes "ghcr.io/${IMAGE_REPOSITORY}/replay-proxy@${REPLAY_PROXY_DIGEST}"
+          cosign sign --yes "ghcr.io/${IMAGE_REPOSITORY}/credential-proxy@${CREDENTIAL_PROXY_DIGEST}"

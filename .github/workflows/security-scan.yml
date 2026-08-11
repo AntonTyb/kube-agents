@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: "k8s-operator/go.sum"
       - name: Run gosec
         working-directory: k8s-operator
-        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.0 ./...
+        run: go run github.com/securego/gosec/v2/cmd/gosec ./...
 
   trivy-scan:
     name: Container & Manifest Scan (trivy)
@@ -51,7 +51,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run semgrep
-        run: semgrep ci --config=p/security-audit
+        run: semgrep ci --config=.github/semgrep-security-audit.yml
 
   checkov-scan:
     name: IaC Security Scan (checkov)
@@ -64,4 +64,4 @@ jobs:
         with:
           framework: all
           output_format: cli
-          soft_fail: true
+          config_file: .checkov.yaml
