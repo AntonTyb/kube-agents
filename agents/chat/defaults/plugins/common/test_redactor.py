@@ -81,6 +81,10 @@ class TestRedactText(unittest.TestCase):
             "the tokenizer emitted 42 tokens",
             "authored by the release job",
             "image: ghcr.io/gke-labs/kube-agents/platform-agent:v0.4.1",
+            # A service-account address is not personal data, and it is the one
+            # thing an operator greps an IAM audit record for.
+            "binding kube-agents-platform@my-proj.iam.gserviceaccount.com to roles/container.admin",
+            "annotate sa default gcp-sa@my-proj.iam.gserviceaccount.com",
         ):
             with self.subTest(text=text):
                 self.assertEqual(AuditRedactor.redact_text(text), text)

@@ -101,10 +101,10 @@ platformAgent:
     # With create=true they are generated on install and carried forward on
     # upgrade. With create=false (the production path) they come from whatever
     # created the Secret — provision_07_gcp_k8s_secrets.sh and the
-    # kube-agents-iam Terraform module both generate them. If they are absent
-    # the agent still runs: the Session KV server refuses every authenticated
-    # request and says so, and identity hashing falls back to a per-pod random
-    # salt with a warning.
+    # terraform/examples/full-install composition both generate them. If they
+    # are absent the agent still runs: the Session KV server refuses every
+    # authenticated request and says so, and identity hashing falls back to a
+    # per-pod random salt with a warning.
     create: false
     data: {}
   integration:

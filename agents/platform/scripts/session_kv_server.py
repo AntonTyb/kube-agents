@@ -85,8 +85,12 @@ def verify_api_key(
         )
         raise HTTPException(status_code=503, detail="session KV authentication is not configured")
 
+    # Compared as bytes: Starlette decodes header values as latin-1, so any byte
+    # in 0x80–0xFF arrives as a non-ASCII `str` and `compare_digest` raises
+    # TypeError on those — escaping the dependency as a 500 with a traceback
+    # instead of the 401 this route is specified to return.
     presented = _presented_api_key(authorization, x_api_key)
-    if not presented or not hmac.compare_digest(presented, expected):
+    if not presented or not hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="invalid or missing API key")
 
 

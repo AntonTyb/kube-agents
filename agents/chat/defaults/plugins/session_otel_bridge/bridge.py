@@ -97,10 +97,15 @@ class OtelSessionBridge:
             return {}
 
         platform = metadata.get("platform") or ""
-        # `user_email` is only present on rows written before the identities were
-        # pseudonymised; hash it here so a span never carries a plain address.
+        # `user_email`, and `user_id` on Google Chat, are only address-shaped on
+        # rows written before the identities were pseudonymised; hash them here
+        # so a span never carries a plain address. `pseudonymise_identity` is a
+        # pass-through for anything without an `@`, so an already-hashed digest
+        # and a Slack member id both survive unchanged. The server-side purge
+        # covers the same rows but is best-effort — it skips any row whose
+        # metadata will not parse — so this reader does not depend on it.
         sender_id = (
-            metadata.get("user_id")
+            AuditRedactor.pseudonymise_identity(metadata.get("user_id"))
             or metadata.get("user_email_hash")
             or AuditRedactor.pseudonymise_identity(metadata.get("user_email"))
         )

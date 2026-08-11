@@ -90,7 +90,16 @@ class SessionManager:
         # now, and rows written before that are purged of the plaintext field on
         # server start. Falling back to a plaintext address here would put one
         # back into the delegation headers.
-        sender_id = metadata.get("user_id") or metadata.get("user_email_hash") or ""
+        #
+        # `user_id` gets the same treatment for the same reason. On Google Chat
+        # it *is* the address on a pre-migration row, and the server-side purge
+        # is best-effort — it skips any row whose metadata will not parse — so
+        # dropping it here rather than trusting the purge. Dropped rather than
+        # hashed to match what the purge does: the salt lives in the sandbox
+        # container, and the hash reappears on the user's next message anyway.
+        # A Slack member id carries no `@` and stays.
+        raw_user_id = str(metadata.get("user_id") or "")
+        sender_id = ("" if "@" in raw_user_id else raw_user_id) or metadata.get("user_email_hash") or ""
         user_id = os.environ.get("HERMES_USER_ID") or os.environ.get("HERMES_SENDER_ID") or sender_id
         if user_id and platform and ":" not in str(user_id):
             user_id = f"{platform}:{user_id}"

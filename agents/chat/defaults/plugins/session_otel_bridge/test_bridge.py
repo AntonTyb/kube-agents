@@ -120,6 +120,15 @@ class TestSpanAttributes(BridgeTestCase):
         self.assertEqual(attributes["hermes.sender.id"], AuditRedactor.hmac_hash(EMAIL))
         self.assertNotIn(EMAIL, json.dumps(attributes))
 
+    def test_a_legacy_plaintext_user_id_is_hashed_on_the_way_out(self):
+        # On Google Chat the pre-migration `user_id` *is* the address. The
+        # server-side purge covers these rows but skips any it cannot parse, so
+        # the reader must not depend on it.
+        self.write_metadata("sess-2b", {"platform": "google_chat", "user_id": EMAIL})
+        attributes = self.bridge._span_attributes_for_session("sess-2b")
+        self.assertEqual(attributes["hermes.sender.id"], AuditRedactor.hmac_hash(EMAIL))
+        self.assertNotIn(EMAIL, json.dumps(attributes))
+
     def test_the_hash_is_preferred_over_a_leftover_plaintext_field(self):
         self.write_metadata(
             "sess-3",

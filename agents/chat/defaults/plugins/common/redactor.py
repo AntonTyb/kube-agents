@@ -85,7 +85,15 @@ class AuditRedactor:
         r"(?i)\b(password|passwd|secret|token|api_key|apikey|access_token|client_secret)\b"
         r"([\"']?\s*[:=]\s*)([\"']?)([^\"'\s,}{\]]+)\3"
     )
-    EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+    # The negative lookahead exempts GCP service-account addresses. They are not
+    # personal data, and in this repository the principal is the one thing an
+    # operator greps an IAM audit record for — redacting it leaves a record that
+    # says which role was granted on which resource but not to whom, which is
+    # the over-eager-redactor failure mode that gets redaction switched off.
+    EMAIL_PATTERN = re.compile(
+        r"[a-zA-Z0-9._%+\-]+@(?!(?:[a-zA-Z0-9\-]+\.)*gserviceaccount\.com\b)"
+        r"[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
+    )
 
     SENSITIVE_KEYS = {
         "password",

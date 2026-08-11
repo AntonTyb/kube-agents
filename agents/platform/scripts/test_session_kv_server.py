@@ -261,6 +261,12 @@ class TestSessionKvServerAuth(unittest.TestCase):
         response = self.client.get("/v1/sessions", headers={"X-Api-Key": API_KEY})
         self.assertEqual(response.status_code, 200)
 
+    def test_a_non_ascii_key_is_rejected_rather_than_crashing(self):
+        """Starlette decodes headers as latin-1, and `compare_digest` refuses
+        non-ASCII `str` — comparing as bytes keeps that a 401, not a 500."""
+        response = self.client.get("/v1/sessions", headers={"X-Api-Key": "café"})
+        self.assertEqual(response.status_code, 401)
+
     def test_unconfigured_key_fails_closed(self):
         """A deployment that never received the Secret must not serve the data."""
         os.environ.pop("SESSION_KV_API_KEY", None)

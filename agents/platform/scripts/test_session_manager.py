@@ -75,6 +75,56 @@ class TestDelegationHeaderSecurity(unittest.TestCase):
         # this reader. What matters is that nothing derived from it leaks.
         self.assertEqual(context["sender_id"], "")
         self.assertEqual(context["user_id"], "")
+
+    def test_current_context_ignores_a_plaintext_user_id(self):
+        """On Google Chat the pre-migration `user_id` is the address itself."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "session_kv.db"
+            conn = sqlite3.connect(str(db_path))
+            with conn:
+                conn.execute(
+                    "CREATE TABLE session_metadata (session_id TEXT PRIMARY KEY,"
+                    " metadata TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT INTO session_metadata (session_id, metadata) VALUES (?, ?)",
+                    ("legacy-2", json.dumps({"platform": "google_chat",
+                                             "user_id": "user@example.com"})),
+                )
+            conn.close()
+
+            sm = SessionManager(db_path=db_path)
+            for key in ("HERMES_USER_ID", "HERMES_SENDER_ID"):
+                os.environ.pop(key, None)
+            context = sm.current_context("legacy-2")
+
+        self.assertEqual(context["sender_id"], "")
+        self.assertEqual(context["user_id"], "")
+
+    def test_current_context_keeps_an_opaque_user_id(self):
+        """A Slack member id carries no `@` and is already a pseudonym."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "session_kv.db"
+            conn = sqlite3.connect(str(db_path))
+            with conn:
+                conn.execute(
+                    "CREATE TABLE session_metadata (session_id TEXT PRIMARY KEY,"
+                    " metadata TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT INTO session_metadata (session_id, metadata) VALUES (?, ?)",
+                    ("slack-1", json.dumps({"platform": "slack",
+                                            "user_id": "U012ABCDEF"})),
+                )
+            conn.close()
+
+            sm = SessionManager(db_path=db_path)
+            for key in ("HERMES_USER_ID", "HERMES_SENDER_ID"):
+                os.environ.pop(key, None)
+            context = sm.current_context("slack-1")
+
+        self.assertEqual(context["sender_id"], "U012ABCDEF")
+        self.assertEqual(context["user_id"], "slack:U012ABCDEF")
         self.assertNotIn("user_email", SessionManager.SESSION_METADATA_KEYS)
         self.assertNotIn("user_email", sm.filter_session_metadata(context["metadata"]))
         self.assertNotIn(
