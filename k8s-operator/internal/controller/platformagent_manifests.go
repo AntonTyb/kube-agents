@@ -69,6 +69,19 @@ const (
 	sharedStateSetupSkip   = "skip"
 )
 
+// The single model name LiteLLM is configured to serve, used both in the profile
+// config the gateway reads and in the API server's own default. The two must agree:
+// the API server resolves its model once at startup, and a mismatch means every
+// session it creates asks LiteLLM for a model that does not exist.
+const agentModelName = "model-default"
+
+// The API server picks its model from API_SERVER_MODEL_NAME, then the active profile
+// name, then a hardcoded "hermes-agent". The profile name is skipped for a custom
+// provider, so without this the fallback wins and LiteLLM rejects every request the
+// API server makes. Chat is unaffected — it resolves per message, not at startup —
+// which is why only sessions created through the API fail.
+const apiServerModelEnvVar = "API_SERVER_MODEL_NAME"
+
 // getDefaultStorageConfig returns the access modes and storage class name based on the replica count and user configuration.
 func getDefaultStorageConfig(agent *agentv1alpha1.PlatformAgent) ([]corev1.PersistentVolumeAccessMode, *string) {
 	replicas, _ := resolveDeploymentReplicasAndStrategy(agent.Spec.Deployment)
@@ -606,8 +619,8 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 
 	// Model & Terminal configuration
 	cfg.Model.Provider = "custom"
-	cfg.Model.Default = "model-default"
-	cfg.Model.Model = "model-default"
+	cfg.Model.Default = agentModelName
+	cfg.Model.Model = agentModelName
 	cfg.Model.BaseURL = fmt.Sprintf("http://litellm.%s.svc.cluster.local/v1", agent.Namespace)
 	cfg.Model.APIKey = "none"
 	cfg.Terminal.Backend = "local"
@@ -731,16 +744,23 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// Execution & Display UX configuration
 	cfg.Approvals.CronMode = "approve"
 	cfg.Web.Backend = "ddgs"
-	// Default built-in plugins pre-installed in the Hermes container image, plus
-	// legacy_slash_commands. That one rides on the default profile because it hooks
-	// pre_gateway_dispatch on inbound chat messages so a typed "/hermes sethome" reaches
-	// the gateway command dispatcher instead of drawing an unknown-command reply — chat
-	// ingress lands here, not on the platform specialist. It is not in
-	// DefaultBuiltInPlugins because that list is also the roster an AgentPlugin may not
-	// shadow, and this plugin ships in agents/chat/defaults/plugins rather than the image.
-	// Keep in sync with agents/chat/config.yaml — this copy is authoritative on the
-	// deployed default profile.
-	cfg.Plugins.Enabled = append(slices.Clone(DefaultBuiltInPlugins), "legacy_slash_commands")
+	// Default built-in plugins pre-installed in the Hermes container image, plus two
+	// that ride on the default profile specifically:
+	//
+	//   legacy_slash_commands hooks pre_gateway_dispatch on inbound chat messages so a
+	//   typed "/hermes sethome" reaches the gateway command dispatcher instead of drawing
+	//   an unknown-command reply — chat ingress lands here, not on the platform specialist.
+	//
+	//   agent_roster hooks pre_llm_call to inject the list of routable specialists into
+	//   every turn. The front door cannot delegate without naming an assignee, and it was
+	//   spending a full LLM roundtrip on the list_agents tool to re-read what amounts to a
+	//   directory listing; the tool remains as the refresh path.
+	//
+	// Neither is in DefaultBuiltInPlugins, because that list is also the roster an
+	// AgentPlugin may not shadow, and both ship in agents/chat/defaults/plugins rather
+	// than the image. Keep in sync with agents/chat/config.yaml — this copy is
+	// authoritative on the deployed default profile.
+	cfg.Plugins.Enabled = append(slices.Clone(DefaultBuiltInPlugins), "legacy_slash_commands", "agent_roster")
 	cfg.Display.Platforms = map[string]map[string]any{}
 	// Per-user memory. The built-in MEMORY.md/USER.md store stays off; the
 	// multiuser_memory provider replaces it and keys each user's notes off the
@@ -1938,6 +1958,12 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 	gatewayEnvVars := append(append([]corev1.EnvVar{}, envVars...), corev1.EnvVar{
 		Name:  sharedStateSetupEnvVar,
 		Value: sharedStateSetupOwner,
+	}, corev1.EnvVar{
+		// Appended after the merge for the same reason as the variable above: it has
+		// to agree with the model in the generated profile config, and an override
+		// that disagrees breaks every API-created session rather than failing visibly.
+		Name:  apiServerModelEnvVar,
+		Value: agentModelName,
 	})
 
 	containers := []corev1.Container{
