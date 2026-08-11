@@ -73,7 +73,7 @@ These keys are platform-neutral. For Google Chat, the Chat space is stored as
 No plaintext identity is stored. `user_email_hash` is an HMAC-SHA256 digest
 salted with `SESSION_KV_SALT`, and `user_id` gets the same treatment whenever it
 looks like an address — which on Google Chat it always does, because the Chat
-"user id" *is* the address. A Slack member id contains no `@`, is already a
+"user id" _is_ the address. A Slack member id contains no `@`, is already a
 pseudonym, and stays readable so an operator can still resolve it against the
 Slack directory. The hash is stable for as long as the salt is, so sessions from
 the same person still correlate; the salt is generated once at install and

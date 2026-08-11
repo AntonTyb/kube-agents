@@ -697,7 +697,10 @@ func TestBuildDeployment(t *testing.T) {
 		t.Fatalf("expected credential proxy SESSION_KV_API_KEY from a Secret, got %#v", proxyEnv["SESSION_KV_API_KEY"])
 	}
 	sandboxSessionKV := envMap["SESSION_KV_API_KEY"].ValueFrom.SecretKeyRef
-	if *proxySessionKV.SecretKeyRef != *sandboxSessionKV {
+	// DeepEqual rather than `*a != *b`: SecretKeySelector carries Optional as a
+	// *bool, so struct equality compares two separately allocated pointers by
+	// address and never matches, however identical the keys are.
+	if !reflect.DeepEqual(proxySessionKV.SecretKeyRef, sandboxSessionKV) {
 		t.Errorf("sandbox and credential proxy disagree on the Session KV key: %#v vs %#v",
 			sandboxSessionKV, proxySessionKV.SecretKeyRef)
 	}
