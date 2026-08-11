@@ -71,4 +71,3 @@ updates:
       - "docker"
     commit-message:
       prefix: "ci"
-

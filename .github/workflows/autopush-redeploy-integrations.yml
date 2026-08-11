@@ -39,4 +39,3 @@ jobs:
       target_environment: "autopush"
       force_deploy: ${{ github.event_name == 'workflow_dispatch' }}
       checkout_ref: ${{ github.ref }}
-
