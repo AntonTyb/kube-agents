@@ -48,8 +48,11 @@ the agent a usable kubectl context) when it has the complete triple; with one mi
 | `hermes.apiServerSecretRef.name` + `key` | string | `Secret` holding the Hermes API server key (`API_SERVER_KEY`).                       |
 | `memory.memoryEnabled`                   | bool   | Toggle framework memory persistence. Default `false`.                                |
 | `memory.provider`                        | string | Memory provider implementation. Default `multiuser_memory`.                          |
-| `memory.userProfileEnabled`              | bool   | Toggle per-user memory profiling. Default `false`.                                   |
-| `tuning.<persona>.apiMaxRetries`         | int    | Model-call retries before a run gives up. Unset = Hermes default `3`.                |
+| `memory.userProfileEnabled`              | bool     | Toggle per-user memory profiling. Default `false`.                                   |
+| `approvals.cronMode`                     | string   | Approval policy for cron watchdogs (`restricted` or `approve`). Default `restricted`.|
+| `approvals.allowedAutonomousVerbs`       | []string | Verbs permitted for autonomous execution without approval. Default `["get", "list", "describe", "logs"]`. |
+| `approvals.requireHumanApprovalFor`      | []string | Actions requiring explicit human approval. Default `["delete", "patch", "apply", "exec", "drain"]`. |
+| `tuning.<persona>.apiMaxRetries`         | int      | Model-call retries before a run gives up. Unset = Hermes default `3`.                |
 | `tuning.<persona>.maxTurns`              | int    | Iterations allowed in a single turn. Unset = Hermes default `90`.                    |
 | `tuning.maxInProgress`                   | int    | Board-wide cap on concurrent kanban workers. Unset = uncapped (upstream).            |
 

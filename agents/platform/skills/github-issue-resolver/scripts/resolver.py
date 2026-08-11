@@ -344,10 +344,8 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     return cleaned.strip()
 
 
-def calculate_issue_priority(issue: dict) -> tuple[int, str]:
-    """Calculates multi-factor priority score and priority label for an issue.
-    Returns (score, priority_label).
-    """
+def _label_names(issue: dict) -> set[str]:
+    """Extracts a normalized lowercased set of label names from an issue dictionary."""
     labels_raw = issue.get("labels") or []
     label_names = set()
     for l in labels_raw:
@@ -359,6 +357,14 @@ def calculate_issue_priority(issue: dict) -> tuple[int, str]:
             name = ""
         if name:
             label_names.add(name.lower())
+    return label_names
+
+
+def calculate_issue_priority(issue: dict) -> tuple[int, str]:
+    """Calculates multi-factor priority score and priority label for an issue.
+    Returns (score, priority_label).
+    """
+    label_names = _label_names(issue)
 
     score = 0
     priority_label = "UNLABELLED"
@@ -405,17 +411,7 @@ def evaluate_risk_tier(issue: dict) -> str:
     """Evaluates the risk tier of an issue based on content keywords and labels.
     Returns one of: TIER_1_READ_ONLY, TIER_2_NON_DESTRUCTIVE, TIER_3_MUTATING.
     """
-    labels_raw = issue.get("labels") or []
-    label_names = set()
-    for l in labels_raw:
-        if isinstance(l, dict):
-            name = l.get("name", "")
-        elif isinstance(l, str):
-            name = l
-        else:
-            name = ""
-        if name:
-            label_names.add(name.lower())
+    label_names = _label_names(issue)
 
     # Security labels -> Tier 3
     if any(
@@ -435,8 +431,8 @@ def evaluate_risk_tier(issue: dict) -> str:
 
     # Explicit destructive / mutating action verbs or privileged request patterns
     tier3_patterns = [
-        r"\b(delete|remove|destroy|drop|kill|drain|truncate|format|overwrite|purge|wipe|cleanup|clean\s+up)\b",
-        r"\b(grant\s+admin|escalate\s+privilege|dump\s+secret|export\s+credential)\b",
+        r"\b(delete|remove|destroy|kill|drain|truncate|overwrite|purge|wipe|cleanup|clean\s+up)\b",
+        r"\b(grant\s+admin|escalate\s+privilege|dump\s+secret|export\s+credential|drop\s+database|drop\s+table|format\s+disk)\b",
     ]
     if any(re.search(pat, prose_content) for pat in tier3_patterns):
         return "TIER_3_MUTATING"
@@ -547,13 +543,13 @@ def handle_poll(args):
     scored_issues = []
     for x in issues:
         score, label = calculate_issue_priority(x)
-        tier = evaluate_risk_tier(x)
         created_at = x.get("createdAt") or ""
-        scored_issues.append((score, created_at, int(x["number"]), label, tier, x))
+        scored_issues.append((score, created_at, int(x["number"]), label, x))
 
     scored_issues.sort(key=lambda item: (-item[0], item[1], item[2]))
 
-    target_score, target_created, target_num, priority_label, risk_tier, target = scored_issues[0]
+    _, _, _, priority_label, target = scored_issues[0]
+    risk_tier = evaluate_risk_tier(target)
 
     comments = []
     for c in target.get("comments") or []:
@@ -569,6 +565,9 @@ def handle_poll(args):
             }
         )
 
+    raw_title = target.get("title") or ""
+    sanitized_title = sanitize_untrusted_text(raw_title)
+
     print(
         json.dumps(
             {
@@ -577,7 +576,8 @@ def handle_poll(args):
                 "issue_number": target["number"],
                 "priority": priority_label,
                 "risk_tier": risk_tier,
-                "title": f"<untrusted_title>{sanitize_untrusted_text(target.get('title') or '')}</untrusted_title>",
+                "title": f"<untrusted_title>{sanitized_title}</untrusted_title>",
+                "title_plain": sanitized_title,
                 "body": f"<untrusted_body>{sanitize_untrusted_text(target.get('body') or '')}</untrusted_body>",
                 "comments": comments,
             },

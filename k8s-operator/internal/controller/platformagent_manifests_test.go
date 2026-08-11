@@ -206,8 +206,9 @@ func TestBuildConfigMap_Approvals(t *testing.T) {
 		Spec: agentv1alpha1.PlatformAgentSpec{
 			Harness: &agentv1alpha1.HarnessSpec{
 				Approvals: &agentv1alpha1.ApprovalsSpec{
-					CronMode:               "approve",
-					AllowedAutonomousVerbs: []string{"get", "list"},
+					CronMode:                 "approve",
+					AllowedAutonomousVerbs:   []string{"top"},
+					RequireHumanApprovalFor: []string{"cordon"},
 				},
 			},
 		},
@@ -219,8 +220,11 @@ func TestBuildConfigMap_Approvals(t *testing.T) {
 	if !strings.Contains(yamlContent, "cron_mode: approve") {
 		t.Errorf("expected config to contain cron_mode: approve override, got:\n%s", yamlContent)
 	}
-	if !strings.Contains(yamlContent, "- get") {
-		t.Errorf("expected config to contain custom allowed_autonomous_verbs, got:\n%s", yamlContent)
+	if !strings.Contains(yamlContent, "- top") || strings.Contains(yamlContent, "- describe") {
+		t.Errorf("expected config to contain custom allowed_autonomous_verbs with only 'top', got:\n%s", yamlContent)
+	}
+	if !strings.Contains(yamlContent, "- cordon") || strings.Contains(yamlContent, "- delete") {
+		t.Errorf("expected config to contain custom require_human_approval_for with only 'cordon', got:\n%s", yamlContent)
 	}
 }
 
