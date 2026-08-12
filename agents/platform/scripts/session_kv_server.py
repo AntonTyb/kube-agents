@@ -105,8 +105,18 @@ def _purge_plaintext_identities(conn: sqlite3.Connection) -> None:
 
     Stripping rather than deleting: the row also carries `chat_id`/`thread_id`,
     and dropping it would break threaded replies for conversations that are
-    still open. The hash is not recomputed here — the salt lives in the sandbox
-    container, not this one — but it reappears on the user's next message.
+    still open.
+
+    The hash is not recomputed, and the reason is not container topology: this
+    server runs in the sandbox container, which does carry `SESSION_KV_SALT`.
+    It is that the *fallback* instance — the one `start_session_kv_server()` in
+    platform_mcp_server.py spawns — inherits the stdio MCP allowlist in
+    agents/platform/config.yaml, which names `SESSION_KV_API_KEY` and not the
+    salt. Rehashing on that path would write a digest under some other salt,
+    stored permanently and uncorrelated with every hash the Chat Agent plugins
+    produce — worse than an absent value, because dropping the field costs one
+    message's worth of identity and no more: the plugins rewrite the hash on
+    the user's next turn.
     """
     try:
         rows = conn.execute("SELECT session_id, metadata FROM session_metadata").fetchall()

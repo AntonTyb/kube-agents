@@ -52,6 +52,62 @@ class TestRedactText(unittest.TestCase):
         result = self.assertRedacted("Authorization: Bearer abcdefghij0123456789", "abcdefghij")
         self.assertIn("Bearer [REDACTED_SECRET]", result)
 
+    def test_basic_auth_keeps_the_scheme(self):
+        # base64 of `admin:hunter2`, i.e. the credential shape a `curl -u` in a
+        # tool argument leaves behind.
+        result = self.assertRedacted(
+            "Authorization: Basic YWRtaW46aHVudGVyMg==", "YWRtaW46aHVudGVyMg"
+        )
+        self.assertIn("Basic [REDACTED_SECRET]", result)
+
+    def test_slack_bot_token(self):
+        token = "xoxb-1234567890-" + "D" * 24
+        self.assertRedacted(f"slack_bot_token was {token}", token)
+
+    def test_github_fine_grained_pat(self):
+        token = "github_pat_" + "E" * 40
+        self.assertRedacted(f"cloned with {token}", token)
+
+    def test_jwt_is_redacted(self):
+        # The shape of a projected ServiceAccount token, which is the one most
+        # likely to land in a tool result inside this pod.
+        jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW0iLCJhdWQiOlsiazhzIl19.c2lnbmF0dXJlXw"
+        self.assertRedacted(f"token: {jwt}", jwt)
+
+    def test_prefixed_key_names_are_matched(self):
+        # `\bapi_key` matches neither of these: `_` is a word character, so the
+        # boundary the old pattern wanted is never there.
+        for text, secret in (
+            ("SESSION_KV_API_KEY=abc123def456", "abc123def456"),
+            ("ANTHROPIC_API_KEY: sk-live-value", "sk-live-value"),
+        ):
+            with self.subTest(text=text):
+                result = self.assertRedacted(text, secret)
+                # The key survives in full, prefix included, or the record no
+                # longer says which credential was present.
+                self.assertIn(text.split("=")[0].split(":")[0], result)
+
+    def test_secret_data_block_is_blanked_whatever_the_keys_are_called(self):
+        manifest = (
+            "apiVersion: v1\n"
+            "kind: Secret\n"
+            "metadata:\n"
+            "  name: platform-agent-secrets\n"
+            "data:\n"
+            "  SESSION_KV_API_KEY: YWJjMTIz\n"
+            "  SESSION_KV_SALT: c2FsdHk=\n"
+            "  ANTHROPIC_API_KEY: c2stbGl2ZQ==\n"
+            "type: Opaque\n"
+        )
+        result = AuditRedactor.redact_text(manifest)
+        for value in ("YWJjMTIz", "c2FsdHk=", "c2stbGl2ZQ=="):
+            self.assertNotIn(value, result)
+        # The keys stay: the record has to say what was there.
+        self.assertIn("SESSION_KV_SALT: [REDACTED_SECRET]", result)
+        # And the block ends where the indentation does.
+        self.assertIn("type: Opaque", result)
+        self.assertIn("name: platform-agent-secrets", result)
+
     def test_github_token(self):
         token = "ghp_" + "B" * 36
         self.assertRedacted(f"remote uses {token} today", token)
@@ -85,9 +141,22 @@ class TestRedactText(unittest.TestCase):
             # thing an operator greps an IAM audit record for.
             "binding kube-agents-platform@my-proj.iam.gserviceaccount.com to roles/container.admin",
             "annotate sa default gcp-sa@my-proj.iam.gserviceaccount.com",
+            # Ending a sentence must not cost the exemption.
+            "granted to gcp-sa@my-proj.iam.gserviceaccount.com.",
         ):
             with self.subTest(text=text):
                 self.assertEqual(AuditRedactor.redact_text(text), text)
+
+    def test_the_service_account_exemption_is_anchored_at_both_edges(self):
+        # A domain that merely contains the label sequence is not a service
+        # account: neither a prefix nor a suffix may extend it.
+        for text, address in (
+            ("mail victim@corp.gserviceaccount.com.attacker.io now", "victim@corp"),
+            ("mail a@notgserviceaccount.com now", "a@notgserviceaccount.com"),
+            ("mail b@foo.gserviceaccount.company.com now", "b@foo"),
+        ):
+            with self.subTest(text=text):
+                self.assertRedacted(text, address)
 
 
 class TestRedactStructures(unittest.TestCase):

@@ -78,20 +78,52 @@ class AuditRedactor:
     )
     GCP_API_KEY_PATTERN = re.compile(r"AIza[0-9A-Za-z\-_]{35}")
     GCP_OAUTH_TOKEN_PATTERN = re.compile(r"ya29\.[0-9A-Za-z\-_.]{20,}")
-    BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bbearer\s+([a-zA-Z0-9_\-.=]{15,})")
+    # `basic` as well as `bearer`, and the base64 alphabet in the value: a
+    # `Authorization: Basic <b64>` header is a credential in exactly the way a
+    # bearer token is. The scheme is preserved so the record still says which.
+    BEARER_TOKEN_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+([a-zA-Z0-9_\-.=+/]{12,})")
     GITHUB_TOKEN_PATTERN = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")
     OPENAI_TOKEN_PATTERN = re.compile(r"sk-[A-Za-z0-9]{20,}")
+    # The three token shapes this redactor was missing that `redact_secrets` in
+    # agents/platform/skills/fleet-audit/scripts/audit_report.py already had.
+    # The JWT shape is what a projected ServiceAccount token looks like, so it
+    # is the one most likely to reach a tool result in this deployment.
+    GITHUB_PAT_PATTERN = re.compile(r"github_pat_[A-Za-z0-9_]{20,}")
+    SLACK_TOKEN_PATTERN = re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")
+    JWT_PATTERN = re.compile(
+        r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"
+    )
+    # The key name may carry a prefix — `SESSION_KV_API_KEY` and
+    # `ANTHROPIC_API_KEY` are the two this repository writes most often, and a
+    # bare `\b` before `api_key` matches neither, because `_` is a word
+    # character. The trailing `\b` still does the work that matters:
+    # `TOKENIZER_PATH` does not match, since `token` is not followed by one.
     SECRET_KV_PATTERN = re.compile(
-        r"(?i)\b(password|passwd|secret|token|api_key|apikey|access_token|client_secret)\b"
+        r"(?i)\b([\w.\-]*?(?:password|passwd|secret|token|api[_-]?key|apikey"
+        r"|access[_-]?token|client[_-]?secret))\b"
         r"([\"']?\s*[:=]\s*)([\"']?)([^\"'\s,}{\]]+)\3"
     )
+    # The opener of a Kubernetes Secret payload, and a key/value pair indented
+    # under it. Everything in that block is credential material whatever the
+    # individual keys are called, which is the one thing neither the key-name
+    # heuristic nor a token shape can see. Ported from `_redact_secret_blocks`
+    # in audit_report.py; a ConfigMap's `data:` is blanked too, which costs an
+    # audit record some readability and is the safe direction to err in.
+    SECRET_BLOCK_PATTERN = re.compile(r"^(\s*)(data|stringData)\s*:\s*$")
+    INDENTED_PAIR_PATTERN = re.compile(r"^(\s*)([\w.\-/]+)\s*:\s*(\S.*)$")
     # The negative lookahead exempts GCP service-account addresses. They are not
     # personal data, and in this repository the principal is the one thing an
     # operator greps an IAM audit record for — redacting it leaves a record that
     # says which role was granted on which resource but not to whom, which is
     # the over-eager-redactor failure mode that gets redaction switched off.
+    #
+    # Both edges of the exemption are anchored. On the left, whole labels, so
+    # `a@notgserviceaccount.com` is still redacted. On the right, `(?!\.?[\w\-])`
+    # rather than `\b`, so a domain that merely *contains* the label sequence —
+    # `victim@corp.gserviceaccount.com.attacker.io` — is redacted too, while an
+    # address that simply ends a sentence still is not.
     EMAIL_PATTERN = re.compile(
-        r"[a-zA-Z0-9._%+\-]+@(?!(?:[a-zA-Z0-9\-]+\.)*gserviceaccount\.com\b)"
+        r"[a-zA-Z0-9._%+\-]+@(?!(?:[a-zA-Z0-9\-]+\.)*gserviceaccount\.com(?!\.?[\w\-]))"
         r"[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
     )
 
@@ -125,14 +157,46 @@ class AuditRedactor:
         return {word for word in words if word}
 
     @classmethod
+    def _redact_secret_blocks(cls, text: str) -> str:
+        """Blank every value indented under a `data:` / `stringData:` key.
+
+        A line scan rather than a YAML parse, because what reaches here is a
+        tool result — a fragment as often as a document — and indentation is
+        the only structure a fragment reliably carries.
+        """
+        if "data:" not in text and "stringData:" not in text:
+            return text
+        out = []
+        block_indent: Optional[int] = None
+        for line in text.split("\n"):
+            opener = cls.SECRET_BLOCK_PATTERN.match(line)
+            if opener:
+                block_indent = len(opener.group(1))
+                out.append(line)
+                continue
+            if block_indent is not None:
+                pair = cls.INDENTED_PAIR_PATTERN.match(line)
+                if pair and len(pair.group(1)) > block_indent:
+                    out.append(f"{pair.group(1)}{pair.group(2)}: [REDACTED_SECRET]")
+                    continue
+                if line.strip() and (len(line) - len(line.lstrip())) <= block_indent:
+                    block_indent = None
+            out.append(line)
+        return "\n".join(out)
+
+    @classmethod
     def redact_text(cls, text: str) -> str:
         if not text:
             return text
         text = cls.PRIVATE_KEY_PATTERN.sub("[REDACTED_PRIVATE_KEY]", text)
+        text = cls._redact_secret_blocks(text)
         text = cls.GCP_API_KEY_PATTERN.sub("[REDACTED_SECRET]", text)
         text = cls.GCP_OAUTH_TOKEN_PATTERN.sub("[REDACTED_SECRET]", text)
-        text = cls.BEARER_TOKEN_PATTERN.sub("Bearer [REDACTED_SECRET]", text)
+        text = cls.BEARER_TOKEN_PATTERN.sub(r"\1 [REDACTED_SECRET]", text)
         text = cls.GITHUB_TOKEN_PATTERN.sub("[REDACTED_SECRET]", text)
+        text = cls.GITHUB_PAT_PATTERN.sub("[REDACTED_SECRET]", text)
+        text = cls.SLACK_TOKEN_PATTERN.sub("[REDACTED_SECRET]", text)
+        text = cls.JWT_PATTERN.sub("[REDACTED_SECRET]", text)
         text = cls.OPENAI_TOKEN_PATTERN.sub("[REDACTED_SECRET]", text)
         text = cls.SECRET_KV_PATTERN.sub(r"\1\2\3[REDACTED_SECRET]\3", text)
         text = cls.EMAIL_PATTERN.sub("[REDACTED_EMAIL]", text)

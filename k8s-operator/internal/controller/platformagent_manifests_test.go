@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -1202,6 +1203,43 @@ func TestExampleCRDoesNotPinPublicRegistry(t *testing.T) {
 			t.Errorf("example CR pins spec.deployment.image to a public registry (%q); omit the field so private-registry installs are not silently overridden", img)
 		}
 	}
+}
+
+// TestEventWatcherTokenEnvMatchesStartServices ties the two halves of the
+// watcher's bearer-token wiring together. deploy/shared/start-services.sh names
+// the variable in --token-env; this package injects a variable of that name into
+// the credential-proxy container. Nothing else reads the shell script, so a
+// rename on this side passes `go test` while the script keeps the old name — and
+// the watcher then exits on every start with "bearer token env var ... is empty",
+// in a container that stays Ready. Deriving the expected name from the script
+// rather than hardcoding it is the point: both sides have to move together.
+func TestEventWatcherTokenEnvMatchesStartServices(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "deploy", "shared", "start-services.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	match := regexp.MustCompile(`--token-env=([A-Za-z_][A-Za-z0-9_]*)`).FindSubmatch(data)
+	if match == nil {
+		t.Fatalf("%s no longer passes --token-env to k8s-event-watcher; the watcher cannot authenticate to the Session KV server without it", path)
+	}
+	tokenEnv := string(match[1])
+
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-agent", Namespace: "my-ns"},
+	}
+	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456", nil, renderOptions{imageVolumeSupported: true})
+	proxyC := containerByName(t, dep.Spec.Template.Spec.Containers, "envoy-credential-proxy")
+	for _, env := range proxyC.Env {
+		if env.Name != tokenEnv {
+			continue
+		}
+		if env.Value == "" && env.ValueFrom == nil {
+			t.Fatalf("credential proxy sets %s to nothing; the watcher treats an empty token as fatal", tokenEnv)
+		}
+		return
+	}
+	t.Fatalf("%s passes --token-env=%s, but the credential proxy container has no such variable; the watcher will exit on every start", path, tokenEnv)
 }
 
 func TestBuildDeploymentGoogleChatAllowedUsersEmpty(t *testing.T) {
