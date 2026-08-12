@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The Platform Agent's runtime wiring is declared in [`agents/platform/config.yaml`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/config.yaml). It tells Hermes which MCP servers to start, which toolsets to expose to which surfaces, and which plugins to load.
+The Platform Agent's runtime wiring is declared in [`agents/platform/config.yaml`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/config.yaml). It tells Hermes which MCP servers the agent can reach, which toolsets to expose to which surfaces, and which plugins to load.
 
 The pod's other profiles have their own configs. The Chat Agent's deliberately minimal [`agents/chat/config.yaml`](https://github.com/gke-labs/kube-agents/blob/main/agents/chat/config.yaml): a `router` MCP server for specialist discovery, toolsets pinned to `mcp-router` + `kanban` + the `memory` gate on every surface (including the real `google_chat` ingress key), the chat-side plugins (`session_store`, `session_otel_bridge`, `tool_call_audit`, the first-run `bootstrap_onboarding` hook, `legacy_slash_commands`, which unwraps a typed `/hermes <subcommand>` into the real gateway command — see its [README](https://github.com/gke-labs/kube-agents/blob/main/agents/chat/defaults/plugins/legacy_slash_commands/README.md) — and `agent_roster`, which injects the routable specialists into every turn so delegation needs no `list_agents` roundtrip, see its [README](https://github.com/gke-labs/kube-agents/blob/main/agents/chat/defaults/plugins/agent_roster/README.md)), the `multiuser_memory` provider for per-user memory writes (see [`memory`](#memory) below for why it lives on this profile only), and no file or cloud tools. Note that on an operator-deployed pod the repository file is _not_ what runs: the operator renders its own `config.yaml` into the `<agent>-config` ConfigMap and mounts it over `/opt/data/config.yaml`, so the operator's version wins on the default profile and `agents/chat/config.yaml` must be kept in sync with it — see [Operator](/kube-agents/operator/). The Platform Agent's own `config.yaml` has no such caveat: it is image-owned and force-synced from the baked template on every start. The per-cluster Cluster Agents are stamped from the read-only [`agents/cluster/config.yaml`](https://github.com/gke-labs/kube-agents/blob/main/agents/cluster/config.yaml) template — see [Cluster Agents](/kube-agents/concepts/cluster-agents/). This page annotates the Platform Agent's file; the other two are self-documenting by design.
 
@@ -19,6 +19,7 @@ mcp_servers:
     args:
       - "/opt/data/scripts/platform_mcp_server.py"
     connect_timeout: 120
+    lazy: true
     # 5-minute timeout to support long GKE reasoning chains
     timeout: 300
     env:
@@ -34,6 +35,7 @@ mcp_servers:
     args:
       - "/opt/mcp-remote/dist/proxy.js"
       - "https://container.googleapis.com/mcp"
+    lazy: true
 
 platform_toolsets:
   cli:
@@ -77,12 +79,14 @@ plugins:
 
 ### `mcp_servers`
 
-MCP servers Hermes starts and connects to.
+MCP servers Hermes exposes to the agent. `agent_common` and `developer_knowledge` are not listed here — they come from the shared defaults this file is merged onto at image build.
+
+Every server is `lazy: true`, so none of them is started at boot. Hermes registers a server's tools from the profile's `cache/mcp_schema_cache.json` and spawns the child process on the first call to one of its tools. The agent sees an identical tool list either way; what changes is who pays the connect. It matters because most Platform Agent turns run in a throwaway kanban worker, and connecting all four servers cost each of those workers roughly three seconds before the agent could say anything — a cost the long-lived gateway pays once at boot and a worker re-paid every task. The trade is that a server which cannot start now fails on its first tool call rather than at startup.
 
 - **`platform_control`** — In-pod Python MCP server (`agents/platform/scripts/platform_mcp_server.py`). Handles session state and agent-internal ops (chat ingress lives with the Chat Agent). The `env:` block is an allowlist rather than a pass-through: Hermes gives a stdio MCP server a safe baseline (`PATH`, `HOME`, `TMPDIR`, `XDG_*`) plus exactly the keys named there and drops every other pod variable, so anything a tool needs has to be listed. Currently the Kubernetes DNS variables, Hermes home, the Chat Pub/Sub config, the Google Chat home channel, and the API server key. The home channel is what `send_notification` falls back to when a notification has no thread to reply into — every alert-driven investigation — and it needs `spec.integration.googleChat.homeChannel` set to carry a value; see the comment on that key in the source file.
 - **`gke`** — Remote GKE MCP server proxied via `mcp-remote`. All Kubernetes/GKE reads and writes route through this endpoint.
 
-`connect_timeout: 120` allows for cold-start latency; `timeout: 300` accommodates long reasoning chains.
+`connect_timeout: 120` allows for cold-start latency — under `lazy` it bounds the first tool call rather than startup; `timeout: 300` accommodates long reasoning chains.
 
 ### `platform_toolsets`
 
