@@ -1,6 +1,7 @@
 name: RC Step 4 - Validate Candidate Commit
 
 on:
+  #checkov:skip=CKV_GHA_7:Standalone launch requires release candidate tag or commit SHA input
   workflow_dispatch:
     inputs:
       rc_tag:
