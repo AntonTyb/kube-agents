@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit]
     uses: ./.github/workflows/reusable-deploy-integrations.yml
     with:
       target_environment: "staging"
