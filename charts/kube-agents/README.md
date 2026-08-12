@@ -33,9 +33,15 @@ Canonical GKE-oriented Helm chart for deploying the Kube-Agents Kubernetes Opera
   values forward on upgrade — rotating the salt would re-anonymise every user,
   severing their past sessions from their future ones. With `create=false`,
   whatever created the Secret supplies them; `provision_07_gcp_k8s_secrets.sh`
-  and the Terraform example both do. Both are optional: absent, the Session KV
-  server answers `503` and identity hashing falls back to a per-pod salt with a
-  warning, rather than the pod failing to start.
+  and the Terraform example both do.
+
+  Absent, the pod starts anyway — but the in-pod `k8s-event-watcher`
+  authenticates with `SESSION_KV_API_KEY`, treats an empty value as fatal, and
+  exits on every start, so **no cluster events are watched at all**; the
+  container stays Ready and its log is the only place that says so. The Session
+  KV server also answers `503` to every request, and identity hashing falls back
+  to a per-pod salt with a warning. Add the keys to the Secret before upgrading
+  an installation that predates them.
 
 ## Usage
 

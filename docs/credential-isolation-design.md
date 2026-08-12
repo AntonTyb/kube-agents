@@ -154,10 +154,16 @@ first, which is exactly what it exists to prevent.
 
 Deliberately _not_ `API_SERVER_KEY`: that value is the non-secret loopback
 sentinel `cluster-internal-trusted`, so reusing it here would authenticate
-nothing. Both keys are optional in the CRD. Absent, the Session KV server
-refuses every authenticated request with a 503 and says why, and identity
-hashing falls back to a per-process random salt with one warning — a missing
-key degrades the deployment, it does not wedge it.
+nothing. Both keys are optional in the CRD, so a Secret without them yields
+containers without the variables rather than a pod that will not start. What
+that costs is worth stating precisely, because one of the three consequences is
+not a degradation: the `k8s-event-watcher` in the credential sidecar
+authenticates to the Session KV server with `SESSION_KV_API_KEY` and treats an
+empty value as fatal, so it exits on every start and **no cluster events are
+watched at all** — silently, since the container stays Ready and no probe covers
+the watcher. The other two are degradations: the Session KV server refuses every
+authenticated request with a 503 and says why, and identity hashing falls back
+to a per-process random salt with one warning.
 
 The projected token uses the audience `kubeagents-credential-proxy`, expires
 after one hour, and is mounted only at

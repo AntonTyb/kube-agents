@@ -321,11 +321,26 @@ kubectl create secret generic platform-agent-secrets \
 
 The last two are generated, not chosen: `SESSION_KV_API_KEY` is the bearer token
 for the pod-local Session KV server, and `SESSION_KV_SALT` is the HMAC salt that
-pseudonymises chat identities before they are written to disk. Both are
-optional — without them the agent still runs, but the Session KV server rejects
-every request and identity pseudonyms stop being stable across pod restarts.
-Keep the salt: rotating it re-anonymises every user, severing their past
-sessions from their future ones.
+pseudonymises chat identities before they are written to disk. Keep the salt:
+rotating it re-anonymises every user, severing their past sessions from their
+future ones.
+
+Both are optional in the sense that the pod still starts without them, but
+`SESSION_KV_API_KEY` is not optional in practice: the in-pod `k8s-event-watcher`
+authenticates with it, treats an empty value as fatal, and exits on every start
+— so **no cluster events are watched at all**, in a container that stays Ready
+and a CR whose `.status` says nothing. The Session KV server also answers `503`
+to every request (losing chat-thread resolution and incident lookup), and
+identity pseudonyms stop being stable across pod restarts. If you are upgrading
+an installation that predates these keys, `upgrade.sh` adds them to the existing
+Secret before it rolls the agent; a Helm or Terraform install supplies them
+itself. To add them by hand:
+
+```bash
+kubectl patch secret platform-agent-secrets -n kubeagents-system --type=merge \
+  -p "{\"stringData\":{\"SESSION_KV_API_KEY\":\"$(openssl rand -hex 32)\",\"SESSION_KV_SALT\":\"$(openssl rand -hex 32)\"}}"
+kubectl rollout restart deployment/platform-agent-gateway -n kubeagents-system
+```
 
 ### Step 3: Build & Push the Operator Image
 
