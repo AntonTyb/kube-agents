@@ -2,7 +2,7 @@ name: RC Release E2E Pipeline
 
 on:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "17 */3 * * *"
   #checkov:skip=CKV_GHA_7:Manual release candidate pipeline requires target commit sha and tag inputs
   workflow_dispatch:
     inputs:
