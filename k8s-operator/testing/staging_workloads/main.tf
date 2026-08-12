@@ -100,8 +100,6 @@ resource "google_container_node_pool" "standard_nodes" {
     preemptible  = false
     machine_type = "e2-standard-4"
 
-
-
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
     ]
