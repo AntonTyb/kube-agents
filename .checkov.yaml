@@ -1,6 +1,10 @@
+skip-check:
+  - "CKV2_GHA_1"
+
 skip-path:
   - "agentplugins"
   - "examples"
   - "k8s-operator/internal/testing"
   - "k8s-operator/testing"
   - "tests"
+

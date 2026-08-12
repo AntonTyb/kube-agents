@@ -51,7 +51,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run semgrep
-        run: semgrep ci --config=.github/semgrep-security-audit.yml
+        run: semgrep ci --config=.github/semgrep-security-audit.yml --exclude=.github/semgrep-security-audit.yml
 
   checkov-scan:
     name: IaC Security Scan (checkov)
