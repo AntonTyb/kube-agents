@@ -576,6 +576,18 @@ spec:
               value: cluster-internal-trusted
             - name: SESSION_KV_DB_PATH
               value: /var/lib/kube-agents/session/session_kv.db
+            - name: SESSION_KV_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: SESSION_KV_API_KEY
+                  name: platform-agent-secrets
+                  optional: true
+            - name: SESSION_KV_SALT
+              valueFrom:
+                secretKeyRef:
+                  key: SESSION_KV_SALT
+                  name: platform-agent-secrets
+                  optional: true
             - name: OTEL_SERVICE_NAME
               value: platformagent-gateway
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -744,6 +756,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   key: API_SERVER_KEY
+                  name: platform-agent-secrets
+                  optional: true
+            - name: SESSION_KV_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: SESSION_KV_API_KEY
                   name: platform-agent-secrets
                   optional: true
             - name: GKE_PROJECT_ID
