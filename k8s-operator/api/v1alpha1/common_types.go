@@ -54,6 +54,20 @@ type HermesSpec struct {
 	// ApiServerSecretRef securely references a Secret containing the API_SERVER_KEY.
 	// +optional
 	ApiServerSecretRef *corev1.SecretKeySelector `json:"apiServerSecretRef,omitempty"`
+
+	// SessionKVApiKeySecretRef references the Secret key holding the bearer
+	// token for the pod-local Session KV server on port 8699. Distinct from
+	// ApiServerSecretRef: that path uses the non-secret loopback sentinel
+	// `cluster-internal-trusted`, which would authenticate nothing here.
+	// +optional
+	SessionKVApiKeySecretRef *corev1.SecretKeySelector `json:"sessionKVApiKeySecretRef,omitempty"`
+
+	// SessionKVSaltSecretRef references the Secret key holding the HMAC salt
+	// used to pseudonymise chat identities before they reach session metadata,
+	// audit logs, or OTel spans. When absent the agent generates a per-pod salt
+	// and logs a warning: hashes then stop correlating across restarts.
+	// +optional
+	SessionKVSaltSecretRef *corev1.SecretKeySelector `json:"sessionKVSaltSecretRef,omitempty"`
 }
 
 // HarnessSpec configures the core execution environment and framework-level settings for the agent.

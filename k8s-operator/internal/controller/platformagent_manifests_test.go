@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -609,11 +610,33 @@ func TestBuildDeployment(t *testing.T) {
 		if seen[env.Name] {
 			t.Errorf("duplicate env var found: %s", env.Name)
 		}
-		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+		// The allowlist is two entries long and stays that way unless someone
+		// argues the same case again. Both are pod-scoped: SESSION_KV_API_KEY
+		// authenticates callers of the Session KV server on this pod's
+		// loopback, and SESSION_KV_SALT is the HMAC salt for pseudonymising
+		// chat identities, which has to be here because the hashing is here.
+		// Neither reaches a cloud API, a repository, or anything off the pod —
+		// which is what the isolation boundary is for. A Secret-backed variable
+		// that does not meet that bar belongs in the credential-proxy container.
+		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil &&
+			env.Name != "SESSION_KV_API_KEY" && env.Name != "SESSION_KV_SALT" {
 			t.Errorf("sandbox must not receive Secret-backed environment variable %s", env.Name)
 		}
 		seen[env.Name] = true
 		envMap[env.Name] = env
+	}
+
+	for _, name := range []string{"SESSION_KV_API_KEY", "SESSION_KV_SALT"} {
+		ref := envMap[name].ValueFrom
+		if ref == nil || ref.SecretKeyRef == nil {
+			t.Fatalf("expected sandbox %s to come from a Secret, got %v", name, envMap[name])
+		}
+		if ref.SecretKeyRef.Name != "platform-agent-secrets" || ref.SecretKeyRef.Key != name {
+			t.Errorf("expected sandbox %s from platform-agent-secrets/%s, got %v", name, name, ref.SecretKeyRef)
+		}
+		if ref.SecretKeyRef.Optional == nil || !*ref.SecretKeyRef.Optional {
+			t.Errorf("expected sandbox %s to be optional so a missing key degrades rather than blocks startup", name)
+		}
 	}
 
 	if envMap["PLATFORM_AGENT_HOME"].Value != "/var/agent" {
@@ -665,6 +688,22 @@ func TestBuildDeployment(t *testing.T) {
 	apiKeyRef := proxyEnv["API_SERVER_EXTERNAL_KEY"].ValueFrom.SecretKeyRef
 	if apiKeyRef.Name != "secrets" || apiKeyRef.Key != "api-key" {
 		t.Errorf("expected external API key only in credential sidecar, got %#v", apiKeyRef)
+	}
+	// The watcher hosted here posts to the Session KV server in the sandbox
+	// container, and that server authenticates now. Both containers must resolve
+	// the same Secret key, or the watcher's every POST is a 401 and no incident
+	// is ever triaged — a failure that is silent from the outside.
+	proxySessionKV := proxyEnv["SESSION_KV_API_KEY"].ValueFrom
+	if proxySessionKV == nil || proxySessionKV.SecretKeyRef == nil {
+		t.Fatalf("expected credential proxy SESSION_KV_API_KEY from a Secret, got %#v", proxyEnv["SESSION_KV_API_KEY"])
+	}
+	sandboxSessionKV := envMap["SESSION_KV_API_KEY"].ValueFrom.SecretKeyRef
+	// DeepEqual rather than `*a != *b`: SecretKeySelector carries Optional as a
+	// *bool, so struct equality compares two separately allocated pointers by
+	// address and never matches, however identical the keys are.
+	if !reflect.DeepEqual(proxySessionKV.SecretKeyRef, sandboxSessionKV) {
+		t.Errorf("sandbox and credential proxy disagree on the Session KV key: %#v vs %#v",
+			sandboxSessionKV, proxySessionKV.SecretKeyRef)
 	}
 	for _, mount := range container.VolumeMounts {
 		if mount.Name == "credential-proxy-ksa-token" || strings.Contains(mount.MountPath, "serviceaccount") {
@@ -1164,6 +1203,43 @@ func TestExampleCRDoesNotPinPublicRegistry(t *testing.T) {
 			t.Errorf("example CR pins spec.deployment.image to a public registry (%q); omit the field so private-registry installs are not silently overridden", img)
 		}
 	}
+}
+
+// TestEventWatcherTokenEnvMatchesStartServices ties the two halves of the
+// watcher's bearer-token wiring together. deploy/shared/start-services.sh names
+// the variable in --token-env; this package injects a variable of that name into
+// the credential-proxy container. Nothing else reads the shell script, so a
+// rename on this side passes `go test` while the script keeps the old name — and
+// the watcher then exits on every start with "bearer token env var ... is empty",
+// in a container that stays Ready. Deriving the expected name from the script
+// rather than hardcoding it is the point: both sides have to move together.
+func TestEventWatcherTokenEnvMatchesStartServices(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "deploy", "shared", "start-services.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	match := regexp.MustCompile(`--token-env=([A-Za-z_][A-Za-z0-9_]*)`).FindSubmatch(data)
+	if match == nil {
+		t.Fatalf("%s no longer passes --token-env to k8s-event-watcher; the watcher cannot authenticate to the Session KV server without it", path)
+	}
+	tokenEnv := string(match[1])
+
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-agent", Namespace: "my-ns"},
+	}
+	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456", nil, renderOptions{imageVolumeSupported: true})
+	proxyC := containerByName(t, dep.Spec.Template.Spec.Containers, "envoy-credential-proxy")
+	for _, env := range proxyC.Env {
+		if env.Name != tokenEnv {
+			continue
+		}
+		if env.Value == "" && env.ValueFrom == nil {
+			t.Fatalf("credential proxy sets %s to nothing; the watcher treats an empty token as fatal", tokenEnv)
+		}
+		return
+	}
+	t.Fatalf("%s passes --token-env=%s, but the credential proxy container has no such variable; the watcher will exit on every start", path, tokenEnv)
 }
 
 func TestKustomizeNetworkPolicies_PodSelectorMatchesCommonLabels(t *testing.T) {

@@ -38,21 +38,30 @@ only renders its kubeconfig bootstrap (the `gcloud container clusters get-creden
 the agent a usable kubectl context) when it has the complete triple; with one missing, every
 `kubectl` the agent runs resolves to `localhost:8080` instead of a cluster.
 
-| Field                                    | Type   | Purpose                                                                              |
-| ---------------------------------------- | ------ | ------------------------------------------------------------------------------------ |
-| `clusterName`                            | string | Logical cluster name (e.g. `cluster-a`). Surfaces in observability and chat replies. |
-| `location`                               | string | Cloud region (e.g. `us-central1-a`).                                                 |
-| `projectId`                              | string | GCP Project ID of the cluster. Required.                                             |
-| `hermes.dashboardEnabled`                | bool   | Toggle the Hermes dashboard endpoint. Default `true`.                                |
-| `hermes.pluginsDebug`                    | bool   | Enable plugin-level debug logging. Default `false`.                                  |
-| `hermes.agentHome`                       | string | Path to the `AGENT_HOME` directory. Default `/opt/data`.                             |
-| `hermes.apiServerSecretRef.name` + `key` | string | `Secret` holding the Hermes API server key (`API_SERVER_KEY`).                       |
-| `memory.memoryEnabled`                   | bool   | Toggle framework memory persistence. Default `false`.                                |
-| `memory.provider`                        | string | Memory provider implementation. Default `multiuser_memory`.                          |
-| `memory.userProfileEnabled`              | bool   | Toggle per-user memory profiling. Default `false`.                                   |
-| `tuning.<persona>.apiMaxRetries`         | int    | Model-call retries before a run gives up. Unset = Hermes default `3`.                |
-| `tuning.<persona>.maxTurns`              | int    | Iterations allowed in a single turn. Unset = Hermes default `90`.                    |
-| `tuning.maxInProgress`                   | int    | Board-wide cap on concurrent kanban workers. Unset = uncapped (upstream).            |
+| Field                                          | Type   | Purpose                                                                                                                                                      |
+| ---------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `clusterName`                                  | string | Logical cluster name (e.g. `cluster-a`). Surfaces in observability and chat replies.                                                                         |
+| `location`                                     | string | Cloud region (e.g. `us-central1-a`).                                                                                                                         |
+| `projectId`                                    | string | GCP Project ID of the cluster. Required.                                                                                                                     |
+| `hermes.dashboardEnabled`                      | bool   | Toggle the Hermes dashboard endpoint. Default `true`.                                                                                                        |
+| `hermes.pluginsDebug`                          | bool   | Enable plugin-level debug logging. Default `false`.                                                                                                          |
+| `hermes.agentHome`                             | string | Path to the `AGENT_HOME` directory. Default `/opt/data`.                                                                                                     |
+| `hermes.apiServerSecretRef.name` + `key`       | string | `Secret` holding the Hermes API server key (`API_SERVER_KEY`).                                                                                               |
+| `hermes.sessionKVApiKeySecretRef.name` + `key` | string | `Secret` holding the bearer token for the pod-local Session KV server (`SESSION_KV_API_KEY`). Optional; absent, the server rejects every request with `503`. |
+| `hermes.sessionKVSaltSecretRef.name` + `key`   | string | `Secret` holding the HMAC salt used to pseudonymise chat identities (`SESSION_KV_SALT`). Optional; absent, the agent generates a per-pod salt and warns.     |
+| `memory.memoryEnabled`                         | bool   | Toggle framework memory persistence. Default `false`.                                                                                                        |
+| `memory.provider`                              | string | Memory provider implementation. Default `multiuser_memory`.                                                                                                  |
+| `memory.userProfileEnabled`                    | bool   | Toggle per-user memory profiling. Default `false`.                                                                                                           |
+| `tuning.<persona>.apiMaxRetries`               | int    | Model-call retries before a run gives up. Unset = Hermes default `3`.                                                                                        |
+| `tuning.<persona>.maxTurns`                    | int    | Iterations allowed in a single turn. Unset = Hermes default `90`.                                                                                            |
+| `tuning.maxInProgress`                         | int    | Board-wide cap on concurrent kanban workers. Unset = uncapped (upstream).                                                                                    |
+
+`sessionKVApiKeySecretRef` is optional in the API but not in practice, and the `503` above is the
+milder half of what its absence costs. The `k8s-event-watcher` in the credential sidecar
+authenticates to that same server, treats an empty `SESSION_KV_API_KEY` as fatal, and exits on every
+start — so no cluster events are watched at all, while the container stays Ready and the CR
+`.status` says nothing. An installation upgraded from before the key existed is the case that lands
+here; add the key to the agent Secret and restart the pod.
 
 ### `spec.harness.tuning`
 

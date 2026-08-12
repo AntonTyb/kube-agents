@@ -83,15 +83,17 @@ prettier-write: ## Reformat all Markdown/YAML in place.
 # `make test-python-deps`. CI installs the same file.
 #
 # The wildcards are what keep this honest: a new skill's tests are picked up
-# without editing this file. Seven globs rather than one because the tests do
+# without editing this file. Eight globs rather than one because the tests do
 # not all live under skills -- the admin console, the shared agent scripts,
-# Chat Agent plugins, image patches, image build and repository tooling in
-# scripts/ each hold their own. scripts/ is here
+# Chat Agent plugins and hooks, image patches, image build and repository
+# tooling in scripts/ each hold their own. scripts/ is here
 # because it was not: the tests for the upstream-skill sync sat outside every
-# glob, so they had never once run in CI. Discovery is then run once per
-# directory rather than once over the tree, because none of them are packages
-# -- `unittest discover` pointed at agents/platform/skills finds nothing and
-# still exits 0, which reads as a passing suite. That also keeps
+# glob, so they had never once run in CI. defaults/hooks is here for the same
+# reason -- the plugins glob does not reach it, so the chat_message_audit hook
+# was untestable-by-CI however many tests it grew. Discovery is then run once
+# per directory rather than once over the tree, because none of them are
+# packages -- `unittest discover` pointed at agents/platform/skills finds
+# nothing and still exits 0, which reads as a passing suite. That also keeps
 # deploy/docker and deploy/docker/patches separate, which they must be: the
 # patch tests import their subject by bare module name, which only resolves
 # with their own directory as the discovery root.
@@ -100,6 +102,7 @@ PYTHON_TEST_DIRS := $(sort $(dir \
 	$(wildcard agents/*/skills/*/scripts/test_*.py) \
 	$(wildcard agents/*/scripts/test_*.py) \
 	$(wildcard agents/*/defaults/plugins/*/test_*.py) \
+	$(wildcard agents/*/defaults/hooks/*/test_*.py) \
 	$(wildcard deploy/docker/test_*.py) \
 	$(wildcard deploy/docker/patches/test_*.py) \
 	$(wildcard scripts/test_*.py)))
