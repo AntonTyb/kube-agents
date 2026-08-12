@@ -112,7 +112,7 @@ type HarnessSpec struct {
 // `Cluster` therefore applies to every `cluster-*` profile rather than to one of them.
 type TuningSpec struct {
 	// Default applies to the `default` profile — the Chat Agent front door. Delivered
-	// in the operator-rendered config.yaml, which is authoritative for that profile.
+	// as a config overlay merged into that profile at pod startup, like the others.
 	// +optional
 	Default *AgentLimits `json:"default,omitempty"`
 
@@ -139,6 +139,15 @@ type TuningSpec struct {
 	// dispatcher then reports as a "protocol violation" rather than as the quota
 	// exhaustion it actually is. Capping costs throughput — one long-running worker
 	// holds the only slot — so it is a trade, not a default.
+	//
+	// Do NOT reach for it as a latency fix. An uncapped fan-out does spawn every
+	// sandboxed worker at once and they contend during startup, but a slot is held
+	// for a worker's entire run, so a cap serialises minutes of model work to save
+	// seconds of boot. Measured against real fan-outs on a live cluster, capping at
+	// 2 roughly doubled the time for the batch to finish. What the workers contend
+	// for is not established either — CPU limit, memory ceiling and gVisor I/O all
+	// fit the evidence, and gVisor hides the cgroup throttle counters that would
+	// settle it — so raising resources is not a guaranteed fix; measure it.
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MaxInProgress *int `json:"maxInProgress,omitempty"`

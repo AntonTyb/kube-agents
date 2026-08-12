@@ -88,7 +88,7 @@ and regenerate.
 <!-- prettier-ignore -->
 | Generated file or region | Block marker | Source of truth |
 | --- | --- | --- |
-| `docs/site/src/content/docs/reference/cron-jobs.md` | `<!-- BEGIN GENERATED: cron-jobs -->` | `agents/chat/defaults/cron/jobs.json` |
+| `docs/site/src/content/docs/reference/cron-jobs.md` | `<!-- BEGIN GENERATED: cron-jobs -->` | `agents/chat/defaults/cron/jobs.json` and `agents/platform/cron/jobs.json` |
 | `docs/site/src/content/docs/skills/index.mdx` | `{/* BEGIN GENERATED: skill-catalog */}` (MDX comment syntax) | `name`/`description` frontmatter of every `agents/platform/skills/*/SKILL.md` and `agents/cluster/skills/*/SKILL.md` |
 | `k8s-operator/scripts/README.md` | `<!-- BEGIN GENERATED: provisioning-steps -->` | The comment banner in each `k8s-operator/scripts/provision_*.sh` / `teardown_*.sh` script |
 | `docs/family-roster.txt` | whole file (`family-roster`) | The collapsed-family globs in this map's section 4, resolved against `git ls-files` |
@@ -129,14 +129,16 @@ identifier appears, add its source here.
 | Service-account names, namespace, permission-set defaults | `k8s-operator/scripts/common.sh` |
 | Go toolchain version | `k8s-operator/go.mod` |
 | Toolsets, plugins, and MCP servers of an agent profile | that profile's `config.yaml` (`agents/platform/`, `agents/chat/`, `agents/cluster/`) |
-| Cron job rosters and schedules | `agents/chat/defaults/cron/jobs.json` (the only non-empty roster) |
+| Cron job rosters and schedules | `agents/chat/defaults/cron/jobs.json` and `agents/platform/cron/jobs.json` |
 | Persona rules and `§N` section numbering | the profile's `SOUL.md` |
 | RBAC bindings and KSA defaults laid down per agent | `k8s-operator/internal/controller/platformagent_manifests.go` |
 | `app.kubernetes.io/*` label values on installed objects | `k8s-operator/internal/controller/manifest_helpers.go` and each `kustomization.yaml` |
 | Controller permissions | `k8s-operator/config/rbac/` |
 | `make` targets | the root `Makefile` and `k8s-operator/Makefile` |
 | Paths baked into the agent image (`/opt/defaults/...`) | `deploy/docker/Dockerfile` |
+| Image-patch module names and the behaviour they add | the module's own docstring under `deploy/docker/patches/`, plus the `COPY`/`RUN` list in `deploy/docker/Dockerfile` |
 | What pod start-up force-syncs from the image vs. preserves on the PV | `deploy/shared/docker-entrypoint.sh` |
+| Shared agent defaults (`approvals.*`, `security.*`) | `deploy/shared/defaults/config.yaml` and `renderConfigYAML()` in `k8s-operator/internal/controller/platformagent_manifests.go` |
 | Image defaults and override env vars (`PLATFORM_AGENT_IMAGE` et al.) | `k8s-operator/internal/controller/manifest_helpers.go` |
 | OTLP endpoint default, discovery candidates, and `otlpEndpointSource` values | `k8s-operator/internal/controller/telemetry.go` |
 | Registry prefix default (`REGISTRY_PREFIX`) | `k8s-operator/scripts/common.sh` |
@@ -220,6 +222,7 @@ pull request:
 | `agents/platform/SOUL.md` | Runtime persona | Persona of the Platform Agent ("Harness Custodian & Architect", the `platform` profile): kanban worker protocol, GitOps-only declarative changes, recovery ladder, observability guidance, incident-communication policy, deployment architecture. | Worker protocol, declarative workflow playbook, autonomy, incident triage | System persona; several docs reference its section numbers ("SOUL.md §N") |
 | `agents/platform/AGENTS.md` | Runtime workspace | Workspace doc: session startup (consult the glossary), memory conventions (daily notes, `MEMORY.md`), how kanban work arrives and must be closed, red lines. | Startup, memory, kanban worker protocol | Runtime doc |
 | `agents/platform/CAPABILITIES.md` | Runtime routing | One-paragraph routing blurb advertising the Platform Agent as the fleet-wide GKE architect and default specialist. | What to route to it | Consumed by the Chat Agent's roster discovery |
+| `agents/platform/cron/README.md` | Component README | Editing rules for the Platform Agent's own cron store, kept beside `jobs.json` rather than inside it because `cron/jobs.py::_save_jobs_unlocked` rewrites the file to exactly `jobs` and `updated_at` and destroys any top-level comment on the first tick. Covers what actually fires this roster (`profile-cron-tick`, not the gateway thread), why no id may appear on both rosters, why every job sets `deliver: "all"`, why `schedule.display` must mirror `expr`, and the two-release sequence for retiring a watchdog given that `merge_cron_store` never prunes. | Roster ownership, duplicate-id hazard, delivery targets, `--cron-retire` | Contributors editing `agents/platform/cron/jobs.json`; the tests it relies on live in the `fleet-audit` skill |
 | `agents/platform/docs/glossary.md` | Runtime reference | Glossary of agentic terms (agent platforms, runtimes, Chat vs Platform agents, Hermes profiles, kanban coordination) that the agents consult at session start. | Terminology | Baked to `/opt/defaults/docs/`; NOT the human glossary (see site `reference/glossary.md`) |
 | `agents/platform/docs/gcp-console-links.md` | Runtime reference | GCP Console URL templates (Logs/Trace/Metrics Explorer, GKE Workloads) that agents fill with `{project_id}` to give users clickable links. | Console deep links | Baked to `/opt/defaults/docs/` |
 | `agents/platform/docs/session_management.md` | Design doc | Architecture of alert-to-session routing: GKE warning events flow through a stateful REST bridge into persistent diagnostic agent sessions, with SQLite schemas and troubleshooting commands. | Event dedup, chat-thread resolution, `incident_context` plugin, verification | Human design/ops doc; not baked into the image despite its location |
