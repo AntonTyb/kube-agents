@@ -1064,6 +1064,54 @@ func TestSafeSandboxEnvOverridesRejectsValueFrom(t *testing.T) {
 	}
 }
 
+func TestSafeSandboxEnvOverridesPassesAlertLimits(t *testing.T) {
+	// The session server reads its daily alert ceilings from the environment,
+	// so an operator has to be able to tune or disable them on the CR. Without
+	// these names on the allowlist the documented override silently does
+	// nothing and the only way to change a limit is a new image. One name per
+	// severity the server caps, Info included.
+	custom := []corev1.EnvVar{
+		{Name: "ALERT_DAILY_LIMIT_CRITICAL", Value: "25"},
+		{Name: "ALERT_DAILY_LIMIT_INFO", Value: "3"},
+		{Name: "ALERT_DAILY_LIMIT_WARNING", Value: "0"},
+		{Name: "SESSION_KV_DB_PATH", Value: "/tmp/hijacked.db"},
+		{
+			Name: "ALERT_DAILY_LIMIT_CRITICAL",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "s"},
+				Key:                  "k",
+			}},
+		},
+	}
+
+	got := safeSandboxEnvOverrides(custom)
+	values := map[string]string{}
+	for _, e := range got {
+		if e.ValueFrom != nil {
+			t.Errorf("ValueFrom must never survive the allowlist, got %#v", e)
+		}
+		values[e.Name] = e.Value
+	}
+
+	if values["ALERT_DAILY_LIMIT_CRITICAL"] != "25" {
+		t.Errorf("expected the critical ceiling to be overridable, got %q", values["ALERT_DAILY_LIMIT_CRITICAL"])
+	}
+	// Info is capped too — nothing on the watcher path filters on Event.Type,
+	// so Normal-type events with an allowlisted reason arrive as Info.
+	if values["ALERT_DAILY_LIMIT_INFO"] != "3" {
+		t.Errorf("expected the info ceiling to be overridable, got %q", values["ALERT_DAILY_LIMIT_INFO"])
+	}
+	// 0 is how a severity's cap is turned off; it must survive as a literal
+	// rather than being dropped as an empty-ish value.
+	if v, ok := values["ALERT_DAILY_LIMIT_WARNING"]; !ok || v != "0" {
+		t.Errorf("expected the warning ceiling to be settable to 0, got %q (present=%v)", v, ok)
+	}
+	// Widening the allowlist must not have widened it to everything.
+	if _, ok := values["SESSION_KV_DB_PATH"]; ok {
+		t.Errorf("SESSION_KV_DB_PATH must stay operator-owned, got %#v", got)
+	}
+}
+
 func TestBuildCredentialProxySidecar(t *testing.T) {
 	agent := &agentv1alpha1.PlatformAgent{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-agent", Namespace: "test-ns"},
