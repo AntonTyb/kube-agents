@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -898,8 +899,8 @@ func TestBuildDeployment(t *testing.T) {
 		t.Errorf("expected tmp-scratch to be an emptyDir")
 	} else if v.EmptyDir.SizeLimit == nil || v.EmptyDir.SizeLimit.String() != "2Gi" {
 		// Unbounded, this is the only writable path outside the PVC for the two
-		// agent containers, so a runaway write becomes node disk pressure and a
-		// whole-pod eviction rather than an ENOSPC in the offending container.
+		// agent containers, so a runaway write becomes node-level disk pressure
+		// and the kubelet picks an eviction victim that need not be this pod.
 		t.Errorf("expected tmp-scratch sizeLimit 2Gi, got %v", v.EmptyDir.SizeLimit)
 	}
 	if _, ok := volumesMap["fluent-bit-config"]; !ok {
@@ -3925,4 +3926,81 @@ func TestOtlpCollectorNamespace(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A CR that already mounts /tmp must not collide with the operator's tmp-scratch mount.
+// Two VolumeMounts on one mountPath make the Deployment unappliable, so the failure is not
+// a redundant mount but a reconcile that stops on an upgrade.
+func TestUserSuppliedTmpMountReplacesTmpScratch(t *testing.T) {
+	cases := []struct {
+		name      string
+		configure func(*agentv1alpha1.DeploymentSpec)
+		wantName  string
+	}{
+		{
+			name: "extraVolumeMounts",
+			configure: func(d *agentv1alpha1.DeploymentSpec) {
+				d.ExtraVolumeMounts = []corev1.VolumeMount{{Name: "my-tmp", MountPath: "/tmp"}}
+			},
+			wantName: "my-tmp",
+		},
+		{
+			// Trailing slash included on purpose: it is the same path to the API
+			// server's uniqueness check, so a name comparison would miss it.
+			name: "extraVolumeMounts with a trailing slash",
+			configure: func(d *agentv1alpha1.DeploymentSpec) {
+				d.ExtraVolumeMounts = []corev1.VolumeMount{{Name: "my-tmp", MountPath: "/tmp/"}}
+			},
+			wantName: "my-tmp",
+		},
+		{
+			name: "storages",
+			configure: func(d *agentv1alpha1.DeploymentSpec) {
+				d.Storages = []agentv1alpha1.StorageSpec{{Name: "scratch", MountPath: "/tmp"}}
+			},
+			wantName: "scratch-vol",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := newTestPlatformAgent()
+			agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{}
+			tc.configure(agent.Spec.Deployment)
+
+			pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
+			c := containerByName(t, pod.Spec.Containers, "platform-agent")
+
+			seen := make(map[string]string)
+			for _, m := range c.VolumeMounts {
+				clean := path.Clean(m.MountPath)
+				if prev, dup := seen[clean]; dup {
+					t.Errorf("duplicate mountPath %q, from volumes %q and %q", clean, prev, m.Name)
+				}
+				seen[clean] = m.Name
+			}
+			if got := seen["/tmp"]; got != tc.wantName {
+				t.Errorf("/tmp served by volume %q, want the CR's own %q", got, tc.wantName)
+			}
+		})
+	}
+}
+
+// The mount stays put when the CR mounts elsewhere -- the case above must not be paid for
+// by every other CR losing its writable /tmp under a read-only root filesystem.
+func TestUnrelatedExtraMountKeepsTmpScratch(t *testing.T) {
+	agent := newTestPlatformAgent()
+	agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{
+		ExtraVolumeMounts: []corev1.VolumeMount{{Name: "extra-vol", MountPath: "/tmpfoo"}},
+	}
+
+	pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
+	c := containerByName(t, pod.Spec.Containers, "platform-agent")
+
+	for _, m := range c.VolumeMounts {
+		if m.Name == tmpScratchVolumeName && m.MountPath == "/tmp" {
+			return
+		}
+	}
+	t.Errorf("expected the tmp-scratch mount at /tmp, got %v", c.VolumeMounts)
 }
