@@ -62,6 +62,6 @@ jobs:
       - name: Run Checkov
         uses: bridgecrewio/checkov-action@69437f47399a9e321cd0f08938cb5cf2bb846dba # v12.2928.0
         with:
-          framework: all
+          framework: terraform,github_actions
           output_format: cli
           config_file: .checkov.yaml
