@@ -17,10 +17,12 @@ again.
 
 import contextlib
 import io
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.absolute()))
 
@@ -254,6 +256,72 @@ class ScanGateTest(unittest.TestCase):
         self.assertIn("kanban_create", body)  # one child per cluster
         self.assertIn("parents=", body)  # fan-in collects the results
         self.assertIn("metadata", body)  # structured child results
+
+    def test_roster_command_carries_both_fixes(self):
+        """A bare `hermes profile list` has two distinct failure modes.
+
+        Without the absolute path it exits 127: the kanban worker's terminal runs
+        with a stripped environment where /opt/hermes/.venv/bin is not on PATH,
+        though it works fine from an interactive shell.
+
+        Without a pinned HERMES_HOME it is worse than that — it exits 0 and prints
+        a roster that is missing profiles. The pin must be unconditional: the
+        worker HAS a HERMES_HOME, set to its own profile home, so a defaulted
+        expansion (${HERMES_HOME:-...}) keeps the wrong value and reproduces the
+        quiet failure. A loud failure gets retried; a quiet wrong answer gets
+        believed, and on a multi-cluster fleet it drops clusters from the sweep
+        with no trace. Both halves must survive.
+        """
+        cmd = bootstrap_scan_gate._roster_command()
+        self.assertIn("/opt/hermes/.venv/bin/hermes", cmd)
+        self.assertTrue(
+            cmd.startswith(f"HERMES_HOME={bootstrap_scan_gate._data_dir()} ")
+        )
+        self.assertNotIn(":-", cmd)  # no defaulted expansion — see docstring
+        self.assertIn(cmd, bootstrap_scan_gate._task_body())
+
+    def test_roster_command_tracks_a_custom_agent_home(self):
+        """/opt/data is the default data root, not a constant.
+
+        With spec.harness.hermes.agentHome set, this gate's HERMES_HOME is that
+        home and the profiles live under it. A literal /opt/data would point
+        hermes at a tree with no profiles — the same quiet empty roster the pin
+        exists to prevent, one configuration over.
+        """
+        with mock.patch.dict(os.environ, {"HERMES_HOME": "/var/agent"}):
+            cmd = bootstrap_scan_gate._roster_command()
+            self.assertTrue(cmd.startswith("HERMES_HOME=/var/agent "))
+            self.assertIn(cmd, bootstrap_scan_gate._task_body())
+
+    def test_body_forbids_improvising_around_a_failed_step(self):
+        """The 32-call roster loop is what this prevents.
+
+        When the roster command returned 127 the worker did not stop: it tried ls,
+        sqlite3, four python sqlite attempts against three databases, five metadata
+        server probes, and re-ran the reconcile script five times — half the sweep,
+        for an answer ("no cluster agents") that is also the safe default.
+        """
+        body = bootstrap_scan_gate._task_body()
+        self.assertIn("treat its answer as empty", body)
+        self.assertIn("do not improvise", body.lower())
+        self.assertIn("exactly once", body)
+
+    def test_body_forbids_creating_profiles_by_hand(self):
+        """The regression that made the first roster fix worse than the bug.
+
+        reconcile is permanently prune-only on any deployment where it cannot
+        list clusters (it runs with a cwd outside CREDENTIAL_PROXY_WORKSPACE_ROOT
+        and the gcloud call 403s), so the roster is always empty. Told that
+        reconcile "ensures every managed cluster has an agent", the worker read an
+        empty roster as damage and called cluster_agent_profile.py create directly
+        — around the management-cluster guard that only lives inside reconcile.
+        The next reconcile run pruned it. Create, prune, repeat: arm 1b ran 102
+        shell calls against arm 1a's 65.
+        """
+        body = bootstrap_scan_gate._task_body()
+        self.assertIn("do not create, repair, or delete a profile yourself", body)
+        self.assertIn("An empty roster is a supported state", body)
+        self.assertIn("created=0 pruned=0 kept=0", body)
 
     def test_body_degrades_when_no_cluster_agents_exist(self):
         # Cluster Agents ship now, but the script is still absent wherever an older

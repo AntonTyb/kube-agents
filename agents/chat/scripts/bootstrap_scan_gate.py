@@ -84,9 +84,40 @@ INSTRUCTIONS_PATHS = (
 # a single-agent walk of the fleet; when present, the scan fans out one card per cluster.
 RECONCILE_SCRIPT = "/opt/data/scripts/cluster_agent_reconcile.py"
 
-
 def _data_dir() -> Path:
     return Path(os.environ.get("HERMES_HOME", "/opt/data"))
+
+
+def _roster_command() -> str:
+    """The one command that answers "which Cluster Agents exist".
+
+    Both halves are load-bearing and were learned the hard way.
+
+    Absolute path, because the kanban worker's terminal runs with a stripped
+    environment in which ``/opt/hermes/.venv/bin`` is not on PATH — a bare
+    ``hermes profile list`` exits 127 there while working fine from an
+    interactive shell, which is why this was not obvious.
+
+    HERMES_HOME pinned unconditionally, because the absolute path ALONE is
+    worse than the 127. The worker is not missing a HERMES_HOME — it has one,
+    pinned to its own profile home, and profiles resolve at
+    ``$HERMES_HOME/profiles/<name>``. Under the worker's value hermes exits 0
+    and prints a plausible roster that is missing profiles (observed:
+    ``default`` only, with ``platform`` absent — the view from inside a
+    profile home). A defaulted expansion like ``${HERMES_HOME:-...}``
+    preserves exactly that wrong value; only an unconditional pin gives the
+    fleet-wide view. A loud failure gets retried; a quiet wrong answer gets
+    believed, and on a real fleet it silently drops clusters from the sweep.
+
+    The pinned value is this gate's own data root, resolved when the card is
+    filed — not a literal ``/opt/data``. The gate's HERMES_HOME IS the root
+    the profiles live under (the same one the marker files rely on), while
+    the root itself moves with ``spec.harness.hermes.agentHome``. A hardcoded
+    ``/opt/data`` under a custom home points hermes at a tree with no
+    profiles — the same quiet empty roster, one configuration over; this repo
+    has hit that twice before (see the notes in agents/platform/config.yaml).
+    """
+    return f"HERMES_HOME={_data_dir()} /opt/hermes/.venv/bin/hermes profile list"
 
 
 def should_skip(data_dir: Path) -> bool:
@@ -118,16 +149,40 @@ def _task_body() -> str:
         f"{instruction_list}\n\n"
         "Audit control plane options, node pools, Workload Identity settings, and running "
         "workloads. Scale the work out per cluster rather than walking the fleet serially:\n\n"
+        "**Discovery steps run ONCE. If a step does not answer, treat its answer as empty and "
+        "move on — do not improvise a different way to get it.** Every step below names the "
+        "exact command that answers it. If that command fails, returns nothing, or returns "
+        "something you cannot parse, record that fact for the report and continue to the next "
+        "step. Do not substitute another tool, re-run the command with variations, inspect "
+        "the filesystem or a database directly, or query the metadata server to derive the "
+        "answer another way. A step that cannot answer is a finding, not a puzzle. Guessing "
+        "costs far more than the missing answer is worth, and it produces a report that looks "
+        "complete while resting on invented data.\n\n"
         "**Step 1 — reconcile the Cluster Agent roster.** If "
-        f"`{RECONCILE_SCRIPT}` exists, run it first so every managed cluster has an agent. "
-        "It is idempotent and deliberately does NOT create an agent for the management "
-        "cluster this pod runs on. If the script is absent, skip this step — this deployment "
-        "has no Cluster Agents and you will do the whole sweep yourself (Step 4).\n\n"
+        f"`{RECONCILE_SCRIPT}` exists, run it **exactly once**. It is best-effort: it may create "
+        "no agents at all, and `created=0 pruned=0 kept=0` is a normal, successful result. It "
+        "deliberately does NOT create an agent for the management cluster this pod runs on, and "
+        "it skips creating anything at all when it cannot list the project's clusters. Running "
+        "it again does not change that. If the script is absent, or the run fails, skip this "
+        "step.\n\n"
+        "**Whatever it reports, do not create, repair, or delete a profile yourself.** Profile "
+        "lifecycle belongs to that script alone. It holds the guard that keeps the management "
+        "cluster from getting its own agent, and calling `cluster_agent_profile.py` directly "
+        "goes around that guard: the profile you create is one the next reconcile run will "
+        "immediately prune, and you will loop. An empty roster is a supported state, not damage "
+        "to repair.\n\n"
         "**Step 2 — scan the management cluster yourself.** No Cluster Agent covers it, so "
         "its inventory is yours to produce. Skipping it would leave a hole exactly where the "
         "harness runs.\n\n"
-        "**Step 3 — fan out.** For every OTHER cluster that has an agent (`hermes profile "
-        "list`, names starting `cluster-`), open one child card per cluster with "
+        "**Step 3 — fan out.** Read the roster with exactly this command, once:\n\n"
+        f"    {_roster_command()}\n\n"
+        "Cluster Agents are the profiles whose names start `cluster-`. **If that command "
+        "fails or lists no `cluster-` profiles, there are no Cluster Agents: skip the rest of "
+        "this step and do the whole sweep yourself in Step 4.** That is the normal case for a "
+        "single-cluster install and it is not an error. Use the command as written — the "
+        "absolute path and the `HERMES_HOME` are both required, and a bare `hermes profile "
+        "list` will either fail or quietly return an incomplete roster.\n\n"
+        "For every OTHER cluster that has an agent, open one child card per cluster with "
         "`kanban_create(assignee=<that agent>, "
         f"idempotency_key='{CLUSTER_IDEMPOTENCY_KEY_PREFIX}<cluster-name>', ...)` asking it to "
         "report its own cluster's inventory, and to return the findings as structured "
