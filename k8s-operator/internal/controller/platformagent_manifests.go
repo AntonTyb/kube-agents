@@ -2429,7 +2429,9 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 					corev1.ResourceMemory: resource.MustParse("2Gi"),
 				},
 			},
-			VolumeMounts: append(dashboardVolumeMounts, extraVolumeMounts...),
+			// Through the same guard as the gateway's list above. extraVolumeMounts
+			// reaches both containers, so a CR claiming /tmp collides here too.
+			VolumeMounts: append(dropTmpScratchIfClaimed(dashboardVolumeMounts, extraVolumeMounts), extraVolumeMounts...),
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
 				ReadOnlyRootFilesystem:   ptr.To(true),

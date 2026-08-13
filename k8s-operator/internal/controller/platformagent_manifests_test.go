@@ -3935,14 +3935,17 @@ func TestUserSuppliedTmpMountReplacesTmpScratch(t *testing.T) {
 	cases := []struct {
 		name      string
 		configure func(*agentv1alpha1.DeploymentSpec)
-		wantName  string
+		// Per container, because the two inputs do not reach the same set of them:
+		// extraVolumeMounts is appended to the gateway and the dashboard, storages
+		// only to the gateway.
+		wantTmpOwner map[string]string
 	}{
 		{
 			name: "extraVolumeMounts",
 			configure: func(d *agentv1alpha1.DeploymentSpec) {
 				d.ExtraVolumeMounts = []corev1.VolumeMount{{Name: "my-tmp", MountPath: "/tmp"}}
 			},
-			wantName: "my-tmp",
+			wantTmpOwner: map[string]string{"platform-agent": "my-tmp", "platform-agent-dashboard": "my-tmp"},
 		},
 		{
 			// Trailing slash included on purpose: it is the same path to the API
@@ -3951,14 +3954,17 @@ func TestUserSuppliedTmpMountReplacesTmpScratch(t *testing.T) {
 			configure: func(d *agentv1alpha1.DeploymentSpec) {
 				d.ExtraVolumeMounts = []corev1.VolumeMount{{Name: "my-tmp", MountPath: "/tmp/"}}
 			},
-			wantName: "my-tmp",
+			wantTmpOwner: map[string]string{"platform-agent": "my-tmp", "platform-agent-dashboard": "my-tmp"},
 		},
 		{
+			// The dashboard keeps tmp-scratch here, and that is correct rather than an
+			// oversight: storages never reach it, so there is nothing to collide with
+			// and no reason to take its scratch space away.
 			name: "storages",
 			configure: func(d *agentv1alpha1.DeploymentSpec) {
 				d.Storages = []agentv1alpha1.StorageSpec{{Name: "scratch", MountPath: "/tmp"}}
 			},
-			wantName: "scratch-vol",
+			wantTmpOwner: map[string]string{"platform-agent": "scratch-vol", "platform-agent-dashboard": tmpScratchVolumeName},
 		},
 	}
 
@@ -3969,18 +3975,25 @@ func TestUserSuppliedTmpMountReplacesTmpScratch(t *testing.T) {
 			tc.configure(agent.Spec.Deployment)
 
 			pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
-			c := containerByName(t, pod.Spec.Containers, "platform-agent")
 
-			seen := make(map[string]string)
-			for _, m := range c.VolumeMounts {
-				clean := path.Clean(m.MountPath)
-				if prev, dup := seen[clean]; dup {
-					t.Errorf("duplicate mountPath %q, from volumes %q and %q", clean, prev, m.Name)
+			// Every container, not the one the guard was written for. The API server
+			// applies its uniqueness check per container, so checking a single one
+			// passes while the Deployment it describes is still rejected.
+			all := append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...)
+			for _, c := range all {
+				seen := make(map[string]string)
+				for _, m := range c.VolumeMounts {
+					clean := path.Clean(m.MountPath)
+					if prev, dup := seen[clean]; dup {
+						t.Errorf("container %s: duplicate mountPath %q, from volumes %q and %q", c.Name, clean, prev, m.Name)
+					}
+					seen[clean] = m.Name
 				}
-				seen[clean] = m.Name
-			}
-			if got := seen["/tmp"]; got != tc.wantName {
-				t.Errorf("/tmp served by volume %q, want the CR's own %q", got, tc.wantName)
+				if want, checked := tc.wantTmpOwner[c.Name]; checked {
+					if got := seen["/tmp"]; got != want {
+						t.Errorf("container %s: /tmp served by volume %q, want %q", c.Name, got, want)
+					}
+				}
 			}
 		})
 	}

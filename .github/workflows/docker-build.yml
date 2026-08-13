@@ -79,9 +79,10 @@ jobs:
             --entrypoint /usr/local/bin/entrypoint-gate-check \
             entrypoint-gate-test:latest
 
-      # load: true, unlike the builds above, so the next step has an image to
-      # inspect. It costs a transfer from the buildx cache into the daemon;
-      # nothing else here needs the image, which is why the others do without.
+      # load: true, like the gate-test build above and unlike the first one, so the
+      # next step has an image to inspect. It costs a transfer from the buildx cache
+      # into the daemon, which is why only the two builds with a step that runs the
+      # image pay for it.
       - name: Build Credential Sidecar
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
