@@ -54,6 +54,7 @@ const (
 	defaultAgentHome            = "/opt/data"
 	defaultStorageSize          = "5Gi"
 	credentialProxyPort         = 8765
+	tmpScratchVolumeName        = "tmp-scratch"
 )
 
 // Shared-state ownership. Step 1.5 of deploy/shared/docker-entrypoint.sh reads this
@@ -1814,6 +1815,14 @@ func buildDefaultVolumeMounts(homeDir string) []corev1.VolumeMount {
 			MountPath: path.Dir(sessionKVDBPath),
 			SubPath:   "session",
 		},
+		{
+			// The one writable path outside the PVC, and the reason
+			// readOnlyRootFilesystem is survivable here: docker-entrypoint.sh runs
+			// four hermes invocations with HOME=/tmp before the agent starts, and
+			// the image is otherwise root-owned against a runtime UID of 10000.
+			Name:      tmpScratchVolumeName,
+			MountPath: "/tmp",
+		},
 	}
 }
 
@@ -2260,6 +2269,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			VolumeMounts: volumeMounts,
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
+				ReadOnlyRootFilesystem:   ptr.To(true),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -2347,6 +2357,13 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 				MountPath: path.Dir(sessionKVDBPath),
 				SubPath:   "session",
 			},
+			{
+				// Same emptyDir the gateway gets. Sharing it is not a new channel:
+				// these two containers already run the same image against the same
+				// data PVC, so they are one trust domain either way.
+				Name:      tmpScratchVolumeName,
+				MountPath: "/tmp",
+			},
 		}
 
 		// What keeps this container out of the shared tree is AGENT_SHARED_STATE_SETUP
@@ -2378,6 +2395,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			VolumeMounts: append(dashboardVolumeMounts, extraVolumeMounts...),
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
+				ReadOnlyRootFilesystem:   ptr.To(true),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -2429,6 +2447,12 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 		},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
+			// No /tmp for this one, deliberately. The config above buffers in memory
+			// (Mem_Buf_Limit, no storage.path), keeps its tail DB on the
+			// fluent-bit-state volume and outputs to stdout, so it writes nothing to
+			// the root filesystem. Handing it the agent's tmp-scratch would only give
+			// an LLM-driven container a path into the log shipper.
+			ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -2497,6 +2521,18 @@ func buildDefaultVolumes(agent *agentv1alpha1.PlatformAgent) []corev1.Volume {
 						Name: agent.Name + "-settings",
 					},
 					DefaultMode: ptr.To(int32(0644)),
+				},
+			},
+		},
+		{
+			// Bounded, like every other scratch emptyDir here: the sizeLimit turns a
+			// runaway write into ENOSPC in the container that overreached, rather than
+			// node disk pressure that evicts the whole pod. 2Gi matches
+			// credential-proxy-tmp, the closest analogue.
+			Name: tmpScratchVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					SizeLimit: ptr.To(resource.MustParse("2Gi")),
 				},
 			},
 		},

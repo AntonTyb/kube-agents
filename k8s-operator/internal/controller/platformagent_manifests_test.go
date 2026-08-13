@@ -525,11 +525,14 @@ func TestBuildDeployment(t *testing.T) {
 		if dashboardC.ImagePullPolicy != corev1.PullAlways {
 			t.Errorf("expected dashboard container image pull policy Always, got %s", dashboardC.ImagePullPolicy)
 		}
-		if len(dashboardC.VolumeMounts) != 4 {
-			t.Errorf("expected 4 volume mounts on dashboard container (3 base + 1 extra), got %d", len(dashboardC.VolumeMounts))
+		if len(dashboardC.VolumeMounts) != 5 {
+			t.Errorf("expected 5 volume mounts on dashboard container (4 base + 1 extra), got %d", len(dashboardC.VolumeMounts))
 		}
 		if dashboardC.SecurityContext == nil || dashboardC.SecurityContext.AllowPrivilegeEscalation == nil || *dashboardC.SecurityContext.AllowPrivilegeEscalation {
 			t.Errorf("expected SecurityContext.AllowPrivilegeEscalation false on dashboard container")
+		}
+		if dashboardC.SecurityContext == nil || dashboardC.SecurityContext.ReadOnlyRootFilesystem == nil || !*dashboardC.SecurityContext.ReadOnlyRootFilesystem {
+			t.Errorf("expected SecurityContext.ReadOnlyRootFilesystem true on dashboard container")
 		}
 		if dashboardC.Resources.Requests.Cpu().String() != "256m" || dashboardC.Resources.Requests.Memory().String() != "512Mi" {
 			t.Errorf("expected CPU 256m and Mem 512Mi requests on dashboard container, got %v", dashboardC.Resources.Requests)
@@ -852,6 +855,19 @@ func TestBuildDeployment(t *testing.T) {
 		}
 	}
 
+	// The one writable path the read-only root filesystem leaves the agent. Without
+	// it the entrypoint's HOME=/tmp invocations fail before the gateway starts.
+	if _, ok := mountsMap["tmp-scratch"]; !ok {
+		t.Errorf("expected tmp-scratch mount on platform-agent, not found")
+	} else if mountsMap["tmp-scratch"].MountPath != "/tmp" {
+		t.Errorf("expected tmp-scratch mount path /tmp, got %s", mountsMap["tmp-scratch"].MountPath)
+	}
+
+	agentC := containerByName(t, dep.Spec.Template.Spec.Containers, "platform-agent")
+	if agentC.SecurityContext == nil || agentC.SecurityContext.ReadOnlyRootFilesystem == nil || !*agentC.SecurityContext.ReadOnlyRootFilesystem {
+		t.Errorf("expected SecurityContext.ReadOnlyRootFilesystem true on platform-agent container")
+	}
+
 	// Verify Fluent Bit container
 	fbContainer := containerByName(t, dep.Spec.Template.Spec.Containers, "fluent-bit")
 	if fbContainer.Name != "fluent-bit" {
@@ -860,11 +876,31 @@ func TestBuildDeployment(t *testing.T) {
 	if fbContainer.Image != "fluent/fluent-bit:5.0.7" {
 		t.Errorf("expected fluent-bit image fluent/fluent-bit:5.0.7, got %s", fbContainer.Image)
 	}
+	if fbContainer.SecurityContext == nil || fbContainer.SecurityContext.ReadOnlyRootFilesystem == nil || !*fbContainer.SecurityContext.ReadOnlyRootFilesystem {
+		t.Errorf("expected SecurityContext.ReadOnlyRootFilesystem true on fluent-bit container")
+	}
+	// Deliberately no /tmp here: the shipper buffers in memory and must not share
+	// the agent's scratch volume.
+	for _, m := range fbContainer.VolumeMounts {
+		if m.Name == "tmp-scratch" {
+			t.Errorf("fluent-bit must not mount the agent's tmp-scratch volume")
+		}
+	}
 
 	// Verify volumes
 	volumesMap := make(map[string]corev1.Volume)
 	for _, vol := range dep.Spec.Template.Spec.Volumes {
 		volumesMap[vol.Name] = vol
+	}
+	if v, ok := volumesMap["tmp-scratch"]; !ok {
+		t.Errorf("expected tmp-scratch volume, not found")
+	} else if v.EmptyDir == nil {
+		t.Errorf("expected tmp-scratch to be an emptyDir")
+	} else if v.EmptyDir.SizeLimit == nil || v.EmptyDir.SizeLimit.String() != "2Gi" {
+		// Unbounded, this is the only writable path outside the PVC for the two
+		// agent containers, so a runaway write becomes node disk pressure and a
+		// whole-pod eviction rather than an ENOSPC in the offending container.
+		t.Errorf("expected tmp-scratch sizeLimit 2Gi, got %v", v.EmptyDir.SizeLimit)
 	}
 	if _, ok := volumesMap["fluent-bit-config"]; !ok {
 		t.Errorf("expected fluent-bit-config volume, not found")

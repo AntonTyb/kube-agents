@@ -317,8 +317,13 @@ only command output, never a mounted Git credential file.
   sidecar.
 - The sandbox and sidecar run non-root, drop all Linux capabilities, disallow
   privilege escalation, and use the runtime-default seccomp profile.
-- The credential sidecar root filesystem is read-only; writable state uses
-  bounded `emptyDir` volumes.
+- Every container in the Pod has a read-only root filesystem; writable state
+  uses bounded `emptyDir` volumes. The sandbox and dashboard share a 2Gi `/tmp`
+  scratch volume — the entrypoint runs several hermes invocations with
+  `HOME=/tmp` before the agent starts, and those two containers already share
+  the data PVC, so the shared volume is not a new channel between them. The log
+  shipper gets no `/tmp`: it buffers in memory and keeps its tail database on
+  its own volume.
 - A policy ConfigMap hash is placed on the Pod template to trigger rollout when
   command policy changes.
 - The operator reports Ready only when the combined Pod is ready.
