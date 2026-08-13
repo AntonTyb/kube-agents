@@ -59,7 +59,7 @@ _(Alternatively via GitHub raw URL: `curl -fsSL https://raw.githubusercontent.co
 - **Provisioning Sources**: Puts the provisioning scripts on disk (this checkout, or a clone at the requested revision) and verifies they match the image ref _before_ the interview starts.
 - **GKE Cluster Setup**: Provisions the supported GKE Standard topology or connects to an existing cluster.
 - **Chat Integrations**: Configures Google Chat and/or Slack when selected.
-- **AI Model Credentials**: Prompts for Gemini, OpenAI, or Anthropic credentials.
+- **AI Model Credentials**: Prompts for Gemini, OpenAI, or Anthropic credentials, or selects Vertex AI (no key — Workload Identity).
 - **Automated Pipeline Execution**: Writes `k8s-operator/scripts/vars.sh` and launches `make gcp-provision`.
 
 The installer performs no GCP operation of its own — it configures and then delegates to the
@@ -109,7 +109,7 @@ The Kubernetes Agentic Harness manages Kubernetes operations via an autonomous *
 
 - **Agent Configuration (`agents/platform`)**: Contains the system prompt and persona identity (`SOUL.md`), workspace instructions (`AGENTS.md`), runtime configuration (`config.yaml`), operational playbooks (`governance/`) that the scheduled governance jobs point at, their schedules (`cron/jobs.json`), and reusable skills (`skills/`).
 - **Kubernetes Operator (`k8s-operator`)**: A Kubebuilder-powered Go operator that manages Custom Resource Definitions (`PlatformAgent`) and reconciles cluster lifecycle state.
-- **Integrations**: Supports LiteLLM Gateway for LLM provider routing (Gemini, OpenAI, Anthropic) and enterprise messaging bridges (Google Chat, Slack).
+- **Integrations**: Supports LiteLLM Gateway for LLM provider routing (Gemini, Vertex AI, OpenAI, Anthropic) and enterprise messaging bridges (Google Chat, Slack).
 
 ---
 
@@ -343,6 +343,9 @@ kubectl patch secret platform-agent-secrets -n kubeagents-system --type=merge \
 kubectl rollout restart deployment/platform-agent-gateway -n kubeagents-system
 ```
 
+Vertex AI needs no entry here: `MODEL_PROVIDER=vertex` authenticates with Workload Identity
+(see [Inference gateway](docs/site/src/content/docs/concepts/inference-gateway.md#vertex-ai-and-model-garden)).
+
 ### Step 3: Build & Push the Operator Image
 
 Set your registry destination and build the container image:
@@ -381,6 +384,9 @@ To optionally deploy the LiteLLM Gateway or GitHub Token Minter:
 # Deploy LiteLLM Gateway
 export MODEL_PROVIDER=gemini
 export MODEL_DEFAULT_NAME=gemini-3.5-flash
+# For MODEL_PROVIDER=vertex_ai also export PROJECT_ID, LITELLM_KSA_NAME,
+# LITELLM_GSA_NAME, VERTEX_PROJECT_ID, and VERTEX_LOCATION — the vertex overlay
+# renders the gateway's Workload Identity ServiceAccount from them.
 make deploy-litellm
 
 # Deploy GitHub Integration (requires pre-configured github-app-credentials secret and env vars)
