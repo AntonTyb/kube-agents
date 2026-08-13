@@ -50,7 +50,7 @@ the agent a usable kubectl context) when it has the complete triple; with one mi
 | `hermes.sessionKVApiKeySecretRef.name` + `key` | string | `Secret` holding the bearer token for the pod-local Session KV server (`SESSION_KV_API_KEY`). Optional; absent, the server rejects every request with `503`. |
 | `hermes.sessionKVSaltSecretRef.name` + `key`   | string | `Secret` holding the HMAC salt used to pseudonymise chat identities (`SESSION_KV_SALT`). Optional; absent, the agent generates a per-pod salt and warns.     |
 | `memory.memoryEnabled`                         | bool   | Toggle framework memory persistence. Default `false`.                                                                                                        |
-| `memory.provider`                              | string | Memory provider implementation. Default `multiuser_memory`.                                                                                                  |
+| `memory.provider`                              | string | Memory provider implementation. Default `multiuser_memory`; `none` for none. See below.                                                                      |
 | `memory.userProfileEnabled`                    | bool   | Toggle per-user memory profiling. Default `false`.                                                                                                           |
 | `eventWatcher.enabled`                         | bool   | Start the `k8s-event-watcher`. Default `true`; `false` is the emergency stop for an event storm (see below).                                                 |
 | `tuning.<persona>.apiMaxRetries`               | int    | Model-call retries before a run gives up. Unset = Hermes default `3`.                                                                                        |
@@ -63,6 +63,44 @@ authenticates to that same server, treats an empty `SESSION_KV_API_KEY` as fatal
 start — so no cluster events are watched at all, while the container stays Ready and the CR
 `.status` says nothing. An installation upgraded from before the key existed is the case that lands
 here; add the key to the agent Secret and restart the pod.
+
+### `spec.harness.memory`
+
+`provider` picks which long-term memory implementation the agents load. Two ship in this repository,
+and the difference between them is the whole choice:
+
+| Value                          | Fits                       | What it costs to run                                      | What it gives                                            |
+| ------------------------------ | -------------------------- | --------------------------------------------------------- | -------------------------------------------------------- |
+| `multiuser_memory` _(default)_ | small or personal installs | nothing — a per-user Markdown file inside the pod         | verbatim recall of everything, no ranking or search      |
+| `kube_agents_memory`           | enterprise deployments     | a Hindsight API server and a Postgres database in-cluster | ranked recall, per-user and shared scopes, consolidation |
+| `none`                         | —                          | nothing                                                   | no provider; Hermes' built-in store only                 |
+
+The split is about how the store is read, not about how good it is. The file provider concatenates
+everything into the system prompt on every turn, so it is bounded by the context window; Hindsight
+retrieves only what a question needs, so its cost per turn barely moves as the store grows. A fleet
+of a few clusters and a handful of people will not reach the bound, and paying for a database there
+buys nothing.
+
+Anything else is passed through to Hermes untouched, so its own external providers (`hindsight`,
+`mem0`, `openviking`, …) work if you bring their configuration. `none` is this API's spelling of
+Hermes' empty string, which cannot be expressed here: an absent field takes the CRD default.
+
+Only a Hindsight-backed provider reaches the specialist profiles, because only that one can be made
+read-only and scoped by tag. Under any other value the specialists get no provider at all and the
+Chat Agent keeps the store to itself.
+
+`memoryEnabled` and `userProfileEnabled` are a **different** mechanism — Hermes' built-in
+`MEMORY.md` / `USER.md` files, which have no per-user scoping. Both providers above replace that
+store rather than supplement it, so both run with `memoryEnabled: false`.
+
+The installer's `MEMORY_ENABLED` variable is that same built-in store and nothing more; provisioning
+step 8 copies it into this field unchanged. It is not a master switch — whether the agent remembers
+anything is `provider`'s question, and `none` is how that answers no.
+
+The provisioning scripts read only the provider: step 13 deploys Hindsight when `MEMORY_PROVIDER` is
+Hindsight-backed, which is what a stock install gets, and nothing when it is `multiuser_memory` or
+`none`. See
+[`docs/designs/memory.md`](https://github.com/gke-labs/kube-agents/blob/main/docs/designs/memory.md).
 
 ### `spec.harness.eventWatcher`
 

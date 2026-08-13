@@ -233,7 +233,26 @@ type MemorySpec struct {
 	// +optional
 	MemoryEnabled *bool `json:"memoryEnabled,omitempty"`
 
-	// Provider specifies the memory provider implementation (e.g. "multiuser_memory").
+	// Provider selects the memory provider plugin. Two ship in the agent image:
+	// "multiuser_memory" — the default, for small or personal deployments — keeps a
+	// per-user Markdown file inside the pod and needs nothing else running, at the
+	// price of loading the whole store into the model's context on every turn, and
+	// "kube_agents_memory" — for enterprise deployments — gives ranked recall backed
+	// by the in-cluster Hindsight service and its Postgres database. Any other
+	// plugin Hermes ships may be named here too.
+	//
+	// The file store is the default because it is what this API shipped before
+	// "kube_agents_memory" existed. A CR written against the older schema omits this
+	// field, and taking the default must leave that agent with the store it already
+	// has rather than pointing it at a Hindsight service nobody deployed.
+	//
+	// Use "none" for no external provider at all. That is not the same as leaving
+	// this field empty: an absent field takes the default below, so "none" is the
+	// only way to express the choice. The operator translates it to the empty
+	// string Hermes itself uses.
+	//
+	// Only a Hindsight-backed provider reaches the specialist profiles, and only
+	// read-only; see memoryOverlay in the controller for why.
 	// +kubebuilder:default="multiuser_memory"
 	// +optional
 	Provider string `json:"provider,omitempty"`

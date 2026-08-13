@@ -323,6 +323,68 @@ init_var_platform_agent_permission_set() {
   fi
 }
 
+# ─── Memory Provider ──────────────────────────────────────────────────────────
+# The accepted values for MEMORY_PROVIDER.
+#
+# Two of these ship in this repo, and the difference between them is the whole
+# choice: `kube_agents_memory` wraps the upstream `hindsight` plugin and needs an
+# API server and a Postgres database in the cluster, while `multiuser_memory`
+# keeps a per-user Markdown file inside the pod and needs nothing at all. The
+# rest are the external plugins Hermes ships — see `memory.provider` in its
+# hermes_cli/config.py.
+#
+# `multiuser_memory` is the default because it is what this repo shipped before
+# `kube_agents_memory` existed: re-running provisioning against an install that
+# never chose a provider must not silently grow it a Postgres database.
+#
+# `none` is this installer's spelling of "no external provider — keep Hermes'
+# built-in store". Hermes itself spells that as the empty string, but an empty
+# string cannot survive the trip through the CR: an absent field takes the CRD
+# default, and the operator only overrides a non-empty one. So the choice is
+# carried as `none` and the operator translates it back to "" when it renders
+# config.yaml.
+MEMORY_PROVIDER_CHOICES="none kube_agents_memory multiuser_memory hindsight mem0 openviking holographic retaindb byterover"
+
+init_var_memory_provider() {
+  init_var "MEMORY_PROVIDER" "multiuser_memory" \
+    "Enter agent memory provider (${MEMORY_PROVIDER_CHOICES// /, })"
+
+  MEMORY_PROVIDER=$(echo "$MEMORY_PROVIDER" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+
+  # Someone answering the prompt with a bare Enter after clearing the default
+  # means "no memory", which is `none` here.
+  if [ -z "$MEMORY_PROVIDER" ]; then
+    MEMORY_PROVIDER="none"
+  fi
+
+  local choice valid=1
+  for choice in $MEMORY_PROVIDER_CHOICES; do
+    if [ "$MEMORY_PROVIDER" = "$choice" ]; then
+      valid=0
+      break
+    fi
+  done
+  if [ "$valid" -ne 0 ]; then
+    print_error "Invalid agent memory provider '$MEMORY_PROVIDER'. Must be one of: ${MEMORY_PROVIDER_CHOICES// /, }."
+    exit 1
+  fi
+
+  # Persist the normalised value so the migration and the lower-casing stick,
+  # and so the later steps that read vars.sh see what this step decided.
+  save_var "MEMORY_PROVIDER" "$MEMORY_PROVIDER"
+}
+
+# True when the selected provider is backed by the in-cluster Hindsight service.
+# `kube_agents_memory` wraps the upstream `hindsight` plugin, so both talk to the
+# same API server and both need step 13 to have run; nothing else does.
+memory_provider_uses_hindsight() {
+  local provider
+  provider=$(echo "${1:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  case "$provider" in
+    kube_agents_memory | hindsight) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 is_non_interactive() {
   [ ! -t 0 ] || [ "${NO_CONFIRM:-0}" -eq 1 ] || [ "${DRY_RUN:-0}" -eq 1 ] || is_ci_pipeline

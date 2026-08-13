@@ -179,9 +179,9 @@ func buildConfigMapData(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agen
 	for profile := range targeted {
 		profiles[profile] = true
 	}
-	if platformProfileLimits(agent) != nil {
-		profiles[platformProfileName] = true
-	}
+	// The platform profile is unconditional: it always carries the memory provider,
+	// which follows the CR rather than the copy baked into agents/platform/config.yaml.
+	profiles[platformProfileName] = true
 	for profile := range profiles {
 		// "default" is not a named profile — its key is the whole-config render written
 		// above, and letting a plugin reach this loop with that name would replace the
@@ -193,17 +193,21 @@ func buildConfigMapData(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agen
 			continue
 		}
 		var limits *agentv1alpha1.AgentLimits
+		var memory map[string]any
 		if profile == platformProfileName {
 			limits = platformProfileLimits(agent)
+			memory = memoryOverlay(agent)
 		}
-		if overlay := renderProfileOverlayYAML(targeted[profile], limits); strings.TrimSpace(overlay) != "" {
+		if overlay := renderProfileOverlayYAML(targeted[profile], limits, memory); strings.TrimSpace(overlay) != "" {
 			data[profileOverlayKey(profile)] = overlay
 		}
 	}
 
 	// Cluster profiles are named at runtime, so they get one class overlay applied to
-	// all of them rather than a file each.
-	if overlay := renderProfileOverlayYAML(nil, clusterProfileLimits(agent)); strings.TrimSpace(overlay) != "" {
+	// all of them rather than a file each. No memory subtree: agents/cluster/config.yaml
+	// configures no provider at all, on purpose — a cluster agent is spawned by the
+	// kanban dispatcher and carries no human identity to scope a store by.
+	if overlay := renderProfileOverlayYAML(nil, clusterProfileLimits(agent), nil); strings.TrimSpace(overlay) != "" {
 		data[clusterProfileClassKey] = overlay
 	}
 	return data
@@ -456,6 +460,85 @@ func agentLimitsOverlay(limits *agentv1alpha1.AgentLimits) map[string]any {
 	return map[string]any{"agent": out}
 }
 
+// defaultMemoryProvider is the provider a PlatformAgent gets when its spec says
+// nothing. It is the per-user file store, which needs nothing running outside the
+// pod — the same store this operator gave an agent before the Hindsight-backed
+// wrapper existed, so a CR written against the older schema reconciles unchanged
+// rather than being pointed at a service the install never deployed. Keep in step
+// with the kubebuilder default on MemorySpec.Provider.
+const defaultMemoryProvider = "multiuser_memory"
+
+// kubeAgentsMemoryProvider is this repo's slim wrapper around the upstream
+// `hindsight` plugin. An install opts into it; nothing defaults to it.
+const kubeAgentsMemoryProvider = "kube_agents_memory"
+
+// memoryProviderNone is how the CR spells "no external memory provider — leave the
+// harness with its built-in store".
+//
+// Hermes spells that as the empty string (`memory.provider: ""`), but an empty
+// string cannot express a choice on the way in: a kubebuilder default applies to an
+// absent field, so clearing spec.harness.memory.provider hands back
+// defaultMemoryProvider rather than turning the provider off. A sentinel is the only
+// value that survives the round trip, and the operator translates it back here.
+const memoryProviderNone = "none"
+
+// resolveMemoryProvider returns the provider name to render into a config.yaml.
+func resolveMemoryProvider(agent *agentv1alpha1.PlatformAgent) string {
+	if agent.Spec.Harness == nil || agent.Spec.Harness.Memory == nil {
+		return defaultMemoryProvider
+	}
+	provider := strings.TrimSpace(agent.Spec.Harness.Memory.Provider)
+	switch {
+	case provider == "":
+		return defaultMemoryProvider
+	case strings.EqualFold(provider, memoryProviderNone):
+		return ""
+	default:
+		return provider
+	}
+}
+
+// memoryOverlay renders the `memory` subtree for the platform profile's overlay.
+//
+// The specialist profiles read shared-scope memory, so they load a provider too — but
+// theirs came from the static agents/platform/config.yaml baked into the image, which
+// meant an install that chose a different provider (or none at all) still got
+// kube_agents_memory on every specialist. The choice lives in the CR, so the operator
+// owns this key the same way it owns the execution limits above.
+//
+// A specialist only gets a provider that can be made read-only and scoped by tag,
+// which today means the Hindsight-backed pair. A per-user file provider like
+// multiuser_memory keys its store off the gateway identity, and a specialist has none:
+// it is spawned by the kanban dispatcher, so every write would land in one anonymous
+// `default` bucket and the global MEMORY.md would be writable by a profile nobody is
+// supervising. For those the specialists get no provider and read their facts from the
+// kanban card, which is what agents/cluster/config.yaml already does.
+//
+// Only `provider` is written. Whether the specialist may store anything at all
+// (memory_enabled, read_only, user_profile_enabled) is a property of the persona, not
+// of the install, and stays in the image's config.yaml.
+func memoryOverlay(agent *agentv1alpha1.PlatformAgent) map[string]any {
+	provider := resolveMemoryProvider(agent)
+	if !memoryProviderIsHindsightBacked(provider) {
+		provider = ""
+	}
+	return map[string]any{
+		"memory": map[string]any{"provider": provider},
+	}
+}
+
+// memoryProviderIsHindsightBacked reports whether a provider talks to the in-cluster
+// Hindsight service. Keep in sync with memory_provider_uses_hindsight in
+// k8s-operator/scripts/common.sh, which decides whether to deploy it.
+func memoryProviderIsHindsightBacked(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case kubeAgentsMemoryProvider, "hindsight":
+		return true
+	default:
+		return false
+	}
+}
+
 // pluginProfileMountRoot is where a profile-targeted plugin's image volume is mounted.
 //
 // Outside $HERMES_HOME on purpose. That directory is the data PVC, and the kubelet creates
@@ -507,7 +590,7 @@ func partitionPluginsByProfile(agentPlugins []*agentv1alpha1.AgentPlugin) ([]*ag
 // deploy/shared/defaults/config.yaml with the profile's own overlay, content the operator
 // does not have. Rendering it in full would fork the source of truth; a cluster profile
 // additionally carries a runtime `cluster_identity` stamp that overwriting would strip.
-func renderProfileOverlayYAML(plugins []*agentv1alpha1.AgentPlugin, limits *agentv1alpha1.AgentLimits) string {
+func renderProfileOverlayYAML(plugins []*agentv1alpha1.AgentPlugin, limits *agentv1alpha1.AgentLimits, memory map[string]any) string {
 	overlay := map[string]any{}
 
 	// Operator-owned execution limits from spec.harness.tuning. Written before the
@@ -515,6 +598,11 @@ func renderProfileOverlayYAML(plugins []*agentv1alpha1.AgentPlugin, limits *agen
 	// drops `agent` from plugin config, and this ordering makes that belt-and-braces.
 	if agentOverlay := agentLimitsOverlay(limits); agentOverlay != nil {
 		overlay = mergeMaps(overlay, agentOverlay)
+	}
+
+	// Operator-owned memory settings, for the same reason and with the same ordering.
+	if memory != nil {
+		overlay = mergeMaps(overlay, memory)
 	}
 
 	enabled := make([]string, 0, len(plugins))
@@ -806,20 +894,21 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// Hermes registers during discover_mcp_tools. Kept in sync with
 	// agents/chat/config.yaml, which carries the same note.
 	//
-	// `memory` here is a GATE for the multiuser_memory provider, not a tool grant.
+	// `memory` here is a GATE for the memory provider, not a tool grant. The check
+	// is provider-agnostic: it applies to whatever cfg.Memory.Provider names below.
 	// hermes_cli.tools_config._get_platform_tools() resolves this list for the
 	// session's platform key and subtracts agent.disabled_toolsets LAST; what
 	// survives becomes agent.enabled_toolsets. inject_memory_provider_tools()
 	// then bails unless memory_provider_tools_enabled() sees "memory" there, and
-	// that injection is the only path by which multiuser_memory reaches the model.
-	// So `memory` must be listed HERE and must NOT be in DisabledToolsets below —
-	// listing it in both nets to off (the subtraction wins), which is why the
-	// front door's memories dir stayed empty despite the provider loading.
+	// that injection is the only path by which the provider's tools reach the
+	// model. So `memory` must be listed HERE and must NOT be in DisabledToolsets
+	// below — listing it in both nets to off (the subtraction wins), which is why
+	// the front door had no working memory despite the provider loading.
 	//
-	// Price: the built-in `memory` tool is exposed alongside multiuser_memory. It
-	// is inert — MemoryEnabled=false leaves agent._memory_store nil and
+	// Price: the built-in `memory` tool is exposed alongside the provider's own
+	// tools. It is inert — MemoryEnabled=false leaves agent._memory_store nil and
 	// tools/memory_tool.py returns "Memory is not available" without touching
-	// disk. SOUL.md §1.6 tells the agent to write through multiuser_memory.
+	// disk. SOUL.md §1.6 tells the agent to ignore it.
 	cfg.PlatformToolsets = map[string][]string{
 		"cli":         {"mcp-router", "kanban", "memory"},
 		"api_server":  {"mcp-router", "kanban", "memory"},
@@ -878,8 +967,8 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// it is the delegation surface. Only mcp-router + kanban survive.
 	// `memory` is deliberately NOT in this list: disabling it here would strip
 	// "memory" from agent.enabled_toolsets, fail the gate in
-	// inject_memory_provider_tools(), and silently kill multiuser_memory — the
-	// provider would still load and log "registered (1 tools)" while never
+	// inject_memory_provider_tools(), and silently kill the memory provider — it
+	// would still load and log that it registered its tools while never
 	// reaching the model. See the PlatformToolsets note above. That omission is
 	// conditional on the built-in store staying off; it is re-added below when
 	// spec.harness.memory.memoryEnabled turns it on.
@@ -941,23 +1030,23 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// deployed default profile.
 	cfg.Plugins.Enabled = append(slices.Clone(defaultProfilePlugins), "legacy_slash_commands", "agent_roster")
 	cfg.Display.Platforms = map[string]map[string]any{}
-	// Per-user memory. The built-in MEMORY.md/USER.md store stays off; the
-	// multiuser_memory provider replaces it and keys each user's notes off the
-	// gateway identity (agent._user_id), writing to memories/users/<user>.md with a
-	// shared MEMORY.md alongside. The provider hydrates both into the system prompt
-	// itself, so the agent reads without a tool call and only writes through one.
-	// This is the only profile that gets it: kanban-spawned specialists carry no
-	// human identity, so their writes would collapse into one anonymous bucket.
+	// Memory. The built-in MEMORY.md/USER.md store stays off; the bundled
+	// kube_agents_memory provider replaces it. It wraps one Hindsight instance
+	// talking HTTP to a self-hosted Hindsight API, and keeps everyone's memories
+	// in a single bank separated by a scope tag: "user:<id>" resolved from the
+	// gateway identity (agent._user_id) for private facts, "scope:shared" for
+	// organisation-wide ones. Both are recalled into the prompt each turn; only
+	// the personal scope retains automatically at session end. This is the only
+	// profile that gets it: kanban-spawned specialists carry no human identity,
+	// and the provider fails closed there rather than collapsing their writes
+	// into one anonymous bucket.
 	cfg.Memory.MemoryEnabled = false
-	cfg.Memory.Provider = "multiuser_memory"
+	cfg.Memory.Provider = resolveMemoryProvider(agent)
 	cfg.Memory.UserProfileEnabled = false
 
 	if agent.Spec.Harness != nil && agent.Spec.Harness.Memory != nil {
 		if agent.Spec.Harness.Memory.MemoryEnabled != nil {
 			cfg.Memory.MemoryEnabled = *agent.Spec.Harness.Memory.MemoryEnabled
-		}
-		if agent.Spec.Harness.Memory.Provider != "" {
-			cfg.Memory.Provider = agent.Spec.Harness.Memory.Provider
 		}
 		if agent.Spec.Harness.Memory.UserProfileEnabled != nil {
 			cfg.Memory.UserProfileEnabled = *agent.Spec.Harness.Memory.UserProfileEnabled
@@ -968,14 +1057,21 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// store is off. memoryEnabled is a supported CRD field, and setting it true
 	// would leave the front door holding a live built-in `memory` tool — a real
 	// read/write surface over a single MEMORY.md/USER.md pair with no per-user
-	// scoping, which is precisely what multiuser_memory exists to avoid. There is
+	// scoping, which is precisely what the per-user provider exists to avoid. There is
 	// no way to have one without the other: the same toolset name gates the
 	// provider injection and exposes the built-in tool. So when the built-in
 	// store is switched on, put `memory` back in the denylist. Both memory tools
 	// then disappear from the front door — the behaviour this field already had
 	// before the gate was opened, and better than two competing stores on a
 	// profile whose whole point is a minimal tool surface.
-	if cfg.Memory.MemoryEnabled {
+	//
+	// userProfileEnabled has to be tested too, and it is easy to miss: Hermes
+	// constructs the store when EITHER flag is set (agent_init.py builds
+	// MemoryStore on `_memory_enabled or _user_profile_enabled`), and the
+	// built-in tool checks only that the store exists — it has no per-target
+	// gate. So userProfileEnabled alone makes the tool live for MEMORY.md as
+	// well as USER.md.
+	if cfg.Memory.MemoryEnabled || cfg.Memory.UserProfileEnabled {
 		cfg.Agent.DisabledToolsets = append(cfg.Agent.DisabledToolsets, "memory")
 	}
 
@@ -1608,6 +1704,34 @@ func buildPodTemplateSpec(agent *agentv1alpha1.PlatformAgent, configHash, fluent
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "PYTHONPATH",
 		Value: "/opt/defaults/scripts",
+	})
+	// The memory provider's endpoint, derived from the namespace the same way the
+	// model endpoint is (cfg.Model.BaseURL above) — the two are the same class of
+	// value and had drifted into two mechanisms, one namespace-aware and one a
+	// baked literal. The image-owned hindsight/config.json deliberately carries no
+	// `api_url` so this wins: the plugin reads the file first and the environment
+	// only as a fallback, so a value left in the file would silently outrank this.
+	// Set unconditionally rather than gated on the provider — the variable is inert
+	// unless a Hindsight-backed provider loads, and gating it would make the
+	// endpoint depend on a field the CR may override to something unrelated.
+	// Kanban workers are subprocesses of this container, so their platform profile
+	// inherits it and needs no second copy.
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "HINDSIGHT_API_URL",
+		Value: fmt.Sprintf("http://hindsight-api.%s.svc.cluster.local:8888", agent.Namespace),
+	})
+
+	// The effective memory provider, for the entrypoint rather than for Hermes —
+	// Hermes reads it from the rendered config.yaml. The entrypoint needs it before
+	// that file is in play, to decide whether to run the one-way import that moves a
+	// file-based MEMORY.md into the provider and unlinks the original. Gating that on
+	// the presence of hindsight/config.json (an image-owned file, always present) meant
+	// it ran for everyone, including installs that had deliberately not chosen a
+	// Hindsight-backed provider. Empty here means the CR asked for no provider, which
+	// is a real answer and distinct from the variable being absent.
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "MEMORY_PROVIDER",
+		Value: resolveMemoryProvider(agent),
 	})
 
 	dashboardEnabled := isDashboardEnabled(agent)

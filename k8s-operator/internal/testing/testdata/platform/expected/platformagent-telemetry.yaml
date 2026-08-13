@@ -387,6 +387,9 @@ data:
     - kanban
     web:
       backend: ddgs
+  profile-platform.overlay.yaml: |
+    memory:
+      provider: ""
 kind: ConfigMap
 metadata:
   creationTimestamp: null
@@ -623,6 +626,10 @@ spec:
               value: /opt/credential-proxy/bin:/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             - name: PYTHONPATH
               value: /opt/defaults/scripts
+            - name: HINDSIGHT_API_URL
+              value: http://hindsight-api.kubeagents-system.svc.cluster.local:8888
+            - name: MEMORY_PROVIDER
+              value: multiuser_memory
             - name: AGENT_SHARED_STATE_SETUP
               value: owner
             - name: API_SERVER_MODEL_NAME
