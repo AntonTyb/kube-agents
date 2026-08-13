@@ -1015,10 +1015,6 @@ func buildDefaultVolumeMounts(homeDir string) []corev1.VolumeMount {
 			MountPath: path.Dir(sessionKVDBPath),
 			SubPath:   "session",
 		},
-		{
-			Name:      "tmp-scratch",
-			MountPath: "/tmp",
-		},
 	}
 }
 
@@ -1345,7 +1341,6 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			Resources:    resources,
 			VolumeMounts: volumeMounts,
 			SecurityContext: &corev1.SecurityContext{
-				ReadOnlyRootFilesystem:   ptr.To(true),
 				AllowPrivilegeEscalation: ptr.To(false),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
@@ -1380,10 +1375,6 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 				MountPath: path.Dir(sessionKVDBPath),
 				SubPath:   "session",
 			},
-			{
-				Name:      "tmp-scratch",
-				MountPath: "/tmp",
-			},
 		}
 
 		containers = append(containers, corev1.Container{
@@ -1410,7 +1401,6 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			},
 			VolumeMounts: append(dashboardVolumeMounts, extraVolumeMounts...),
 			SecurityContext: &corev1.SecurityContext{
-				ReadOnlyRootFilesystem:   ptr.To(true),
 				AllowPrivilegeEscalation: ptr.To(false),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
@@ -1462,7 +1452,6 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			},
 		},
 		SecurityContext: &corev1.SecurityContext{
-			ReadOnlyRootFilesystem:   ptr.To(true),
 			AllowPrivilegeEscalation: ptr.To(false),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
@@ -1577,12 +1566,6 @@ func buildDefaultVolumes(agent *agentv1alpha1.PlatformAgent) []corev1.Volume {
 					},
 					DefaultMode: ptr.To(int32(0644)),
 				},
-			},
-		},
-		{
-			Name: "tmp-scratch",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		},
 	}
