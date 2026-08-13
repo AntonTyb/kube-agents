@@ -25,7 +25,6 @@ two documents a week turns one shared line into a permanent merge conflict
 between every branch that touches it. `docs-check-map` derives the totals it
 needs from `git ls-files` at check time and prints them; nothing is restated
 here for it to disagree with.
->>>>>>> gke-labs/main
 
 ```text
 kube-agents/
