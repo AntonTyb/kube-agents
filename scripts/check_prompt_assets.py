@@ -116,7 +116,6 @@ OPT_DEFAULTS: tuple[tuple[str, str], ...] = (
     ("scripts", "agents/platform/scripts"),
     ("scripts/profile_overlay.py", "deploy/shared/profile_overlay.py"),
     ("scripts/profile_plugins.py", "deploy/shared/profile_plugins.py"),
-    ("scripts/default_profile_config.py", "deploy/shared/default_profile_config.py"),
     ("scripts/otel_config.py", "deploy/shared/otel_config.py"),
 )
 
