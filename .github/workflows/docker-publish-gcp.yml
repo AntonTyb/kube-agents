@@ -46,20 +46,20 @@ jobs:
         run: |
           gcloud builds submit \
             --config=deploy/docker/cloudbuild.yaml \
-            --substitutions="_IMAGE_URI=${GCP_REGISTRY}/platform-agent:${GITHUB_SHA},_IMAGE_URI_LATEST=${GCP_REGISTRY}/platform-agent:latest,_TARGET=platform,_HERMES_AGENT_TAG=${HERMES_AGENT_TAG}" \
+            --substitutions="_IMAGE_URI=$GCP_REGISTRY/platform-agent:$GITHUB_SHA,_IMAGE_URI_LATEST=$GCP_REGISTRY/platform-agent:latest,_TARGET=platform,_HERMES_AGENT_TAG=$HERMES_AGENT_TAG" \
             .
-          DIGEST=$(gcloud artifacts docker images describe "${GCP_REGISTRY}/platform-agent:${GITHUB_SHA}" --format="value(image_summary.digest)")
+          DIGEST=$(gcloud artifacts docker images describe "$GCP_REGISTRY/platform-agent:$GITHUB_SHA" --format="value(image_summary.digest)")
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Build and Push Replay Proxy (GCP Cloud Build)
         id: gcp-replay-proxy
         run: |
           gcloud builds submit examples/inference-replay/replay-proxy \
-            --tag="${GCP_REGISTRY}/replay-proxy:${GITHUB_SHA}"
+            --tag="$GCP_REGISTRY/replay-proxy:$GITHUB_SHA"
           gcloud artifacts docker tags add \
-            "${GCP_REGISTRY}/replay-proxy:${GITHUB_SHA}" \
-            "${GCP_REGISTRY}/replay-proxy:latest"
-          DIGEST=$(gcloud artifacts docker images describe "${GCP_REGISTRY}/replay-proxy:${GITHUB_SHA}" --format="value(image_summary.digest)")
+            "$GCP_REGISTRY/replay-proxy:$GITHUB_SHA" \
+            "$GCP_REGISTRY/replay-proxy:latest"
+          DIGEST=$(gcloud artifacts docker images describe "$GCP_REGISTRY/replay-proxy:$GITHUB_SHA" --format="value(image_summary.digest)")
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Build and Push Credential Sidecar (GCP Cloud Build)
@@ -67,9 +67,9 @@ jobs:
         run: |
           gcloud builds submit \
             --config=deploy/docker/cloudbuild.yaml \
-            --substitutions="_IMAGE_URI=${GCP_REGISTRY}/credential-proxy:${GITHUB_SHA},_IMAGE_URI_LATEST=${GCP_REGISTRY}/credential-proxy:latest,_TARGET=credential-proxy,_HERMES_AGENT_TAG=${HERMES_AGENT_TAG}" \
+            --substitutions="_IMAGE_URI=$GCP_REGISTRY/credential-proxy:$GITHUB_SHA,_IMAGE_URI_LATEST=$GCP_REGISTRY/credential-proxy:latest,_TARGET=credential-proxy,_HERMES_AGENT_TAG=$HERMES_AGENT_TAG" \
             .
-          DIGEST=$(gcloud artifacts docker images describe "${GCP_REGISTRY}/credential-proxy:${GITHUB_SHA}" --format="value(image_summary.digest)")
+          DIGEST=$(gcloud artifacts docker images describe "$GCP_REGISTRY/credential-proxy:$GITHUB_SHA" --format="value(image_summary.digest)")
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
@@ -81,6 +81,6 @@ jobs:
           REPLAY_PROXY_DIGEST: ${{ steps.gcp-replay-proxy.outputs.digest }}
           CREDENTIAL_PROXY_DIGEST: ${{ steps.gcp-credential-proxy.outputs.digest }}
         run: |
-          cosign sign --yes "${GCP_REGISTRY}/platform-agent@${PLATFORM_DIGEST}"
-          cosign sign --yes "${GCP_REGISTRY}/replay-proxy@${REPLAY_PROXY_DIGEST}"
-          cosign sign --yes "${GCP_REGISTRY}/credential-proxy@${CREDENTIAL_PROXY_DIGEST}"
+          cosign sign --yes "$GCP_REGISTRY/platform-agent@$PLATFORM_DIGEST"
+          cosign sign --yes "$GCP_REGISTRY/replay-proxy@$REPLAY_PROXY_DIGEST"
+          cosign sign --yes "$GCP_REGISTRY/credential-proxy@$CREDENTIAL_PROXY_DIGEST"

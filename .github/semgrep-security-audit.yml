@@ -1,3 +1,10 @@
+# Vendored Semgrep Security Audit Ruleset
+# Source: Semgrep Registry (p/security-audit)
+# Export Date: 2026-08-17
+# Semgrep Engine Target: 1.155.0
+# License: Semgrep Rules License v1.0 (https://semgrep.dev/legal/rules-license)
+# Regeneration: semgrep registry export p/security-audit > .github/semgrep-security-audit.yml
+
 rules:
 - id: dockerfile.security.last-user-is-root.last-user-is-root
   patterns:

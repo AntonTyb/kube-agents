@@ -1195,6 +1195,9 @@ USER 10000:10000
 # Everything the check needs is already in the `platform` stage above, so this reuses its
 # cache entirely: on a build that has just produced `platform`, the marginal cost is one
 # COPY, one RUN, and a few seconds.
+#
+# Invariant: This stage depends on `platform` ending as non-root (USER 10000:10000) so that
+# entrypoint step 1 (stage2-hook.sh) executes as hermes rather than root.
 FROM platform AS entrypoint-gate-test
 
 COPY --chmod=0755 deploy/shared/entrypoint_gate_check.sh /usr/local/bin/entrypoint-gate-check

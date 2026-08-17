@@ -72,4 +72,4 @@ jobs:
         env:
           CONTROLLER_DIGEST: ${{ steps.build-controller.outputs.digest }}
         run: |
-          cosign sign --yes "ghcr.io/${IMAGE_REPOSITORY}/k8s-operator@${CONTROLLER_DIGEST}"
+          cosign sign --yes "ghcr.io/$IMAGE_REPOSITORY/k8s-operator@$CONTROLLER_DIGEST"

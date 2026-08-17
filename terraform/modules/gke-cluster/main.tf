@@ -15,12 +15,12 @@ resource "google_kms_key_ring" "gke_keyring" {
 }
 
 resource "google_kms_crypto_key" "gke_key" {
-  #checkov:skip=CKV_GCP_43:Key rotation period managed according to cluster security policy
   #checkov:skip=CKV_GCP_82:Database encryption key lifecycle managed according to cluster policy
-  count    = var.enable_database_encryption ? 1 : 0
-  name     = var.kms_key_name
-  key_ring = google_kms_key_ring.gke_keyring[0].id
-  purpose  = "ENCRYPT_DECRYPT"
+  count           = var.enable_database_encryption ? 1 : 0
+  name            = var.kms_key_name
+  key_ring        = google_kms_key_ring.gke_keyring[0].id
+  purpose         = "ENCRYPT_DECRYPT"
+  rotation_period = "7776000s"
 }
 
 resource "google_kms_crypto_key_iam_member" "gke_kms_binding" {
