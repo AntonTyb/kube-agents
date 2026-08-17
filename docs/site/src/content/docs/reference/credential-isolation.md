@@ -13,13 +13,12 @@ This page summarizes the architecture. The canonical design — including scope,
 
 Each PlatformAgent runs as one long-lived Pod with these managed containers:
 
-| Container                  | Trust level | Role                                                                 |
-| -------------------------- | ----------- | -------------------------------------------------------------------- |
-| `platform-agent`           | Untrusted   | The agent sandbox — credential-free env and mounts, CLI wrappers.    |
-| `envoy-credential-proxy`   | Trusted     | Envoy plus the credentialed command and chat runtime.                |
-| `event-watcher`            | Trusted     | Cluster-event forwarding with its own separate Kubernetes-API token. |
-| `fluent-bit`               | Trusted     | Log forwarding.                                                      |
-| `platform-agent-dashboard` | Untrusted   | Optional local dashboard (also credential-free).                     |
+| Container                  | Trust level | Role                                                                                                                                                |
+| -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform-agent`           | Untrusted   | The agent sandbox — credential-free env and mounts, CLI wrappers.                                                                                   |
+| `envoy-credential-proxy`   | Trusted     | Envoy, the credentialed command and chat runtime, and the event watcher, which forwards cluster events using its own separate Kubernetes-API token. |
+| `fluent-bit`               | Trusted     | Log forwarding.                                                                                                                                     |
+| `platform-agent-dashboard` | Untrusted   | Optional local dashboard (also credential-free).                                                                                                    |
 
 ```mermaid
 flowchart TB
@@ -47,20 +46,27 @@ So the sidecar reads exactly one string out of the file the agent wrote, `curren
 
 Naming a cluster is not extra authority — `get-credentials` is bound by the same IAM the proxy already runs under, so it can only reach clusters this identity could reach anyway. A pin the proxy cannot regenerate from (no `current-context`, a non-GKE context name, a merged `path1:path2` list) is rejected with `400` rather than honored.
 
+**Tree-mutating `git` runs only inside a leased workspace.** Containment to the shared volume keeps the agent off the sidecar's filesystem; it says nothing about keeping concurrent agents off each other, and a Pod runs six audit crons alongside every kanban worker. A skill takes a lease and works in a private clone under `/opt/data/gitops/<lease>/<owner>__<name>`; the proxy refuses `git add`, `commit`, `checkout`, `push`, `reset` and the other verbs that write a working tree or a remote ref unless the resolved directory — after any `-C` redirect — sits under one holding a `.lease` marker. Read verbs, `fetch`, and `clone` are unaffected. The refusal comes back as `SECURITY_POLICY_BLOCKED` with rule `git.workspace.lease`, and `CREDENTIAL_PROXY_REQUIRE_GIT_LEASE=0` disables the check for an unmigrated skill.
+
+This is a floor, not an ownership check: the wrapper sends an argument array and a working directory, never a caller identity, so the sidecar can tell that a push is happening inside _some_ lease but not whose. Whether the lease is the caller's own is checked in the sandbox by the skill that holds it. [`docs/designs/gitops-workspace-leases.md`](https://github.com/gke-labs/kube-agents/blob/main/docs/designs/gitops-workspace-leases.md) is canonical for the layout and the reaper.
+
 ## Credential placement
 
-| Data                            | Sandbox     | Credential sidecar        |
-| ------------------------------- | ----------- | ------------------------- |
-| `spec.deployment.env`           | No          | Yes                       |
-| Slack tokens                    | No          | Yes, Secret-backed env    |
-| PlatformAgent external API key  | No          | Yes, Secret-backed env    |
-| Automatic KSA token mount       | Disabled    | Disabled                  |
-| Explicit projected KSA token    | Not mounted | Read-only, one-hour token |
-| gcloud/kubectl configuration    | No          | Private `emptyDir`        |
-| GitHub installation token/cache | No          | Private `emptyDir`        |
-| Agent workspace                 | Yes         | Yes, for proxied commands |
+| Data                             | Sandbox                | Credential sidecar        |
+| -------------------------------- | ---------------------- | ------------------------- |
+| `spec.deployment.env`            | No                     | Yes                       |
+| Slack tokens                     | No                     | Yes, Secret-backed env    |
+| PlatformAgent external API key   | No                     | Yes, Secret-backed env    |
+| Session KV API key and HMAC salt | Yes, Secret-backed env | Yes, API key only         |
+| Automatic KSA token mount        | Disabled               | Disabled                  |
+| Explicit projected KSA token     | Not mounted            | Read-only, one-hour token |
+| gcloud/kubectl configuration     | No                     | Private `emptyDir`        |
+| GitHub installation token/cache  | No                     | Private `emptyDir`        |
+| Agent workspace                  | Yes                    | Yes, for proxied commands |
 
-Pod-wide `automountServiceAccountToken` is `false`. The sidecar's projected token uses the audience `kubeagents-credential-proxy` and expires after one hour; the event watcher gets a separate one-hour Kubernetes-API token projection. Neither token is mounted in the agent or dashboard containers.
+`SESSION_KV_API_KEY` and `SESSION_KV_SALT` are the sandbox's only Secret-backed environment variables, and both are pod-scoped: neither opens anything outside this Pod. They cannot sit behind the proxy because the sandbox is the _server_ here — `session_kv_server.py` binds `127.0.0.1:8699` and needs the key in order to reject callers that are not the event watcher, the Platform MCP server, or the `incident_context` plugin — and because the salt hashes chat identities before they are written, which has to happen where the identity already is. The design doc has the [full reasoning](https://github.com/gke-labs/kube-agents/blob/main/docs/credential-isolation-design.md#the-loopback-only-exception). Both are optional in the sense that the pod starts without them, and one of them is not optional in practice: the `k8s-event-watcher` in the credential sidecar authenticates with `SESSION_KV_API_KEY` and treats an empty value as fatal, so it exits on every start and no cluster events are watched at all — the container stays Ready, so its log is the only place that says so. The Session KV server also answers `503`, and identity hashing falls back to a per-process salt with a warning.
+
+Pod-wide `automountServiceAccountToken` is `false`. The sidecar's projected token uses the audience `kubeagents-credential-proxy` and expires after one hour; the event watcher gets a separate one-hour Kubernetes-API token projection, mounted in the same sidecar at the conventional in-cluster path. Neither token is mounted in the agent or dashboard containers.
 
 ## Request paths
 
@@ -71,11 +77,37 @@ Pod-wide `automountServiceAccountToken` is `false`. The sidecar's projected toke
 
 ## Guarantee and limitation
 
-**Guarantee:** the operator does not place managed credentials in the sandbox container's environment, root filesystem, persistent agent volume, or mounted ServiceAccount token path. `spec.deployment.env` is applied to the credential sidecar because it may contain credentials (only four allowlisted OpenTelemetry settings are copied to the sandbox, as literal values only).
+**Guarantee:** the operator does not place managed credentials in the sandbox container's environment, root filesystem, persistent agent volume, or mounted ServiceAccount token path. `spec.deployment.env` is applied to the credential sidecar because it may contain credentials (only a short allowlist is copied to the sandbox — the four OpenTelemetry settings and the three `ALERT_DAILY_LIMIT_*` alert ceilings — as literal values only).
 
 **Limitation:** containers in one Pod share a network namespace and one Pod identity. The sandbox has no KSA token file, but it can technically reach the GKE metadata server used by the sidecar — a Pod-level NetworkPolicy cannot block metadata for one container while allowing it for another. The design meets the scoped filesystem-and-environment goal but does not provide the stronger identity boundary of separate Pods.
 
 [`docs/security-requirements.md`](https://github.com/gke-labs/kube-agents/blob/main/docs/security-requirements.md) tracks this limitation formally: the credential-isolation requirement is not considered satisfied while the sandbox and sidecar share a process namespace (the dashboard-enabled configuration).
+
+## Troubleshooting
+
+**Every CLI in the sandbox reports `credential proxy unavailable`.** The `gcloud`, `kubectl`, `gh`, and `git` commands inside `platform-agent` are wrappers that forward to the sidecar over loopback. When the sidecar is not listening, all four fail the same way:
+
+```text
+credential proxy unavailable: [Errno 111] Connection refused
+```
+
+This is a sidecar availability problem rather than an authentication one — the wrappers hold no credentials to fail with. Inspect the sidecar rather than the CLI:
+
+```bash
+kubectl get pods -n kubeagents-system
+kubectl logs -n kubeagents-system deploy/platform-agent-gateway -c envoy-credential-proxy
+```
+
+**Diagnostics run inside the Pod are misleading while the sidecar is down.** Those wrappers are the only `gcloud` and `kubectl` the sandbox has, so the commands you would normally reach for return the same connection error instead of describing the Pod's identity. Test that identity from a throwaway Pod using the same ServiceAccount:
+
+```bash
+kubectl run wi-check -n kubeagents-system --rm -it --restart=Never \
+  --image=google/cloud-sdk:slim \
+  --overrides='{"spec":{"serviceAccountName":"kubeagents-platform-agent"}}' \
+  -- gcloud auth print-access-token
+```
+
+**The sidecar exits during startup.** The credential runtime runs `CREDENTIAL_PROXY_BOOTSTRAP_COMMAND` before it begins serving, and a non-zero exit stops the container — the Pod then crashloops while the other containers stay healthy. The command's stdout and stderr are written to the sidecar's log, so `kubectl logs -c envoy-credential-proxy` carries the reason. Bootstrap failures usually mean the Pod cannot reach the cluster or mint a token; see [Security & IAM](/kube-agents/reference/security-and-iam/) for the Workload Identity binding it depends on.
 
 ## Where to go next
 

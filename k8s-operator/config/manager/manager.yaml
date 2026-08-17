@@ -46,11 +46,28 @@ spec:
           env:
             - name: ENABLE_WEBHOOKS
               value: "true"
+            # Private-registry installs: uncomment (or patch via kustomize) to
+            # point the images the operator deploys at your own registry.
+            # PLATFORM_AGENT_IMAGE is the default agent image when a
+            # PlatformAgent CR omits spec.deployment.image; the credential-proxy
+            # sidecar image is derived from the agent image unless
+            # CREDENTIAL_PROXY_IMAGE is set explicitly.
+            # - name: PLATFORM_AGENT_IMAGE
+            #   value: "registry.example.com/kube-agents/platform-agent:latest"
+            # - name: CREDENTIAL_PROXY_IMAGE
+            #   value: "registry.example.com/kube-agents/credential-proxy:latest"
+            # - name: FLUENT_BIT_IMAGE
+            #   value: "registry.example.com/mirror/fluent-bit:5.1.0"
           ports:
             - containerPort: 8081
               name: health
               protocol: TCP
-            - containerPort: 9443
+            # 10250, not controller-runtime's default 9443: it is the only non-443 port
+            # GKE's automatic control-plane-to-node firewall rule permits, so a private
+            # cluster reaches the webhook without a per-cluster VPC rule. See DefaultPort
+            # in internal/webhook/platformagent_webhook.go. Keep in sync with the Service
+            # targetPort in config/webhook/service.yaml.
+            - containerPort: 10250
               name: webhook-server
               protocol: TCP
           securityContext:
