@@ -1135,6 +1135,16 @@ COPY agents/chat/plugins/ /opt/hermes/plugins/
 # is COPYed above or comes from the base image, so the failure branch is unreachable
 # today and exists to stay that way.
 #
+# The manifest keeps the 0644 the loops above give every other file, and must: it
+# sits INSIDE the tree it describes, so both mechanisms that put a tree on a profile
+# copy it too, and both preserve mode — `cp -a` in sync_profile_skills and
+# shutil.copytree/copy2 in profile_scaffold.overlay_template. A 0444 manifest
+# therefore lands on the PVC owned by uid 10000 with no write bit, and the NEXT
+# overlay of that profile reopens it for writing, raising shutil.Error out of
+# overlay_template and abandoning every item after `skills` — governance, hindsight
+# and the cron merge — behind a WARN. Ownership does not travel; mode does, and
+# read-only is the one mode this file must not have.
+#
 # Generated here rather than in a RUN of its own: `credential-proxy` builds FROM
 # this stage and the chain is bounded at 128 layers — see the layer-budget note at
 # the top of the file. __pycache__ and *.pyc are excluded because the compileall
@@ -1172,7 +1182,7 @@ RUN set -eu; \
             -exec sha256sum {} + | LC_ALL=C sort -k 2 > skills_manifest.sha256 ); \
         [ "$(wc -l < "$d/skills_manifest.sha256")" -eq "$n" ] \
             || { echo "manifest for $d has $(wc -l < "$d/skills_manifest.sha256") entries, expected $n" >&2; exit 1; }; \
-        chmod 444 "$d/skills_manifest.sha256"; \
+        chmod 644 "$d/skills_manifest.sha256"; \
     done; \
     chown -R root:root /opt/hermes/skills /opt/platform-template /opt/cluster-template
 

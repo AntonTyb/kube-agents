@@ -550,6 +550,30 @@ class SkillProvenanceContractTest(unittest.TestCase):
         step = step[: step.index("\n# 1.6 ")]
         self.assertIn('"$INSTALL_DIR/.venv/bin/python3"', step)
 
+    def test_the_manifest_mode_lets_a_profile_be_overlaid_twice(self):
+        # The manifest sits inside the tree it describes, so every copy of that
+        # tree carries it onto the PVC — and both copies preserve mode while
+        # neither can preserve ownership. A read-only manifest therefore lands
+        # owned by the runtime uid with no write bit, and the next overlay of
+        # that profile raises out of profile_scaffold.overlay_template, dropping
+        # every item after `skills`. The mode is taken from the Dockerfile rather
+        # than assumed, so re-introducing `chmod 444` fails here.
+        mode = re.search(
+            rf"chmod (\d+) \"\$d/{re.escape(self.vsp.MANIFEST_NAME)}\"", self.generation_block()
+        )
+        self.assertIsNotNone(mode, "the build no longer sets an explicit manifest mode")
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "skills"
+            (source / "one").mkdir(parents=True)
+            (source / "one" / "SKILL.md").write_text("---\nname: one\n---\n")
+            manifest = source / self.vsp.MANIFEST_NAME
+            manifest.write_text("0  ./one/SKILL.md\n")
+            manifest.chmod(int(mode.group(1), 8))
+
+            profile = Path(tmp) / "profile" / "skills"
+            shutil.copytree(source, profile, dirs_exist_ok=True)
+            shutil.copytree(source, profile, dirs_exist_ok=True)
+
     def test_deleting_the_verifier_stops_the_pod_rather_than_the_check(self):
         # What decides whether the check is mandatory has to be the manifest, not
         # the script. The manifest is inside the root-owned tree; the script is in
