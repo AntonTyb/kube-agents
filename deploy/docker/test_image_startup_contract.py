@@ -418,5 +418,123 @@ class BytecodePremiseTest(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "99")
 
 
+class SkillProvenanceContractTest(unittest.TestCase):
+    """What the build writes and what the entrypoint checks have to stay one thing.
+
+    The manifest is produced by `sha256sum` in the Dockerfile and read by
+    verify_skills_provenance.py at boot, and neither file imports the other.
+    Every assertion below is a way the two can drift apart while both still
+    look correct on their own — and each drift fails somewhere far from here:
+    a tree the build stopped covering verifies clean forever, a tree the build
+    still covers but the entrypoint stopped checking does the same, and an
+    exclusion the two disagree about crash-loops every pod of a perfectly good
+    image.
+    """
+
+    TREES = (
+        "/opt/hermes/skills",
+        "/opt/platform-template/skills",
+        "/opt/cluster-template/skills",
+    )
+
+    def setUp(self):
+        self.stage = platform_stage(DOCKERFILE.read_text())
+        self.entrypoint = ENTRYPOINT.read_text()
+        spec = importlib.util.spec_from_file_location(
+            "verify_skills_provenance",
+            REPO_ROOT / "agents" / "platform" / "scripts" / "verify_skills_provenance.py",
+        )
+        self.vsp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.vsp)
+
+    def generation_block(self):
+        """The Dockerfile RUN that writes the manifests, continuations joined."""
+        instructions = []
+        current = []
+        for line in self.stage.splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            current.append(line.rstrip().removesuffix("\\"))
+            if not line.rstrip().endswith("\\"):
+                instructions.append(" ".join(current))
+                current = []
+        for instruction in instructions:
+            if "sha256sum" in instruction:
+                return instruction
+        self.fail("the platform stage does not generate a skill manifest")
+
+    def test_the_build_and_the_verifier_agree_on_the_manifest_name(self):
+        # The manifest sits inside the tree it describes, so both sides have to
+        # leave the same filename out of its own checksums. Disagree, and the
+        # verifier reports the manifest as an untracked file on every boot.
+        self.assertIn(self.vsp.MANIFEST_NAME, self.generation_block())
+
+    def test_every_tree_the_build_covers_is_checked_at_boot(self):
+        block = self.generation_block()
+        for tree in self.TREES:
+            with self.subTest(tree=tree):
+                self.assertIn(tree, block)
+                self.assertIn(tree, self.entrypoint)
+
+    def test_bytecode_is_excluded_on_both_sides(self):
+        # `compileall /opt/hermes` runs after the manifests are written and puts
+        # __pycache__ under /opt/hermes/skills. If the build stopped excluding
+        # it the manifest would be ordering-dependent; if the verifier stopped,
+        # every boot of a correct image would fail closed.
+        block = self.generation_block()
+        self.assertIn("__pycache__", block)
+        self.assertIn(".pyc", block)
+        self.assertIn("__pycache__", self.vsp.EXCLUDED_DIRS)
+        self.assertIn(".pyc", self.vsp.EXCLUDED_SUFFIXES)
+
+    def test_the_generated_manifest_is_checked_for_completeness(self):
+        # `find … | sort > manifest` exits with sort's status, and no POSIX sh
+        # has pipefail, so a find that died half-way ships a short manifest from
+        # a build that exited 0 — and that manifest then verifies clean.
+        self.assertRegex(self.generation_block(), r"wc -l")
+
+    def test_a_symlinked_tree_breaks_the_build_and_not_the_pod(self):
+        # `find -type f` tests the link rather than its target, so a symlink is
+        # never in the manifest, and the verifier refuses every one it finds.
+        # The two only stay consistent if a base image that starts shipping
+        # links is caught in a red build instead of in a pod that will not start.
+        self.assertIn("-type l", self.generation_block())
+
+    def test_the_trees_are_taken_away_from_the_runtime_user(self):
+        # The barrier the boot check cannot be: the agent runs as uid 10000, so
+        # a tree it still owns can be rewritten between the check and the next
+        # one. Losing this line leaves detection with nothing behind it.
+        self.assertIn("chown -R root:root", self.generation_block())
+
+    def test_verification_precedes_the_copy_onto_the_pvc(self):
+        # A tree that fails must not have reached a profile first. Step 2's bulk
+        # copy is the first thing that spreads any of it.
+        check = self.entrypoint.index("verify_skills_provenance.py")
+        copy = self.entrypoint.index("cp -ru /opt/defaults/.")
+        self.assertLess(check, copy)
+
+    def test_the_boot_check_refuses_to_start_rather_than_warning(self):
+        # Every other step in the entrypoint degrades with a WARN. This one must
+        # not: continuing means loading prompt material nobody can account for.
+        step = self.entrypoint[self.entrypoint.index("SKILL_PROVENANCE_SCRIPT="):]
+        step = step[: step.index("\n# 1.6 ")]
+        self.assertIn("exit 1", step)
+        self.assertNotIn("WARN", step)
+
+    def test_the_boot_check_runs_under_the_venv_interpreter(self):
+        # A bare `python3` is not guaranteed to exist in the image, and the one
+        # the runtime actually uses is the venv's.
+        step = self.entrypoint[self.entrypoint.index("SKILL_PROVENANCE_SCRIPT="):]
+        step = step[: step.index("\n# 1.6 ")]
+        self.assertIn('"$INSTALL_DIR/.venv/bin/python3"', step)
+
+    def test_the_verifier_is_shipped_where_the_entrypoint_looks_for_it(self):
+        # It is COPYed into /opt/defaults/scripts with the rest of the platform
+        # scripts; the entrypoint hard-codes that path rather than the PVC copy,
+        # which `cp -ru` can leave older than the image.
+        self.assertIn("/opt/defaults/scripts/verify_skills_provenance.py", self.entrypoint)
+        self.assertIn("agents/platform/scripts/ /opt/defaults/scripts/", self.stage)
+
+
 if __name__ == "__main__":
     unittest.main()

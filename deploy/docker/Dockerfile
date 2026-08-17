@@ -1092,6 +1092,44 @@ COPY agents/chat/plugins/ /opt/hermes/plugins/
 # unnormalized permissions. Each command must now fail the build loudly.
 # Every path below is guaranteed to exist at this point: /opt/hermes/skills and
 # /opt/hermes/plugins come from the base image, the rest are COPYed above.
+#
+# The last loop closes out the three skill trees, and does two things rather than
+# one because neither is sufficient alone.
+#
+# `chown -R root:root` is the barrier. The pod runs the sandbox as uid 10000
+# (RunAsUser in the operator's buildDeployment), so up to this line a
+# prompt-injected agent could rewrite /opt/platform-template/skills/*/SKILL.md —
+# its own instructions — and the entrypoint would then propagate the rewrite to
+# every profile on the next boot. Root-owned 0644/0755 leaves the tree readable
+# and executable by the runtime user and writable by nobody it can reach. The
+# MODE is deliberately left as the loops above set it: `cp -a` in the entrypoint's
+# sync_profile_skills preserves mode but cannot preserve ownership as non-root, so
+# a 0444/0555 tree here would arrive on the PVC read-only and break both the
+# profile overlay and the swap's own `rm -rf` of the previous copy. Ownership does
+# not travel; mode does. That asymmetry is the whole reason this is a chown.
+#
+# The manifest is the detection half, for what ownership cannot cover — a
+# corrupted layer, a bad build, or a future code path that runs as root.
+# verify_skills_provenance.py checks it at boot, before anything is copied onto
+# the PVC (entrypoint step 1.55).
+#
+# Generated here rather than in a RUN of its own: `credential-proxy` builds FROM
+# this stage and the chain is bounded at 128 layers — see the layer-budget note at
+# the top of the file. __pycache__ and *.pyc are excluded because the compileall
+# pass below writes bytecode under /opt/hermes/skills after this line; the .py
+# they derive from is covered, and the interpreter revalidates a .pyc against it.
+# The entry count is asserted because the generating pipeline's exit status is
+# `sort`'s, not `find`'s, and no POSIX sh has pipefail: a find that failed
+# half-way would otherwise ship a short manifest and a build that exited 0.
+#
+# Symlinks abort the build rather than being recorded. `find -type f` tests the
+# link, not its target, so a symlink is never in the manifest; the boot check
+# treats that asymmetry as tamper evidence and refuses any symlink it finds,
+# because a link pointing at matching content hashes identically while what the
+# tree loads has moved somewhere the manifest says nothing about. Either the two
+# sides agree that a symlink is an anomaly or the check is defeated by one, so a
+# base image that starts shipping links has to be discovered here — in a red
+# build with the paths printed — rather than in a pod that will not start.
 RUN set -eu; \
     chown -R hermes:hermes /opt/defaults /opt/hermes/skills /opt/hermes/plugins /opt/cluster-template /opt/platform-template /opt/chat-template; \
     for d in /opt/defaults /opt/hermes/skills /opt/hermes/plugins /opt/hermes/gateway /opt/hermes/tools /opt/cluster-template /opt/platform-template /opt/chat-template; do \
@@ -1101,6 +1139,18 @@ RUN set -eu; \
     find /opt/defaults/scripts -type f -exec chmod 755 {} + ; \
     for d in /opt/hermes/skills /opt/platform-template /opt/cluster-template; do \
         find "$d" -path '*/scripts/*' -type f -exec chmod 755 {} + ; \
+    done; \
+    for d in /opt/hermes/skills /opt/platform-template/skills /opt/cluster-template/skills; do \
+        [ -d "$d" ] || continue; \
+        [ -z "$(find "$d" -type l -not -path '*/__pycache__/*' -print -quit)" ] \
+            || { echo "$d contains a symlink; the manifest records -type f only and the boot check refuses any symlink it finds, so this would fail every pod: $(find "$d" -type l -not -path '*/__pycache__/*' | head -n 3)" >&2; exit 1; }; \
+        n="$(cd "$d" && find . -type f ! -name skills_manifest.sha256 -not -path '*/__pycache__/*' ! -name '*.pyc' | wc -l)"; \
+        ( cd "$d" && find . -type f ! -name skills_manifest.sha256 -not -path '*/__pycache__/*' ! -name '*.pyc' \
+            -exec sha256sum {} + | LC_ALL=C sort -k 2 > skills_manifest.sha256 ); \
+        [ "$(wc -l < "$d/skills_manifest.sha256")" -eq "$n" ] \
+            || { echo "manifest for $d has $(wc -l < "$d/skills_manifest.sha256") entries, expected $n" >&2; exit 1; }; \
+        chmod 444 "$d/skills_manifest.sha256"; \
+        chown -R root:root "$d"; \
     done
 
 # Second bytecode pass, for the Python this stage added.
