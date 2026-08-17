@@ -91,7 +91,7 @@ curl -fsSL https://gke-labs.github.io/kube-agents/install.sh | bash -s -- \
 ```mermaid
 flowchart TB
     A[provision.sh] --> B["01: GKE cluster<br/>Workload Identity"]
-    A --> C["02: gVisor node pool (opt-in)"]
+    A --> C["02: gVisor node pool (on by default)"]
     A --> D["03: Operator CRDs + manager<br/>(+ cert-manager)"]
     A --> E["04: IAM + Workload Identity bindings"]
     A --> F["05: Google Chat Pub/Sub (opt-in)"]

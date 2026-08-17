@@ -46,6 +46,14 @@ jobs:
               # Makefile prints; a Makefile-only change must run it or the
               # deploy contract it guards can revert unnoticed.
               - "k8s-operator/Makefile"
+              # tests/test_gvisor_default.py reads the provisioning scripts, the
+              # CR template, and the installer, and runs provision_08's own sed
+              # over the rendered manifest. A change to any of them that is not
+              # also a change under tests/ would otherwise skip the only job
+              # that checks the sandbox is still on by default.
+              - "k8s-operator/scripts/*.sh"
+              - "k8s-operator/scripts/platform-agent.yaml.template"
+              - "install.sh"
               - ".github/workflows/agent-startup-test.yml"
 
       - name: Set up Python

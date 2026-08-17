@@ -204,6 +204,13 @@ init_var() {
 DEFAULT_CLUSTER_NAME="platform-agent-host"
 DEFAULT_REGION="us-central1"
 DEFAULT_MODEL_PROVIDER="gemini"
+# GKE Sandbox (gVisor) isolation for the agent workload, on by default: the
+# Platform Agent executes model-driven code, so a container breakout is a
+# realistic failure mode rather than a theoretical one. Opt out with
+# ENABLE_GVISOR=false (or install.sh --gvisor=false) on clusters that cannot
+# run a sandbox node pool. Teardown deliberately does not share this default;
+# see teardown_02_gvisor_nodepool.sh.
+DEFAULT_ENABLE_GVISOR="true"
 
 # Model provider → the model the pipeline defaults to for that provider.
 default_model_for_provider() {

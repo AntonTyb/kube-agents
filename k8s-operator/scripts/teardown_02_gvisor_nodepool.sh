@@ -17,8 +17,15 @@ source "${SCRIPT_DIR}/common.sh" "$@"
 # ─── Configuration State Restoration ──────────────────────────────────────────
 ensure_teardown_state
 
-if ! is_truthy "${ENABLE_GVISOR:-true}"; then
-  print_info "Skipping gVisor node pool teardown (ENABLE_GVISOR=${ENABLE_GVISOR:-true})."
+# Deliberately NOT DEFAULT_ENABLE_GVISOR. Provisioning and teardown want
+# opposite defaults: getting it wrong on the way in costs a node pool nobody
+# asked for, getting it wrong on the way out deletes one somebody wanted.
+# ensure_teardown_state only sets ENABLE_GVISOR when vars.sh exists, so an
+# unset value here means "no state to say this install owns a gVisor pool" —
+# and `teardown.sh --no-confirm` from a stateless clone would otherwise delete
+# any pool named gvisor-pool without asking.
+if ! is_truthy "${ENABLE_GVISOR:-false}"; then
+  print_info "Skipping gVisor node pool teardown (ENABLE_GVISOR=${ENABLE_GVISOR:-false})."
   exit 0
 fi
 

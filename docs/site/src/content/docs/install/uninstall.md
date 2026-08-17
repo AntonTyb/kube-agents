@@ -70,7 +70,7 @@ You can also run individual `teardown_NN_*.sh` scripts to remove one layer at a 
 | `teardown_05_gcp_gchat.sh`               | Google Chat Pub/Sub topic + subscription                                                   |
 | `teardown_04_gcp_iam.sh`                 | GCP service accounts and Workload Identity bindings                                        |
 | `teardown_03_gcp_gke_operator.sh`        | Operator manager deployment and CRDs                                                       |
-| `teardown_02_gvisor_nodepool.sh`         | gVisor node pool only (optional)                                                           |
+| `teardown_02_gvisor_nodepool.sh`         | gVisor node pool only (skipped unless `vars.sh` records `ENABLE_GVISOR=true`)              |
 | `teardown_01_gcp_cluster.sh`             | GKE cluster and the local `vars.sh` state file                                             |
 
 Each script is idempotent — safe to re-run if it fails partway through.

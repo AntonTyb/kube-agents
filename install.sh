@@ -69,7 +69,9 @@ PARAM_GITOPS_ORG="${GITHUB_ORG:-}"
 PARAM_GITOPS_REPO="${GITHUB_REPO:-}"
 PARAM_PERMISSION_SET="${PLATFORM_AGENT_PERMISSION_SET:-read-only}"
 PARAM_CUSTOM_ROLES="${PLATFORM_AGENT_CUSTOM_ROLES:-}"
-PARAM_ENABLE_GVISOR="${ENABLE_GVISOR:-false}"
+# Also left empty on purpose: common.sh's DEFAULT_ENABLE_GVISOR is the one home
+# for this default, and the provision scripts read it from there too.
+PARAM_ENABLE_GVISOR="${ENABLE_GVISOR:-}"
 PARAM_ENABLE_WEBUI="${ENABLE_WEBUI:-false}"
 PARAM_MEMORY="${MEMORY:-file}"
 PARAM_IMAGE_TAG="${IMAGE_TAG:-}"
@@ -106,7 +108,8 @@ Flags for AI Agents & Automation:
   --permission-set=SET          Agent GCP IAM permission set: read-only | gke-admin | custom
                                 (default: read-only)
   --custom-roles=ROLES          Roles for --permission-set=custom (space- or comma-separated)
-  --gvisor=true|false           Enable GKE Sandbox (gVisor) runtime isolation (default: false)
+  --gvisor=true|false           Enable GKE Sandbox (gVisor) runtime isolation
+                                (default: DEFAULT_ENABLE_GVISOR, currently true)
   --enable-web-ui=true|false    Enable Hermes Web UI port 9119 dashboard (default: false)
   --memory=MODE                 Long-term agent memory: file | hindsight | off
                                 (default: file)
@@ -428,6 +431,7 @@ source_provisioning_helpers() {
 resolve_shared_defaults() {
   PARAM_MODEL_PROVIDER="${PARAM_MODEL_PROVIDER:-$DEFAULT_MODEL_PROVIDER}"
   PARAM_REGISTRY_PREFIX="${PARAM_REGISTRY_PREFIX:-$DEFAULT_REGISTRY_PREFIX}"
+  PARAM_ENABLE_GVISOR="${PARAM_ENABLE_GVISOR:-$DEFAULT_ENABLE_GVISOR}"
 }
 
 # Wait for one deployment to roll out, animating a spinner with the elapsed time
@@ -800,7 +804,7 @@ run_menu_system() {
   local chat_sub_name="${CHAT_SUB_NAME:-platform-agent-chat-events-sub}"
   local permission_set="${PLATFORM_AGENT_PERMISSION_SET:-read-only}"
   local custom_roles="${PLATFORM_AGENT_CUSTOM_ROLES:-}"
-  local enable_gvisor="${ENABLE_GVISOR:-false}"
+  local enable_gvisor="${ENABLE_GVISOR:-$DEFAULT_ENABLE_GVISOR}"
   local enable_webui="${HERMES_DASHBOARD_ENABLED:-false}"
   local github_org="${GITHUB_ORG:-}"
   local github_repo="${GITHUB_REPO:-gke-fleet-iac}"
@@ -1389,7 +1393,7 @@ main() {
     print_error "--permission-set=custom requires --custom-roles with at least one role."
     exit 1
   fi
-  local enable_gvisor="${PARAM_ENABLE_GVISOR:-false}"
+  local enable_gvisor="${PARAM_ENABLE_GVISOR:-$DEFAULT_ENABLE_GVISOR}"
   if [[ ! "$enable_gvisor" =~ ^(true|false)$ ]]; then
     print_error "--gvisor must be either true or false."
     exit 1
@@ -1441,13 +1445,19 @@ main() {
       fi
     done
 
+    # Sandbox first, because prompt_menu's default answer is always option 1 and
+    # the sandbox is what an install should get for saying nothing. Both branches
+    # assign: the default is now true, so option 2 has to be able to turn it off
+    # rather than fall through to whatever --gvisor= left behind.
     local gvisor_choice=""
     prompt_menu "Enable GKE Sandbox (gVisor) Runtime Isolation for Agent Workloads?" \
-      "No - Standard Container Runtime (Default)" \
-      "Yes - gVisor Secure Kernel Sandbox (Hardened Workload Isolation)" \
+      "Yes - gVisor Secure Kernel Sandbox (Default, hardened workload isolation)" \
+      "No - Standard Container Runtime (agent shares the node kernel)" \
       gvisor_choice
 
     if [ "$gvisor_choice" = "2" ]; then
+      enable_gvisor="false"
+    else
       enable_gvisor="true"
     fi
 

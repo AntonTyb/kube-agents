@@ -38,7 +38,16 @@ DEFAULT_PROJECT_ID="${ACTIVE_PROJECT:-$(whoami 2>/dev/null || echo "user")}"
 init_var "PROJECT_ID" "$DEFAULT_PROJECT_ID" "Enter Target GCP Project ID"
 init_var "REGION" "$DEFAULT_REGION" "Enter GKE GCP Region"
 init_var "CLUSTER_NAME" "$DEFAULT_CLUSTER_NAME" "Enter GKE Cluster Name"
-init_var "ENABLE_GVISOR" "true" "Enable GKE Sandbox (gVisor) runtime isolation? (true/false)"
+# Whether gVisor was asked for or merely defaulted. load_state has already
+# sourced vars.sh, so anything set by now came from the environment or from the
+# choice the installer saved — either way deliberate. execute_custom_resource
+# uses the distinction to decide whether a cluster with no gvisor RuntimeClass
+# is an error or a fallback.
+GVISOR_EXPLICIT=0
+if [ -n "${ENABLE_GVISOR:-}" ]; then
+  GVISOR_EXPLICIT=1
+fi
+init_var "ENABLE_GVISOR" "$DEFAULT_ENABLE_GVISOR" "Enable GKE Sandbox (gVisor) runtime isolation? (true/false)"
 init_var_model_provider
 
 # Map global state variables to expected template variables
@@ -151,12 +160,34 @@ execute_custom_resource() {
 
   envsubst < "$CR_TEMPLATE" > "$CR_MANIFEST"
   
-  if is_truthy "$ENABLE_GVISOR"; then
-    print_info "Enabling gVisor runtimeClassName in '$CR_MANIFEST'..."
-    sed -i.bak 's/# runtimeClassName: gvisor/runtimeClassName: gvisor/g' "$CR_MANIFEST" && rm -f "${CR_MANIFEST}.bak"
-  else
-    print_info "Disabling gVisor runtimeClassName in '$CR_MANIFEST' (ENABLE_GVISOR=false)..."
-    sed -i.bak 's/^[[:space:]]*runtimeClassName: gvisor/# runtimeClassName: gvisor/g' "$CR_MANIFEST" && rm -f "${CR_MANIFEST}.bak"
+  # The operator refuses to reconcile a CR naming a RuntimeClass the cluster
+  # does not have: validateRuntimeClass gets IsNotFound, the reconcile flips the
+  # CR to Degraded/RuntimeClassNotFound and early-returns above reconcileWorkload,
+  # so the Deployment is never touched and the generation gate below spends the
+  # whole AGENT_READY_TIMEOUT discovering it. kubectl is already connected by
+  # step 1, so ask the API server the same question the operator will.
+  #
+  # The answer means different things depending on who chose the value. An
+  # explicit ENABLE_GVISOR=true is a requirement, and quietly dropping the
+  # sandbox would be the worst possible response to it. The default is a
+  # preference, and clusters provisioned before this became the default have no
+  # gvisor pool — the redeploy workflows (reusable-deploy-agent.yml runs only
+  # this step, never provision_02) hit exactly that.
+  if is_truthy "$ENABLE_GVISOR" && ! kubectl get runtimeclass gvisor >/dev/null 2>&1; then
+    if [ "${GVISOR_EXPLICIT:-0}" -eq 1 ]; then
+      print_error "ENABLE_GVISOR=true, but cluster '${CLUSTER_NAME}' has no 'gvisor' RuntimeClass."
+      print_error "Run provision_02_gvisor_nodepool.sh to create the sandbox node pool, or set ENABLE_GVISOR=false."
+      return 1
+    fi
+    print_warning "Cluster '${CLUSTER_NAME}' has no 'gvisor' RuntimeClass; deploying WITHOUT sandbox isolation."
+    print_warning "Run provision_02_gvisor_nodepool.sh to create the sandbox node pool, then redeploy."
+    ENABLE_GVISOR="false"
+  fi
+
+  # The template ships the field enabled, so only the opt-out needs an edit.
+  if ! is_truthy "$ENABLE_GVISOR"; then
+    print_info "Disabling gVisor runtimeClassName in '$CR_MANIFEST' (ENABLE_GVISOR=${ENABLE_GVISOR})..."
+    sed -i.bak 's/^\([[:space:]]*\)runtimeClassName: gvisor/\1# runtimeClassName: gvisor/' "$CR_MANIFEST" && rm -f "${CR_MANIFEST}.bak"
   fi
 
   local deploy_name="platform-agent-gateway"

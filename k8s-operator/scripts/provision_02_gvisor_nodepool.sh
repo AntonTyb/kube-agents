@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 🤖 Step 2: Optional Dedicated gVisor Node Pool Initialization
+# 🤖 Step 2: Dedicated gVisor Node Pool Initialization (on by default)
 # ==============================================================================
 # Idempotent script to bootstrap a dedicated GKE Sandbox (gVisor) node pool
 # on an existing GKE Standard cluster. Can be run independently for migration.
+# Runs by default; set ENABLE_GVISOR=false to skip it.
 # ==============================================================================
 
 set -e
@@ -26,7 +27,7 @@ check_prereqs "gcloud" "kubectl"
 print_step "Setting up Configuration State"
 load_state
 
-init_var "ENABLE_GVISOR" "true" "Enable GKE Sandbox (gVisor) runtime isolation? (true/false)"
+init_var "ENABLE_GVISOR" "$DEFAULT_ENABLE_GVISOR" "Enable GKE Sandbox (gVisor) runtime isolation? (true/false)"
 if ! is_truthy "$ENABLE_GVISOR"; then
   print_info "Skipping gVisor node pool provisioning (ENABLE_GVISOR=${ENABLE_GVISOR})."
   exit 0
