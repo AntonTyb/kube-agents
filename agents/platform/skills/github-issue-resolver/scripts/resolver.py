@@ -300,23 +300,53 @@ def sweep_stale_issues(repo: str):
             continue
 
 
+def _is_safe_char(ch: str) -> bool:
+    """Check whether a character is safe from control/zero-width/bidi smuggling."""
+    code = ord(ch)
+    # Preserve newline (\n, 10) and tab (\t, 9)
+    if code in (9, 10):
+        return True
+    # Strip C0 control characters (< 32), DEL (127), and C1 control characters (128-159)
+    if code < 32 or 127 <= code <= 159:
+        return False
+    # Strip zero-width, bidi, and format control characters
+    # U+200B-U+200F (Zero-width space, non-joiner, joiner, LRM, RLM)
+    # U+202A-U+202E (Bidi embedding/override controls: LRE, RLE, PDF, LRO, RLO)
+    # U+2060-U+206F (Word joiner, invisible operators, bidi isolates)
+    # U+FEFF (Zero-width no-break space / BOM)
+    # U+00AD (Soft hyphen), U+034F (Combining grapheme joiner), U+061C (Arabic letter mark), U+180E (Mongolian vowel separator)
+    if (
+        0x200B <= code <= 0x200F
+        or 0x202A <= code <= 0x202E
+        or 0x2060 <= code <= 0x206F
+        or code in (0xFEFF, 0x00AD, 0x034F, 0x061C, 0x180E)
+    ):
+        return False
+    # Strip Unicode tag block and non-printable supplementary blocks (U+E0000 and above)
+    if code >= 0xE0000:
+        return False
+    return True
+
+
 def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     """Sanitizes untrusted external input to neutralize prompt injection attacks."""
     if not text or not isinstance(text, str):
         return ""
 
-    # 1. Strip ANSI escape sequences and non-printable control characters (including C1 controls U+0080-U+009F)
-    cleaned = re.sub(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", text)
-    cleaned = "".join(
-        ch for ch in cleaned if ch == "\n" or ch == "\t" or (ord(ch) >= 32 and ord(ch) != 127 and not (128 <= ord(ch) <= 159))
+    # 1. Strip ANSI escape sequences (7-bit and 8-bit CSI) and carriage returns
+    cleaned = re.sub(r"\r", "", text)
+    cleaned = re.sub(
+        r"(?:\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|\x9B[0-?]*[ -/]*[@-~])",
+        "",
+        cleaned,
     )
 
-    # 2. Strip Unicode zero-width spaces, direction overrides, soft hyphens, and bidi isolates
-    cleaned = re.sub(r"[\u200B-\u200D\uFEFF\u202A-\u202E\u2060\u2066-\u2069\u00AD\u180E]", "", cleaned)
+    # 2. Strip C0/C1 control characters, DEL, zero-width/bidi characters, and Unicode tag blocks
+    cleaned = "".join(ch for ch in cleaned if _is_safe_char(ch))
 
     # 3. Neutralize prompt injection delimiter tags, instruction markers, and fake system headers
     cleaned = re.sub(
-        r"<\s*/?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)\s*>",
+        r"<\s*/?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)(?:\s+[^>]*)?>",
         r"[\1_tag_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
@@ -420,13 +450,19 @@ def evaluate_risk_tier(issue: dict) -> str:
     ):
         return "TIER_3_MUTATING"
 
-    text_parts = [issue.get("title") or "", issue.get("body") or ""]
+    raw_title = issue.get("title") or ""
+    raw_body = issue.get("body") or ""
+    text_parts = [
+        sanitize_untrusted_text(raw_title),
+        sanitize_untrusted_text(raw_body),
+    ]
     for c in issue.get("comments") or []:
-        text_parts.append(c.get("body") or "")
-    raw_content = " ".join(str(p) for p in text_parts)
+        c_body = c.get("body") or ""
+        text_parts.append(sanitize_untrusted_text(c_body))
+    sanitized_content = " ".join(str(p) for p in text_parts)
 
     # Strip code blocks and inline snippets to avoid false positives on logs / error messages
-    prose_content = re.sub(r"```[\s\S]*?```", "", raw_content)
+    prose_content = re.sub(r"```[\s\S]*?```", "", sanitized_content)
     prose_content = re.sub(r"`[^`]+`", "", prose_content).lower()
 
     # Explicit destructive / mutating action verbs or privileged request patterns
@@ -549,24 +585,26 @@ def handle_poll(args):
     scored_issues.sort(key=lambda item: (-item[0], item[1], item[2]))
 
     _, _, _, priority_label, target = scored_issues[0]
-    risk_tier = evaluate_risk_tier(target)
+
+    raw_title = target.get("title") or ""
+    sanitized_title = sanitize_untrusted_text(raw_title)
+    raw_body = target.get("body") or ""
+    sanitized_body = sanitize_untrusted_text(raw_body)
 
     comments = []
     for c in target.get("comments") or []:
         raw_author = c.get("author", {}).get("login", "unknown") if isinstance(c.get("author"), dict) else "unknown"
         author_sanitized = f"<untrusted_author>{sanitize_untrusted_text(raw_author)}</untrusted_author>"
-        body = c.get("body") or ""
-        created = c.get("createdAt", "")
+        c_body = c.get("body") or ""
         comments.append(
             {
                 "author": author_sanitized,
-                "createdAt": created,
-                "body": f"<untrusted_comment>{sanitize_untrusted_text(body)}</untrusted_comment>",
+                "createdAt": c.get("createdAt", ""),
+                "body": f"<untrusted_comment>{sanitize_untrusted_text(c_body)}</untrusted_comment>",
             }
         )
 
-    raw_title = target.get("title") or ""
-    sanitized_title = sanitize_untrusted_text(raw_title)
+    risk_tier = evaluate_risk_tier(target)
 
     print(
         json.dumps(
@@ -578,7 +616,7 @@ def handle_poll(args):
                 "risk_tier": risk_tier,
                 "title": f"<untrusted_title>{sanitized_title}</untrusted_title>",
                 "title_plain": sanitized_title,
-                "body": f"<untrusted_body>{sanitize_untrusted_text(target.get('body') or '')}</untrusted_body>",
+                "body": f"<untrusted_body>{sanitized_body}</untrusted_body>",
                 "comments": comments,
             },
             indent=2,

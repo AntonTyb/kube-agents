@@ -120,14 +120,8 @@ func TestBuildConfigMap(t *testing.T) {
 	if !strings.Contains(yamlContent, "enabled: true") {
 		t.Errorf("expected config to enable google_chat platform, got:\n%s", yamlContent)
 	}
-	if !strings.Contains(yamlContent, "cron_mode: restricted") {
-		t.Errorf("expected config to contain cron_mode: restricted, got:\n%s", yamlContent)
-	}
-	if !strings.Contains(yamlContent, "allowed_autonomous_verbs:") {
-		t.Errorf("expected config to contain allowed_autonomous_verbs, got:\n%s", yamlContent)
-	}
-	if !strings.Contains(yamlContent, "require_human_approval_for:") {
-		t.Errorf("expected config to contain require_human_approval_for, got:\n%s", yamlContent)
+	if !strings.Contains(yamlContent, "cron_mode: approve") {
+		t.Errorf("expected config to contain cron_mode: approve, got:\n%s", yamlContent)
 	}
 	// The managed scope is machine-global (see renderConfigYAML), so a key that
 	// describes ONE profile's tool surface must not appear in it: this same file is
@@ -182,37 +176,6 @@ func TestManagedConfigCarriesNoMemorySubtree(t *testing.T) {
 			t.Errorf("managed config must not carry %q — it would overwrite every "+
 				"specialist profile's memory settings, got:\n%s", forbidden, yamlContent)
 		}
-	}
-}
-
-func TestBuildConfigMap_Approvals(t *testing.T) {
-	agent := &agentv1alpha1.PlatformAgent{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "approvals-agent",
-			Namespace: "test-ns",
-		},
-		Spec: agentv1alpha1.PlatformAgentSpec{
-			Harness: &agentv1alpha1.HarnessSpec{
-				Approvals: &agentv1alpha1.ApprovalsSpec{
-					CronMode:                "approve",
-					AllowedAutonomousVerbs:  []string{"top"},
-					RequireHumanApprovalFor: []string{"cordon"},
-				},
-			},
-		},
-	}
-
-	cm := buildConfigMap(agent, nil)
-	yamlContent := defaultProfileYAML(t, cm)
-
-	if !strings.Contains(yamlContent, "cron_mode: approve") {
-		t.Errorf("expected config to contain cron_mode: approve override, got:\n%s", yamlContent)
-	}
-	if !strings.Contains(yamlContent, "- top") || strings.Contains(yamlContent, "- describe") {
-		t.Errorf("expected config to contain custom allowed_autonomous_verbs with only 'top', got:\n%s", yamlContent)
-	}
-	if !strings.Contains(yamlContent, "- cordon") || strings.Contains(yamlContent, "- delete") {
-		t.Errorf("expected config to contain custom require_human_approval_for with only 'cordon', got:\n%s", yamlContent)
 	}
 }
 

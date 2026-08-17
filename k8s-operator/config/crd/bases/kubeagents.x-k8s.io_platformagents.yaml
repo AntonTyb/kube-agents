@@ -8139,32 +8139,6 @@ spec:
                     Harness configures the core execution environment and
                     framework-level settings.
                   properties:
-                    approvals:
-                      description:
-                        Approvals configures autonomous command execution
-                        approval policies.
-                      properties:
-                        allowedAutonomousVerbs:
-                          description:
-                            AllowedAutonomousVerbs lists command verbs auto-approved
-                            in restricted mode.
-                          items:
-                            type: string
-                          type: array
-                        cronMode:
-                          default: restricted
-                          description:
-                            CronMode specifies the approval mode for cron
-                            watchdog tasks (e.g. "restricted" or "approve").
-                          type: string
-                        requireHumanApprovalFor:
-                          description:
-                            RequireHumanApprovalFor lists command verbs requiring
-                            human approval.
-                          items:
-                            type: string
-                          type: array
-                      type: object
                     clusterName:
                       description:
                         ClusterName is the logical name of the cluster (either

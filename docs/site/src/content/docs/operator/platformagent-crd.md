@@ -52,13 +52,10 @@ the agent a usable kubectl context) when it has the complete triple; with one mi
 | `memory.memoryEnabled`                         | bool     | Toggle framework memory persistence. Default `false`.                                                                                                        |
 | `memory.provider`                              | string   | Memory provider implementation. Default `multiuser_memory`; `none` for none. See below.                                                                      |
 | `memory.userProfileEnabled`                    | bool     | Toggle per-user memory profiling. Default `false`.                                                                                                           |
-| `eventWatcher.enabled`                         | bool     | Start the `k8s-event-watcher`. Default `true`; `false` is the emergency stop for an event storm (see below).                                                 |
-| `approvals.cronMode`                           | string   | Approval policy for cron watchdogs (`restricted` or `approve`). Default `restricted`.                                                                        |
-| `approvals.allowedAutonomousVerbs`             | []string | Verbs permitted for autonomous execution without approval. Default `["get", "list", "describe", "logs"]`.                                                    |
-| `approvals.requireHumanApprovalFor`            | []string | Actions requiring explicit human approval. Default `["delete", "patch", "apply", "exec", "drain"]`.                                                          |
-| `tuning.<persona>.apiMaxRetries`               | int      | Model-call retries before a run gives up. Unset = Hermes default `3`.                                                                                        |
-| `tuning.<persona>.maxTurns`                    | int      | Iterations allowed in a single turn. Unset = Hermes default `90`, except `platform` (see below).                                                             |
-| `tuning.maxInProgress`                         | int      | Board-wide cap on concurrent kanban workers. Unset = operator default `2`.                                                                                   |
+| `eventWatcher.enabled`                         | bool   | Start the `k8s-event-watcher`. Default `true`; `false` is the emergency stop for an event storm (see below).                                                 |
+| `tuning.<persona>.apiMaxRetries`               | int    | Model-call retries before a run gives up. Unset = Hermes default `3`.                                                                                        |
+| `tuning.<persona>.maxTurns`                    | int    | Iterations allowed in a single turn. Unset = Hermes default `90`, except `platform` (see below).                                                             |
+| `tuning.maxInProgress`                         | int    | Board-wide cap on concurrent kanban workers. Unset = operator default `2`.                                                                                   |
 
 `sessionKVApiKeySecretRef` is optional in the API but not in practice, and the `503` above is the
 milder half of what its absence costs. The `k8s-event-watcher` in the credential sidecar

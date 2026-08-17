@@ -98,10 +98,6 @@ type HarnessSpec struct {
 	// +optional
 	Memory *MemorySpec `json:"memory,omitempty"`
 
-	// Approvals configures autonomous command execution approval policies.
-	// +optional
-	Approvals *ApprovalsSpec `json:"approvals,omitempty"`
-
 	// EventWatcher configures cluster event ingestion — the k8s-event-watcher that
 	// turns cluster warnings into autonomous triage sessions. Its `enabled: false`
 	// is the emergency stop for an event storm.
@@ -112,22 +108,6 @@ type HarnessSpec struct {
 	// baked into the agent image.
 	// +optional
 	Tuning *TuningSpec `json:"tuning,omitempty"`
-}
-
-// ApprovalsSpec configures autonomous command approval policies for the agent.
-type ApprovalsSpec struct {
-	// CronMode specifies the approval mode for cron watchdog tasks (e.g. "restricted" or "approve").
-	// +kubebuilder:default="restricted"
-	// +optional
-	CronMode string `json:"cronMode,omitempty"`
-
-	// AllowedAutonomousVerbs lists command verbs auto-approved in restricted mode.
-	// +optional
-	AllowedAutonomousVerbs []string `json:"allowedAutonomousVerbs,omitempty"`
-
-	// RequireHumanApprovalFor lists command verbs requiring human approval.
-	// +optional
-	RequireHumanApprovalFor []string `json:"requireHumanApprovalFor,omitempty"`
 }
 
 // EventWatcherSpec configures the k8s-event-watcher, which runs as a peer service

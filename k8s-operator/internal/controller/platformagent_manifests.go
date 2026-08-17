@@ -935,9 +935,7 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 			APIMode string `json:"api_mode"`
 		} `json:"model"`
 		Approvals struct {
-			CronMode                string   `json:"cron_mode,omitempty"`
-			AllowedAutonomousVerbs  []string `json:"allowed_autonomous_verbs,omitempty"`
-			RequireHumanApprovalFor []string `json:"require_human_approval_for,omitempty"`
+			CronMode string `json:"cron_mode,omitempty"`
 		} `json:"approvals,omitempty"`
 		Platforms struct {
 			GoogleChat struct {
@@ -973,22 +971,13 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// changes no behaviour — it only makes the value one the agent cannot rewrite.
 	cfg.Model.APIMode = "chat_completions"
 
-	// Execution & Display UX configuration
-	cfg.Approvals.CronMode = "restricted"
-	cfg.Approvals.AllowedAutonomousVerbs = []string{"get", "list", "describe", "logs"}
-	cfg.Approvals.RequireHumanApprovalFor = []string{"delete", "patch", "apply", "exec", "drain"}
-
-	if agent.Spec.Harness != nil && agent.Spec.Harness.Approvals != nil {
-		if agent.Spec.Harness.Approvals.CronMode != "" {
-			cfg.Approvals.CronMode = agent.Spec.Harness.Approvals.CronMode
-		}
-		if len(agent.Spec.Harness.Approvals.AllowedAutonomousVerbs) > 0 {
-			cfg.Approvals.AllowedAutonomousVerbs = agent.Spec.Harness.Approvals.AllowedAutonomousVerbs
-		}
-		if len(agent.Spec.Harness.Approvals.RequireHumanApprovalFor) > 0 {
-			cfg.Approvals.RequireHumanApprovalFor = agent.Spec.Harness.Approvals.RequireHumanApprovalFor
-		}
-	}
+	// Cron approvals. Uniform across the pod by design — the shared image default
+	// (deploy/shared/defaults/config.yaml) sets it and no persona has a reason to
+	// differ — but rendered here rather than left to the image because Hermes'
+	// default is `deny` (hermes_cli/config.py) and the cluster-agent template does
+	// not declare the key. Leaving it out would silently deny every cron-initiated
+	// approval on a scaffolded cluster profile.
+	cfg.Approvals.CronMode = "approve"
 
 	cfg.Display.Platforms = map[string]map[string]any{}
 

@@ -293,18 +293,7 @@ data:
   leader_elect.py: <OMITTED_FOR_TESTS>
   managed-config.yaml: |
     approvals:
-      allowed_autonomous_verbs:
-      - get
-      - list
-      - describe
-      - logs
-      cron_mode: restricted
-      require_human_approval_for:
-      - delete
-      - patch
-      - apply
-      - exec
-      - drain
+      cron_mode: approve
     display: {}
     model:
       api_key: none
