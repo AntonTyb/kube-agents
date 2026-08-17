@@ -1093,8 +1093,8 @@ COPY agents/chat/plugins/ /opt/hermes/plugins/
 # Every path below is guaranteed to exist at this point: /opt/hermes/skills and
 # /opt/hermes/plugins come from the base image, the rest are COPYed above.
 #
-# The last loop closes out the three skill trees, and does two things rather than
-# one because neither is sufficient alone.
+# The last two steps close out the baked prompt material, and do two things rather
+# than one because neither is sufficient alone.
 #
 # `chown -R root:root` is the barrier. The pod runs the sandbox as uid 10000
 # (RunAsUser in the operator's buildDeployment), so up to this line a
@@ -1108,10 +1108,32 @@ COPY agents/chat/plugins/ /opt/hermes/plugins/
 # profile overlay and the swap's own `rm -rf` of the previous copy. Ownership does
 # not travel; mode does. That asymmetry is the whole reason this is a chown.
 #
+# It covers the two template ROOTS, not just their skills/ subdirectories, because
+# the files beside skills/ travel the same path and carry more weight: SOUL.md,
+# AGENTS.md, CAPABILITIES.md, governance/, cron/ and config.yaml are force-synced
+# into the platform profile on every boot by entrypoint step 2.6, and the cluster
+# template's personas are re-copied into every cluster-* profile by its continuation. A
+# rewritten SOUL.md is more load-bearing than any single SKILL.md, so leaving it
+# writable would have left the barrier covering the smaller half of the problem.
+# Nothing at runtime writes to either template — the entrypoint, profile_scaffold.py
+# and cluster_agent_profile.py only ever read from them — so root ownership costs
+# nothing. /opt/defaults is deliberately NOT included: the running Chat Agent is a
+# legitimate writer there, and the security reference records that residue.
+#
 # The manifest is the detection half, for what ownership cannot cover — a
 # corrupted layer, a bad build, or a future code path that runs as root.
 # verify_skills_provenance.py checks it at boot, before anything is copied onto
-# the PVC (entrypoint step 1.55).
+# the PVC (entrypoint step 1.55). It covers the skill trees, which are the part
+# that grows a file per skill and is rewritten by contributors weekly; the
+# personas beside them get the barrier but not the hash.
+#
+# A missing tree fails the build rather than being skipped. The boot check refuses
+# to start a pod whose tree exists with no manifest beside it, so skipping one here
+# would turn a silent ordering slip in this file — a later instruction that recreates
+# or restores one of these paths, in this stage or in `credential-proxy`, which builds
+# FROM it — into a green build and a fleet-wide crash-loop. Everything this loop names
+# is COPYed above or comes from the base image, so the failure branch is unreachable
+# today and exists to stay that way.
 #
 # Generated here rather than in a RUN of its own: `credential-proxy` builds FROM
 # this stage and the chain is bounded at 128 layers — see the layer-budget note at
@@ -1141,7 +1163,8 @@ RUN set -eu; \
         find "$d" -path '*/scripts/*' -type f -exec chmod 755 {} + ; \
     done; \
     for d in /opt/hermes/skills /opt/platform-template/skills /opt/cluster-template/skills; do \
-        [ -d "$d" ] || continue; \
+        [ -d "$d" ] \
+            || { echo "$d does not exist at manifest generation; the boot check refuses to start a pod whose skill tree has no manifest beside it, so shipping this image would crash-loop the fleet" >&2; exit 1; }; \
         [ -z "$(find "$d" -type l -not -path '*/__pycache__/*' -print -quit)" ] \
             || { echo "$d contains a symlink; the manifest records -type f only and the boot check refuses any symlink it finds, so this would fail every pod: $(find "$d" -type l -not -path '*/__pycache__/*' | head -n 3)" >&2; exit 1; }; \
         n="$(cd "$d" && find . -type f ! -name skills_manifest.sha256 -not -path '*/__pycache__/*' ! -name '*.pyc' | wc -l)"; \
@@ -1150,8 +1173,8 @@ RUN set -eu; \
         [ "$(wc -l < "$d/skills_manifest.sha256")" -eq "$n" ] \
             || { echo "manifest for $d has $(wc -l < "$d/skills_manifest.sha256") entries, expected $n" >&2; exit 1; }; \
         chmod 444 "$d/skills_manifest.sha256"; \
-        chown -R root:root "$d"; \
-    done
+    done; \
+    chown -R root:root /opt/hermes/skills /opt/platform-template /opt/cluster-template
 
 # Second bytecode pass, for the Python this stage added.
 #

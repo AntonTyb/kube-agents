@@ -266,14 +266,20 @@ fi
 # $PLATFORM_TEMPLATE/skills and $CLUSTER_TEMPLATE/skills into each profile. Failing at
 # this line leaves the PVC exactly as the last good boot left it.
 #
-# It is the DETECTION half of the pair; the barrier is that these three trees are
-# root-owned in the image while the agent runs as uid 10000 (the ownership comment in
-# deploy/docker/Dockerfile has the reasoning, including why the modes are left
-# writable-looking). Read it as "this image's skills are the ones it was built with",
-# not as protection against a live agent: the verifier itself sits in
-# /opt/defaults/scripts, a directory the runtime user owns, so anything that can rewrite
-# a skill in place can also remove its check. Closing that needs the barrier, not more
-# hashing.
+# It is the DETECTION half of the pair; the barrier is that these trees, and the two
+# templates around them, are root-owned in the image while the agent runs as uid 10000
+# (the ownership comment in deploy/docker/Dockerfile has the reasoning, including why
+# the modes are left writable-looking). Read it as "this image's skills are the ones it
+# was built with", not as a runtime sandbox.
+#
+# The manifest, not the script, decides whether the check is mandatory. The verifier
+# lives in /opt/defaults/scripts, which the runtime user owns and can delete; the
+# manifest lives inside the root-owned tree it describes and cannot be. So a tree that
+# carries a manifest is verified or the container does not start, and deleting the
+# verifier turns the check off for nobody — it stops the pod instead. A tree with no
+# manifest beside it is one no manifesting build produced (agent-base ships
+# /opt/hermes/skills and never reaches the platform stage) and is skipped, which is also
+# what makes this a no-op on a developer host.
 #
 # Fail-closed, which is a deliberate departure from the WARN-and-continue that every
 # other step here uses. Those steps degrade to a stale file; this one degrades to
@@ -283,23 +289,22 @@ fi
 # is never a version skew between the two — it is the image having changed since it was
 # built. There is deliberately no env-var override; a bypass switch would be readable to
 # exactly the caller this is meant to be honest with.
-#
-# Guarded on the script existing so a developer host, where neither the venv nor the
-# trees are present, behaves as it does for every other /opt-guarded step below.
 SKILL_PROVENANCE_SCRIPT="/opt/defaults/scripts/verify_skills_provenance.py"
-if [ -f "$SKILL_PROVENANCE_SCRIPT" ] && [ -x "$INSTALL_DIR/.venv/bin/python3" ]; then
-    for _tree in /opt/hermes/skills /opt/platform-template/skills /opt/cluster-template/skills; do
-        [ -d "$_tree" ] || continue
-        # The script names the specific difference on stderr; this only says what the
-        # container did about it.
-        if ! "$INSTALL_DIR/.venv/bin/python3" "$SKILL_PROVENANCE_SCRIPT" \
-            --manifest "$_tree/skills_manifest.sha256" --dir "$_tree"; then
-            echo "FATAL: $_tree does not match the manifest baked beside it at build time; refusing to start" >&2
-            exit 1
-        fi
-    done
-    unset _tree
-fi
+for _tree in /opt/hermes/skills /opt/platform-template/skills /opt/cluster-template/skills; do
+    [ -f "$_tree/skills_manifest.sha256" ] || continue
+    if [ ! -f "$SKILL_PROVENANCE_SCRIPT" ] || [ ! -x "$INSTALL_DIR/.venv/bin/python3" ]; then
+        echo "FATAL: $_tree carries a build-time manifest but nothing here can check it ($SKILL_PROVENANCE_SCRIPT or $INSTALL_DIR/.venv/bin/python3 is missing); refusing to start" >&2
+        exit 1
+    fi
+    # The script names the specific difference on stderr; this only says what the
+    # container did about it.
+    if ! "$INSTALL_DIR/.venv/bin/python3" "$SKILL_PROVENANCE_SCRIPT" \
+        --manifest "$_tree/skills_manifest.sha256" --dir "$_tree"; then
+        echo "FATAL: $_tree does not match the manifest baked beside it at build time; refusing to start" >&2
+        exit 1
+    fi
+done
+unset _tree
 
 # 1.6 Serialise everything below that writes to $TARGET_DIR.
 #

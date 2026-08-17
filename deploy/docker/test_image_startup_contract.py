@@ -506,6 +506,28 @@ class SkillProvenanceContractTest(unittest.TestCase):
         # one. Losing this line leaves detection with nothing behind it.
         self.assertIn("chown -R root:root", self.generation_block())
 
+    def test_the_barrier_covers_the_personas_and_not_just_the_skills(self):
+        # SOUL.md, AGENTS.md, CAPABILITIES.md, governance/, cron/ and config.yaml
+        # sit beside skills/ in the same templates and are force-synced into every
+        # profile by entrypoint step 2.6. Narrowing the chown back to the skills
+        # subdirectories would leave the more load-bearing half of the image's
+        # prompt material writable by the uid it is meant to be protected from.
+        chowned = re.search(r"chown -R root:root ([^;]*)", self.generation_block())
+        self.assertIsNotNone(chowned, "the manifest RUN no longer chowns anything to root")
+        for root in ("/opt/hermes/skills", "/opt/platform-template", "/opt/cluster-template"):
+            with self.subTest(root=root):
+                self.assertRegex(chowned.group(1), rf"{re.escape(root)}(\s|$)")
+
+    def test_a_tree_missing_at_build_time_fails_the_build(self):
+        # The asymmetry that would otherwise point the wrong way: the boot check
+        # refuses to start a pod whose tree has no manifest beside it, so a build
+        # that quietly skipped a missing tree would ship a green image that
+        # crash-loops the fleet. Both halves have to be fail-closed.
+        block = self.generation_block()
+        self.assertNotIn('[ -d "$d" ] || continue', block)
+        existence_check = block[block.index('[ -d "$d" ]') : block.index("-type l")]
+        self.assertIn("exit 1", existence_check)
+
     def test_verification_precedes_the_copy_onto_the_pvc(self):
         # A tree that fails must not have reached a profile first. Step 2's bulk
         # copy is the first thing that spreads any of it.
@@ -527,6 +549,19 @@ class SkillProvenanceContractTest(unittest.TestCase):
         step = self.entrypoint[self.entrypoint.index("SKILL_PROVENANCE_SCRIPT="):]
         step = step[: step.index("\n# 1.6 ")]
         self.assertIn('"$INSTALL_DIR/.venv/bin/python3"', step)
+
+    def test_deleting_the_verifier_stops_the_pod_rather_than_the_check(self):
+        # What decides whether the check is mandatory has to be the manifest, not
+        # the script. The manifest is inside the root-owned tree; the script is in
+        # /opt/defaults/scripts, which the runtime uid owns and can delete. Gate on
+        # the script and one `rm` disables boot verification for the life of the
+        # image, silently, in the one step whose point is failing closed.
+        step = self.entrypoint[self.entrypoint.index("SKILL_PROVENANCE_SCRIPT="):]
+        step = step[: step.index("\n# 1.6 ")]
+        self.assertIn(f'[ -f "$_tree/{self.vsp.MANIFEST_NAME}" ] || continue', step)
+        gate = step[: step.index("--manifest")]
+        self.assertIn('[ ! -f "$SKILL_PROVENANCE_SCRIPT" ]', gate)
+        self.assertIn("exit 1", gate)
 
     def test_the_verifier_is_shipped_where_the_entrypoint_looks_for_it(self):
         # It is COPYed into /opt/defaults/scripts with the rest of the platform
