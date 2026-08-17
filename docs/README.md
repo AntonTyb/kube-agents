@@ -79,7 +79,7 @@ Which file owns which category of content is defined once, in the
 canonical-home table in [`AGENTS.md`](../AGENTS.md) — do not duplicate a fact
 outside its home; link to it.
 
-Four artifacts are **generated, not hand-written** — three regions inside
+Five artifacts are **generated, not hand-written** — four regions inside
 hand-written documents, plus one whole file. `scripts/generate_docs.py` (run
 via `make docs-generate`) rewrites everything between the markers; everything
 outside them is hand-written. Never edit inside the markers — edit the source
@@ -91,6 +91,7 @@ and regenerate.
 | `docs/site/src/content/docs/reference/cron-jobs.md` | `<!-- BEGIN GENERATED: cron-jobs -->` | `agents/chat/defaults/cron/jobs.json` and `agents/platform/cron/jobs.json` |
 | `docs/site/src/content/docs/skills/index.mdx` | `{/* BEGIN GENERATED: skill-catalog */}` (MDX comment syntax) | `name`/`description` frontmatter of every `agents/platform/skills/*/SKILL.md` and `agents/cluster/skills/*/SKILL.md` |
 | `k8s-operator/scripts/README.md` | `<!-- BEGIN GENERATED: provisioning-steps -->` | The comment banner in each `k8s-operator/scripts/provision_*.sh` / `teardown_*.sh` script |
+| `docs/site/src/content/docs/deploy/docker-images.md` | `<!-- BEGIN GENERATED: container-images -->` | `images.json` |
 | `docs/family-roster.txt` | whole file (`family-roster`) | The collapsed-family globs in this map's section 4, resolved against `git ls-files` |
 
 CI enforcement: `make docs-check` runs the same checks as
@@ -142,7 +143,8 @@ identifier appears, add its source here.
 | Shared agent defaults (`approvals.*`, `security.*`) | `deploy/shared/defaults/config.yaml` and `renderConfigYAML()` in `k8s-operator/internal/controller/platformagent_manifests.go` |
 | Image defaults and override env vars (`PLATFORM_AGENT_IMAGE` et al.) | `k8s-operator/internal/controller/manifest_helpers.go` |
 | OTLP endpoint default, discovery candidates, and `otlpEndpointSource` values | `k8s-operator/internal/controller/telemetry.go` |
-| Registry prefix default (`REGISTRY_PREFIX`) | `k8s-operator/scripts/common.sh` |
+| Image inventory: every image an install pulls, and its upstream pin | `images.json` |
+| Registry prefix defaults (`REGISTRY_PREFIX`, `THIRD_PARTY_REGISTRY_PREFIX`) | `k8s-operator/scripts/common.sh` |
 | GKE host-discovery label | `k8s-operator/scripts/common.sh` |
 | GitOps clone layout (`/opt/data/gitops/...`) and leases | `agents/platform/scripts/gitops_workspace.py` |
 | fleet-audit finding-id pattern and rendering caps | `agents/platform/skills/fleet-audit/scripts/audit_report.py` |
