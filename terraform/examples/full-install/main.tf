@@ -157,7 +157,9 @@ module "gke_cluster" {
   enable_database_encryption = var.enable_database_encryption
   kms_keyring_name           = var.kms_keyring_name
   kms_key_name               = var.kms_key_name
+  allow_external_dns_traffic = var.allow_external_dns_traffic
   enable_backup_agent        = var.enable_backup_agent
+
   resource_labels = {
     "kube-agents-host" = "true"
   }

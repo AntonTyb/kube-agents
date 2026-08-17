@@ -18,6 +18,11 @@ VARS_FILE="${VARS_FILE:-${SCRIPT_DIR}/vars.sh}"
 # shellcheck source=k8s-operator/scripts/min_versions.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/min_versions.sh"
 
+# gke_dns_endpoint_flag, shared with hack/ci-env.sh and scripts/release/common.sh.
+# Resolved from BASH_SOURCE for the same reason as the line above.
+# shellcheck source=k8s-operator/scripts/gke_dns_endpoint.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gke_dns_endpoint.sh"
+
 # ─── ANSI Colors ──────────────────────────────────────────────────────────────
 # Empty unless stdout is a terminal and NO_COLOR is unset. This pipeline's output
 # is routinely redirected — install.sh tees it to a log, CI captures it — and
@@ -862,7 +867,13 @@ execute_host_label() {
 
 connect_cluster() {
   print_info "Fetching cluster credentials..."
-  gcloud container clusters get-credentials "$CLUSTER_NAME" --location "$REGION" --project "$PROJECT_ID" --quiet
+  gke_dns_endpoint_flag "$CLUSTER_NAME" "$REGION" "$PROJECT_ID"
+  if [ -n "$GKE_DNS_ENDPOINT_FLAG" ]; then
+    print_info "Cluster '$CLUSTER_NAME' publishes an external DNS endpoint; using it."
+  fi
+  # Unquoted on purpose: empty must contribute no argument at all.
+  # shellcheck disable=SC2086
+  gcloud container clusters get-credentials "$CLUSTER_NAME" --location "$REGION" --project "$PROJECT_ID" --quiet $GKE_DNS_ENDPOINT_FLAG
 }
 
 # Shared readiness budget for stages 08 and 13. Accepts a bare number of

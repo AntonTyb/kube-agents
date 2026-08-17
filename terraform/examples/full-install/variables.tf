@@ -19,6 +19,12 @@ variable "deletion_protection" {
   default     = true
 }
 
+variable "allow_external_dns_traffic" {
+  description = "Whether the cluster's DNS-based control plane endpoint serves traffic from outside the VPC. Passed through to the gke-cluster module, and false by default there so that applying an existing root does not publish an endpoint on a cluster that has none; set it true for a cluster the Platform Agent must reach from outside the VPC."
+  type        = bool
+  default     = false
+}
+
 variable "release_channel" {
   description = "GKE release channel for the cluster (RAPID, REGULAR, or STABLE; the gke-cluster module rejects EXTENDED, which its Autopilot clusters do not support)"
   type        = string
