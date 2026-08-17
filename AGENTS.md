@@ -135,7 +135,10 @@ documentation map (`docs/README.md`) — the same four checks CI runs.
 - Keep changes scoped to the request.
 - Do not commit unrelated formatting changes.
 - Maintain the structure and intent of the agent configuration files.
-- Use Conventional Commits for commit messages.
+- **Conventional Commits & PR Title Enforcement:** All PR titles and commit messages must strictly adhere to the Conventional Commits specification (`type(optional-scope): description`):
+  - **Permitted Types:** `feat` (new user-facing capability), `fix` (bug fix), `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+  - **Breaking Changes:** Mark with `!` before the colon (e.g. `feat!:`, `fix(operator)!:`) or a `BREAKING CHANGE:` footer.
+  - **Release Preparation:** Standardized PR titles ensure consistent commit history and establish the Conventional Commit metadata required for the automated SemVer release pipeline. AI agents must ensure the proposed PR title prefix accurately reflects the changes in the branch diff and confirm classification with the author before opening a PR.
 - Push PR branches to a fork, not to the upstream repository.
 - **Pin GitHub Actions to a full commit SHA.** Every third-party `uses:` in
   `.github/workflows/` must reference a 40-character commit SHA with the human-readable
