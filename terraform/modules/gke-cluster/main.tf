@@ -33,14 +33,14 @@ resource "google_kms_crypto_key_iam_member" "gke_kms_binding" {
 resource "google_container_cluster" "autopilot" {
   #checkov:skip=CKV_GCP_12:GKE Autopilot manages Dataplane V2 network policies automatically
   #checkov:skip=CKV_GCP_13:Client certificate authentication disabled by default in Autopilot
-  #checkov:skip=CKV_GCP_20:Master authorized networks configured at deployment level if required
-  #checkov:skip=CKV_GCP_21:Cluster labels configured at deployment level if required
+  #checkov:skip=CKV_GCP_20:Public control plane access required for operator kubectl connectivity without VPN or bastion
+  #checkov:skip=CKV_GCP_21:Cluster resource labels are configured via var.resource_labels
   #checkov:skip=CKV_GCP_23:VPC-native alias IP is default and enforced on GKE Autopilot
-  #checkov:skip=CKV_GCP_25:Private cluster configuration optional based on deployment environment
-  #checkov:skip=CKV_GCP_61:VPC flow logs and intra-node visibility optional based on VPC configuration
-  #checkov:skip=CKV_GCP_64:Private node configuration optional based on deployment environment
-  #checkov:skip=CKV_GCP_65:Google Groups for GKE RBAC optional based on organization identity setup
-  #checkov:skip=CKV_GCP_66:Binary authorization optional based on organization policy
+  #checkov:skip=CKV_GCP_25:Public cluster endpoint required for developer and CI operator access in quickstart module
+  #checkov:skip=CKV_GCP_61:Intra-node visibility not required for standard quickstart cluster telemetry
+  #checkov:skip=CKV_GCP_64:Public node routing enabled for standard egress without Cloud NAT in quickstart module
+  #checkov:skip=CKV_GCP_65:Google Groups RBAC integration not required for single-tenant agent host cluster
+  #checkov:skip=CKV_GCP_66:Binary authorization not required for quickstart agent deployment module
   #checkov:skip=CKV_GCP_69:Workload Identity metadata server is enabled by default in Autopilot
   name     = var.cluster_name
   location = var.location
