@@ -77,6 +77,14 @@ RESOLVER_REL = "skills/github-issue-resolver/scripts/resolver.py"
 # read-only call and its runtime is not bounded by a single request.
 RESOLVER_TIMEOUT_S = 300
 
+CODE_REVIEW_REL = "skills/code-review/scripts/code_review.py"
+
+# `code_review.py poll` is one `gh pr list` and nothing else — no write, no
+# per-item follow-up — so it gets a fraction of the resolver's budget. A poll
+# that needs longer than this is a hung connection, and the sweep should say so
+# rather than hold the tick.
+CODE_REVIEW_TIMEOUT_S = 120
+
 
 @dataclass
 class Card:
@@ -149,44 +157,48 @@ def _resolver_path() -> Path:
     return hermes_home() / RESOLVER_REL
 
 
-def run_resolver_poll() -> dict:
-    """Run ``resolver.py poll`` and return its JSON.
+def _run_json_poll(script: Path, label: str, timeout_s: int) -> dict:
+    """Run ``<script> poll`` and return its JSON.
 
     Launched with ``sys.executable`` rather than the shebang: the scheduler
-    hands this script the gateway's own venv interpreter, and the resolver must
-    run under the same one that owns its dependencies, whatever the file mode
-    on the PVC happens to be.
+    hands this script the gateway's own venv interpreter, and a skill helper
+    must run under the same one that owns its dependencies, whatever the file
+    mode on the PVC happens to be.
 
     Raises on anything that leaves us without a status to branch on, so the
     caller's ``except`` turns it into one visible warning rather than a sweep
-    that quietly decides there are no issues.
+    that quietly decides there is no work.
     """
-    script = _resolver_path()
     if not script.is_file():
-        raise FileNotFoundError(f"resolver not found at {script}")
+        raise FileNotFoundError(f"{label} not found at {script}")
 
     proc = subprocess.run(
         [sys.executable, str(script), "poll"],
         capture_output=True,
         text=True,
-        timeout=RESOLVER_TIMEOUT_S,
+        timeout=timeout_s,
     )
-    # Deliberately not `check=True`: the resolver reports its faults as JSON on
-    # stdout, and a non-zero exit with parseable output is still an answer. Only
-    # unparseable output is a real dead end.
+    # Deliberately not `check=True`: these helpers report their faults as JSON
+    # on stdout, and a non-zero exit with parseable output is still an answer.
+    # Only unparseable output is a real dead end.
     stdout = proc.stdout.strip()
     if not stdout:
         raise RuntimeError(
-            f"resolver poll exited {proc.returncode} with no output"
+            f"{label} poll exited {proc.returncode} with no output"
             + (f": {proc.stderr.strip()[:300]}" if proc.stderr.strip() else "")
         )
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as e:
-        raise RuntimeError(f"resolver poll did not return JSON: {stdout[:300]}") from e
+        raise RuntimeError(f"{label} poll did not return JSON: {stdout[:300]}") from e
     if not isinstance(payload, dict):
-        raise RuntimeError(f"resolver poll returned {type(payload).__name__}, not an object")
+        raise RuntimeError(f"{label} poll returned {type(payload).__name__}, not an object")
     return payload
+
+
+def run_resolver_poll() -> dict:
+    """Run ``resolver.py poll`` and return its JSON."""
+    return _run_json_poll(_resolver_path(), "resolver", RESOLVER_TIMEOUT_S)
 
 
 #: Idempotency-key granularity. Long enough that a worker still working an
@@ -286,8 +298,99 @@ def sweep_issues(dry_run: bool = False) -> SweepResult:
     )
 
 
+# --------------------------------------------------------------------------
+# Sweep: pull requests awaiting review
+# --------------------------------------------------------------------------
+
+
+def _code_review_path() -> Path:
+    return hermes_home() / CODE_REVIEW_REL
+
+
+def run_code_review_poll() -> dict:
+    """Run ``code_review.py poll`` and return its JSON."""
+    return _run_json_poll(_code_review_path(), "code-review", CODE_REVIEW_TIMEOUT_S)
+
+
+def _review_card(payload: dict, now: datetime | None = None) -> Card:
+    """The card that hands one pull request to the Platform Agent.
+
+    Like ``_issue_card``, the body carries the number and nothing the worker
+    could act on directly — it re-collects the context itself, because a card
+    can sit on the board while the branch moves underneath it.
+
+    The head sha is in the key, not just the number. A pull request reviewed at
+    one commit and then pushed to is *new work*, and keying on the number alone
+    would file the second review under a key the first already answered — the
+    review would never be filed and nobody would see why. Keying on the commit
+    means a push is a new card and a re-tick on the same commit is not.
+
+    ``now`` is injected so the bucketing below is testable.
+    """
+    number = payload["pr_number"]
+    repo = payload.get("repository", "")
+    title = payload.get("title", "") or f"pull request #{number}"
+    head_sha = payload.get("head_sha", "") or "unknown"
+    bucket = (now or datetime.now(timezone.utc)).strftime(CARD_BUCKET_FORMAT)
+    return Card(
+        title=f"Review {repo}#{number}: {title}"[:200],
+        body=(
+            f"An open pull request on `{repo}` has no review at its current commit.\n\n"
+            f"Run the **code-review** skill and follow its procedure from Step 1 for "
+            f"pull request **#{number}** (`{head_sha[:7]}`) — collect the context, read "
+            f"the repository's own rules, review the diff, and post the result with "
+            f"`code_review.py submit`.\n\n"
+            "You comment or request changes. You never approve, never merge, and never "
+            "push. Its safety red lines apply in full.\n\n"
+            "Re-run the poll rather than trusting this card: it was filed by the "
+            "`github-repo-watcher` cron job and the branch may have moved since."
+        ),
+        # The hour bucket is here for the same reason it is on `_issue_card`,
+        # and the reasoning there is the full version. In short: the board's
+        # dedupe matches non-archived rows forever, so a worker that dies before
+        # posting would latch a pure key permanently and every later tick would
+        # look clean. The durable claim is on GitHub instead — the review marker
+        # `code_review.py` stamps into the body it posts, which is what drops
+        # the pull request out of the next poll and which survives a reset
+        # volume. The key only has to cover filing-to-post.
+        idempotency_key=f"pr-review-{_slug(repo)}-{number}-{head_sha[:7]}-{bucket}",
+    )
+
+
+def sweep_pr_review(dry_run: bool = False) -> SweepResult:
+    # No dry-run caveat to print, unlike `sweep_issues`: `code_review.py poll`
+    # is a single `gh pr list` and writes nothing, so a dry run here really is
+    # the read-only pass the flag promises.
+    payload = run_code_review_poll()
+    status = payload.get("status")
+
+    if status in ("NO_PULL_REQUESTS", "NOT_CONFIGURED"):
+        # NOT_CONFIGURED is a supported deployment, not a fault: an install with
+        # no target repository has nothing to watch and should stay silent.
+        return SweepResult()
+
+    if status == "FOUND":
+        return SweepResult(cards=[_review_card(payload)])
+
+    if status == "ERROR":
+        reason = payload.get("reason", "unknown")
+        value = payload.get("value")
+        detail = f"{reason}" + (f" ({value})" if value else "")
+        return SweepResult(
+            warnings=[f"⚠️ **GitHub code review is not running:** {detail}"]
+        )
+
+    return SweepResult(
+        warnings=[
+            f"⚠️ **GitHub repo watcher:** code-review poll returned an unrecognised "
+            f"status `{status}`."
+        ]
+    )
+
+
 SWEEPS = {
     "issues": sweep_issues,
+    "pr-review": sweep_pr_review,
 }
 
 # Insertion order is run order, so this is the registry read one way rather

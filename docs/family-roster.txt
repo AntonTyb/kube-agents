@@ -53,6 +53,7 @@ agents/platform/governance/*.md
 
 agents/platform/skills/*/SKILL.md
   agents/platform/skills/cluster-agent-lifecycle/SKILL.md
+  agents/platform/skills/code-review/SKILL.md
   agents/platform/skills/fleet-audit/SKILL.md
   agents/platform/skills/github-issue-resolver/SKILL.md
   agents/platform/skills/gke-ai-troubleshooting-handle-disruption-gpu-tpu/SKILL.md

@@ -264,6 +264,183 @@ class CardBucketTest(unittest.TestCase):
         self.assertTrue(card.idempotency_key.endswith(expected))
 
 
+class PrReviewSweepTest(unittest.TestCase):
+    """The same silence/fault split as the issues sweep, one status set over."""
+
+    FOUND = {
+        "status": "FOUND",
+        "repository": "gke-labs/kube-agents",
+        "pr_number": 42,
+        "title": "Add a retry to the config controller",
+        "head_sha": "a" * 40,
+    }
+
+    def _poll(self, payload):
+        return mock.patch.object(gate, "run_code_review_poll", return_value=payload)
+
+    def test_no_pull_requests_is_silence(self):
+        with self._poll({"status": "NO_PULL_REQUESTS", "repository": "o/r"}):
+            result = gate.sweep_pr_review()
+        self.assertEqual(result.cards, [])
+        self.assertEqual(result.warnings, [])
+
+    def test_not_configured_is_silence_not_a_fault(self):
+        with self._poll({"status": "NOT_CONFIGURED"}):
+            result = gate.sweep_pr_review()
+        self.assertEqual(result.cards, [])
+        self.assertEqual(result.warnings, [])
+
+    def test_error_reaches_the_room(self):
+        with self._poll({"status": "ERROR", "reason": "REPO_UNREACHABLE"}):
+            result = gate.sweep_pr_review()
+        self.assertEqual(result.cards, [])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("REPO_UNREACHABLE", result.warnings[0])
+
+    def test_unrecognised_status_is_a_warning_not_silence(self):
+        with self._poll({"status": "SOMETHING_NEW"}):
+            result = gate.sweep_pr_review()
+        self.assertEqual(result.cards, [])
+        self.assertIn("SOMETHING_NEW", result.warnings[0])
+
+    def test_found_produces_one_card_naming_the_skill(self):
+        with self._poll(self.FOUND):
+            result = gate.sweep_pr_review()
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(len(result.cards), 1)
+        card = result.cards[0]
+        self.assertIn("42", card.title)
+        self.assertIn("#42", card.body)
+        self.assertIn("code-review", card.body)
+
+    def test_the_card_repeats_the_no_approve_red_line(self):
+        """The card is the whole brief a dispatched worker starts from.
+
+        It names a skill rather than carrying `skills:`, so nothing guarantees
+        the worker read `SKILL.md` before it starts reasoning. The one
+        constraint that must not depend on that is the one that cannot be
+        walked back after the fact.
+        """
+        with self._poll(self.FOUND):
+            body = gate.sweep_pr_review().cards[0].body
+        self.assertIn("never approve", body)
+        self.assertIn("never merge", body)
+
+    def test_a_dry_run_prints_no_caveat(self):
+        """The contrast with `sweep_issues`, asserted rather than left to prose.
+
+        The issues sweep warns on stderr that `--dry-run` cannot stop
+        `resolver.py poll` writing labels. This sweep's poll is one `gh pr
+        list`, so the flag means what it says — and if that ever stops being
+        true, this test is what notices.
+        """
+        buf = io.StringIO()
+        with self._poll({"status": "NO_PULL_REQUESTS"}), \
+             mock.patch.object(sys, "stderr", buf):
+            gate.sweep_pr_review(dry_run=True)
+        self.assertEqual(buf.getvalue(), "")
+
+
+class ReviewCardKeyTest(unittest.TestCase):
+    """The review key carries a commit as well as a number and an hour."""
+
+    PAYLOAD = {
+        "status": "FOUND",
+        "repository": "o/r",
+        "pr_number": 7,
+        "title": "t",
+        "head_sha": "a" * 40,
+    }
+    NOW = datetime(2026, 8, 17, 14, 0, tzinfo=timezone.utc)
+
+    def test_a_new_commit_is_new_work(self):
+        """The property that distinguishes this key from the issue one.
+
+        A pull request reviewed at one commit and then pushed to needs
+        reviewing again. Keyed on the number alone, the second card would land
+        on a key the first already answered, the review would never be filed,
+        and the board would look clean while the new commit went unread.
+        """
+        first = gate._review_card(self.PAYLOAD, now=self.NOW).idempotency_key
+        second = gate._review_card(
+            {**self.PAYLOAD, "head_sha": "b" * 40}, now=self.NOW
+        ).idempotency_key
+        self.assertNotEqual(first, second)
+
+    def test_the_same_commit_in_the_same_hour_does_not_refile(self):
+        late = datetime(2026, 8, 17, 14, 59, tzinfo=timezone.utc)
+        self.assertEqual(
+            gate._review_card(self.PAYLOAD, now=self.NOW).idempotency_key,
+            gate._review_card(self.PAYLOAD, now=late).idempotency_key,
+        )
+
+    def test_the_next_hour_refiles(self):
+        """Bucketed for the reason `_issue_card` is: the board never forgets.
+
+        A worker that dies before posting its review leaves no marker on
+        GitHub, so an unbucketed key would suppress that pull request forever
+        and every later tick would look like a clean run.
+        """
+        after = datetime(2026, 8, 17, 15, 0, tzinfo=timezone.utc)
+        self.assertNotEqual(
+            gate._review_card(self.PAYLOAD, now=self.NOW).idempotency_key,
+            gate._review_card(self.PAYLOAD, now=after).idempotency_key,
+        )
+
+    def test_the_repository_scopes_the_key(self):
+        self.assertNotEqual(
+            gate._review_card(self.PAYLOAD, now=self.NOW).idempotency_key,
+            gate._review_card(
+                {**self.PAYLOAD, "repository": "other/repo"}, now=self.NOW
+            ).idempotency_key,
+        )
+
+    def test_the_key_has_no_path_separator(self):
+        key = gate._review_card(self.PAYLOAD, now=self.NOW).idempotency_key
+        self.assertNotIn("/", key)
+
+    def test_the_issue_and_review_keys_cannot_collide(self):
+        """Two sweeps share one board and one key namespace."""
+        issue = gate._issue_card(
+            {"repository": "o/r", "issue_number": 7, "title": "t"}, now=self.NOW
+        ).idempotency_key
+        review = gate._review_card(self.PAYLOAD, now=self.NOW).idempotency_key
+        self.assertNotEqual(issue, review)
+
+    def test_the_default_clock_is_utc_not_local(self):
+        card = gate._review_card(self.PAYLOAD)
+        expected = datetime.now(timezone.utc).strftime(gate.CARD_BUCKET_FORMAT)
+        self.assertTrue(card.idempotency_key.endswith(expected))
+
+
+class RunCodeReviewPollTest(unittest.TestCase):
+    def test_missing_helper_raises(self):
+        """Better a loud sweep failure than a silent "no pull requests"."""
+        with mock.patch.object(gate, "_code_review_path", return_value=Path("/nope.py")):
+            with self.assertRaises(FileNotFoundError):
+                gate.run_code_review_poll()
+
+    def test_json_on_stdout_is_returned_even_when_the_exit_code_is_nonzero(self):
+        payload = {"status": "ERROR", "reason": "REPO_UNREACHABLE"}
+        with mock.patch.object(gate, "_code_review_path", return_value=Path(__file__)), \
+             mock.patch.object(
+                 subprocess, "run", return_value=_completed(json.dumps(payload), 1)
+             ):
+            self.assertEqual(gate.run_code_review_poll(), payload)
+
+    def test_the_label_in_the_error_names_which_poll_failed(self):
+        """Two sweeps now run one helper each through the same code path.
+
+        A message that said only "poll returned no output" would leave an
+        operator guessing which of them is broken.
+        """
+        with mock.patch.object(gate, "_code_review_path", return_value=Path(__file__)), \
+             mock.patch.object(subprocess, "run", return_value=_completed("", 1)):
+            with self.assertRaises(RuntimeError) as ctx:
+                gate.run_code_review_poll()
+        self.assertIn("code-review", str(ctx.exception))
+
+
 class RunResolverPollTest(unittest.TestCase):
     def test_missing_resolver_raises(self):
         """Better a loud sweep failure than a silent "no issues"."""

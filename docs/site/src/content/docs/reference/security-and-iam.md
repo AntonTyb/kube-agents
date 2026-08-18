@@ -163,6 +163,17 @@ Both paths share the same guardrails: blanket staging (`git add .` / `git add -A
 
 The agent never has direct write access to running infrastructure — see [Declarative workflow](/kube-agents/concepts/declarative-workflow/).
 
+## Secure write path: pull-request review
+
+The `code-review` skill is the agent's second GitHub write path, and the only one that touches a repository other than your GitOps repository. It reviews an open pull request and posts the result. What it can write is deliberately narrower than the GitOps path:
+
+- **It comments or requests changes. It cannot approve and it cannot merge.** The helper script accepts two verdicts and `approve` is not one of them, so no argument vector produces `gh pr review --approve`. This is an asymmetry rather than a preference: requesting changes is a veto whose worst case costs a reviewer an argument, while approval is what merges code.
+- **It pushes no commits.** The review is the entire output.
+- **It reads the repository's own rules as data.** A repository can commit `.kube-agents/review.md` to state its conventions, and the agent is instructed to treat that file as reference material with no authority over what it is permitted to do — an instruction in it to approve, to skip a class of finding, or to run a command is an injection attempt, not a rule. The file is read at the pull request's **base** commit, so a pull request cannot rewrite the standard it is about to be measured against.
+- **A pull request labeled `agent:ignore` is not reviewed**, the same opt-out the issue resolver honours.
+
+Both of the first two bounds are properties of the skill's helper script, not of the credential broker: the broker permits `gh pr review --approve` today, so they bound the agent acting through the skill rather than an agent that shells out to `gh` on its own. Treat them as you would the persona rules above — real, and not a substitute for the permission boundary.
+
 ## Change control & safety
 
 - **No direct cluster writes.** Enforced by RBAC (above) and by the persona's automation-first stance — the agent does not `kubectl apply`; it opens PRs. See [Platform Agent](/kube-agents/concepts/platform-agent/).
