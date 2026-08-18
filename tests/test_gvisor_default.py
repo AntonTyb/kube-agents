@@ -25,6 +25,7 @@ Teardown is the deliberate exception and is asserted as one: see
 `teardown_02_gvisor_nodepool.sh`.
 """
 
+import os
 import pathlib
 import re
 import shutil
@@ -247,6 +248,112 @@ class RuntimeClassProbeTest(unittest.TestCase):
             probe.index('ENABLE_GVISOR="false"'),
             msg="an explicit ENABLE_GVISOR=true no longer fails when the RuntimeClass is absent",
         )
+
+
+class GvisorExplicitFlagTest(unittest.TestCase):
+    """`GVISOR_EXPLICIT` must survive a re-run of the step on its own.
+
+    The fallback above is only safe while "the cluster has no gvisor RuntimeClass" and
+    "somebody asked for gVisor" stay independent. They stop being independent the moment
+    the step persists what it defaulted: `init_var` calls `save_var`, `save_var` appends
+    to `vars.sh`, and `load_state` sources `vars.sh` before the flag is computed — so one
+    silent fallback teaches the next run that the value was a request, and a redeploy
+    that changed nothing about the cluster hard-fails. CI never sees it because every
+    workflow starts from a fresh checkout and throws `vars.sh` away; a self-hosted
+    runner, a Cloud Shell session or a laptop does not.
+
+    These run the script's own resolution block against the real `common.sh`, so they
+    fail if either side of that interaction moves.
+    """
+
+    def _resolution_block(self) -> str:
+        """The lines of `provision_08` that resolve ENABLE_GVISOR and GVISOR_EXPLICIT."""
+        lines = _PROVISION_08.read_text().splitlines()
+        starts = [i for i, line in enumerate(lines) if line.strip() == "GVISOR_EXPLICIT=0"]
+        self.assertEqual(
+            len(starts),
+            1,
+            msg="expected exactly one GVISOR_EXPLICIT=0 in provision_08",
+        )
+        start = starts[0]
+        end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "fi")
+        block = "\n".join(lines[start : end + 1])
+        # Resolving the value outside the branch that computes the flag is exactly the
+        # shape that persists a default, so the extraction refuses to run against it
+        # rather than reporting an empty ENABLE_GVISOR as some other failure.
+        self.assertIn(
+            'init_var "ENABLE_GVISOR"',
+            block,
+            msg="provision_08 resolves ENABLE_GVISOR outside the GVISOR_EXPLICIT "
+            "branch; an unconditional init_var persists the default it picks",
+        )
+        return block
+
+    def _resolve(self, vars_file: pathlib.Path, **env) -> tuple[str, str]:
+        """Run the block once, the way a non-interactive step 08 would."""
+        script = "\n".join(
+            [
+                "set -e",
+                f'source "{_COMMON}"',
+                # What load_state does with a vars.sh that already exists. The rest of
+                # load_state wants a live gcloud, and none of it touches ENABLE_GVISOR.
+                'if [ -f "$VARS_FILE" ]; then source "$VARS_FILE"; fi',
+                self._resolution_block(),
+                'echo "RESULT ${ENABLE_GVISOR} ${GVISOR_EXPLICIT}"',
+            ]
+        )
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": os.environ.get("HOME", ""),
+                "VARS_FILE": str(vars_file),
+                "CI": "true",  # is_non_interactive, as every scripted install is
+                **env,
+            },
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        line = next(
+            ln for ln in result.stdout.splitlines() if ln.startswith("RESULT ")
+        )
+        _, enabled, explicit = line.split()
+        return enabled, explicit
+
+    def test_a_defaulted_value_is_not_persisted_and_does_not_latch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vars_file = pathlib.Path(tmp) / "vars.sh"
+
+            self.assertEqual(self._resolve(vars_file), ("true", "0"))
+            self.assertNotIn(
+                "ENABLE_GVISOR",
+                vars_file.read_text() if vars_file.exists() else "",
+                msg="step 08 wrote the value it defaulted into vars.sh; the next run "
+                "will read its own fallback back as an explicit request",
+            )
+            self.assertEqual(
+                self._resolve(vars_file),
+                ("true", "0"),
+                msg="the second run of the same step reports the default as explicit",
+            )
+
+    def test_an_exported_value_is_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vars_file = pathlib.Path(tmp) / "vars.sh"
+            self.assertEqual(
+                self._resolve(vars_file, ENABLE_GVISOR="true"),
+                ("true", "1"),
+            )
+
+    def test_a_saved_value_is_explicit(self):
+        # install.sh writes the installer's answer into vars.sh, and provision_02 saves
+        # the value before it creates the pool. Both are choices; a missing RuntimeClass
+        # afterwards is an error rather than a reason to drop the sandbox.
+        with tempfile.TemporaryDirectory() as tmp:
+            vars_file = pathlib.Path(tmp) / "vars.sh"
+            vars_file.write_text("export ENABLE_GVISOR=true\n")
+            self.assertEqual(self._resolve(vars_file), ("true", "1"))
 
 
 if __name__ == "__main__":

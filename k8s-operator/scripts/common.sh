@@ -187,6 +187,11 @@ is_valid_cmek_encryption_state() {
   return 1
 }
 
+# Resolve a variable that is not already set, and persist whatever it resolved
+# to — the prompted answer *and* the non-interactive default alike. A caller
+# that must be able to tell a chosen value from a defaulted one on the next run
+# therefore cannot use this: vars.sh will report both as set. See the
+# ENABLE_GVISOR block in provision_08_deploy_platform_agent.sh.
 init_var() {
   local var_name=$1
   local default_val=$2
@@ -260,8 +265,9 @@ init_var_registry_prefix() {
       exit 1
       ;;
   esac
-  # init_var only saves values it prompted for; persist an env-exported
-  # prefix too, so the remaining steps and later re-runs reuse it.
+  # init_var only saves a value it had to resolve, so an already-exported
+  # prefix reaches here unsaved; persist it too, so the remaining steps and
+  # later re-runs reuse it.
   save_var "REGISTRY_PREFIX" "$REGISTRY_PREFIX"
 
   # Deliberately not prompted for: leaving third-party images upstream is the

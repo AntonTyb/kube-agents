@@ -40,15 +40,30 @@ init_var "PROJECT_ID" "$DEFAULT_PROJECT_ID" "Enter Target GCP Project ID"
 init_var "REGION" "$DEFAULT_REGION" "Enter GKE GCP Region"
 init_var "CLUSTER_NAME" "$DEFAULT_CLUSTER_NAME" "Enter GKE Cluster Name"
 # Whether gVisor was asked for or merely defaulted. load_state has already
-# sourced vars.sh, so anything set by now came from the environment or from the
-# choice the installer saved — either way deliberate. execute_custom_resource
-# uses the distinction to decide whether a cluster with no gvisor RuntimeClass
-# is an error or a fallback.
+# sourced vars.sh, so anything set by now came from the environment, from the
+# choice the installer saved, or from provision_02 — which saves the value and
+# then creates the pool, so a missing RuntimeClass afterwards really is an
+# error. execute_custom_resource uses the distinction to decide whether a
+# cluster with no gvisor RuntimeClass is an error or a fallback.
+#
+# The default deliberately does NOT go through init_var, which persists what it
+# resolves (save_var, common.sh). Persisting it here would make this step's own
+# fallback indistinguishable from a request on the next run: one silent
+# "deploying WITHOUT sandbox isolation" writes ENABLE_GVISOR=true into vars.sh,
+# and the following run reads it back as explicit and fails a redeploy that
+# nothing about the cluster or the command changed. IMAGE_TAG is left out of
+# vars.sh for a related reason (see init_var_image_tag).
 GVISOR_EXPLICIT=0
 if [ -n "${ENABLE_GVISOR:-}" ]; then
   GVISOR_EXPLICIT=1
+elif is_non_interactive; then
+  export ENABLE_GVISOR="$DEFAULT_ENABLE_GVISOR"
+else
+  # An answer typed at the prompt is a choice, so it is both explicit and worth
+  # saving — pressing enter accepts the default the prompt showed.
+  init_var "ENABLE_GVISOR" "$DEFAULT_ENABLE_GVISOR" "Enable GKE Sandbox (gVisor) runtime isolation? (true/false)"
+  GVISOR_EXPLICIT=1
 fi
-init_var "ENABLE_GVISOR" "$DEFAULT_ENABLE_GVISOR" "Enable GKE Sandbox (gVisor) runtime isolation? (true/false)"
 init_var_model_provider
 
 # Map global state variables to expected template variables
