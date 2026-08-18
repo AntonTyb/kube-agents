@@ -333,6 +333,10 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     if not text or not isinstance(text, str):
         return ""
 
+    is_truncated = len(text) > max_length
+    if is_truncated:
+        text = text[:max_length]
+
     # 1. Strip ANSI escape sequences (7-bit and 8-bit CSI) and carriage returns
     cleaned = re.sub(r"\r", "", text)
     cleaned = re.sub(
@@ -346,7 +350,7 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
 
     # 3. Neutralize prompt injection delimiter tags, instruction markers, and fake system headers
     cleaned = re.sub(
-        r"<\s*/?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)(?:\s+[^>]*)?>",
+        r"<[/]?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)(?:\s+[^>]*)?>",
         r"[\1_tag_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
@@ -364,12 +368,8 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
         flags=re.IGNORECASE,
     )
 
-    # 4. Truncate to maximum allowable character length with explicit marker
-    if len(cleaned) > max_length:
-        cleaned = (
-            cleaned[:max_length]
-            + f"\n\n[TRUNCATED: Exceeded {max_length} character limit]"
-        )
+    if is_truncated:
+        cleaned += f"\n\n[TRUNCATED: Exceeded {max_length} character limit]"
 
     return cleaned.strip()
 
@@ -461,14 +461,9 @@ def evaluate_risk_tier(issue: dict) -> str:
         text_parts.append(sanitize_untrusted_text(c_body))
     sanitized_content = " ".join(str(p) for p in text_parts)
 
-    # Strip multiline fenced code blocks (e.g. log output / error traces) per field,
-    # and retain inline code words by converting backticks to whitespace rather than deleting them.
-    prose_parts = []
-    for p in text_parts:
-        no_fences = re.sub(r"```[\s\S]*?```", "", p)
-        no_inline_ticks = no_fences.replace("`", " ")
-        prose_parts.append(no_inline_ticks)
-    prose_content = " ".join(prose_parts).lower()
+    # Convert all backticks to whitespace so commands in both inline spans and fenced code
+    # blocks are scanned for destructive actions rather than being erased from risk evaluation.
+    prose_content = sanitized_content.replace("`", " ").lower()
 
     # Explicit destructive / mutating action verbs or privileged request patterns
     tier3_patterns = [

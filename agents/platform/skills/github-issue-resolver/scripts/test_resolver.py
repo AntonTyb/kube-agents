@@ -570,6 +570,16 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         self.assertTrue(cleaned.startswith("A" * 8192))
         self.assertIn("[TRUNCATED: Exceeded 8192 character limit]", cleaned)
 
+    def test_sanitize_untrusted_text_redos_resistance(self):
+        # 65,000 characters of adversarial whitespace and backtick runs must not stall
+        adversarial_payload = "<" + " " * 65000 + "system"
+        cleaned = resolver.sanitize_untrusted_text(adversarial_payload, max_length=8192)
+        self.assertIn("[TRUNCATED: Exceeded 8192 character limit]", cleaned)
+
+        backtick_payload = "`" * 65000 + "system"
+        cleaned_backticks = resolver.sanitize_untrusted_text(backtick_payload, max_length=8192)
+        self.assertIn("[TRUNCATED: Exceeded 8192 character limit]", cleaned_backticks)
+
     def test_calculate_issue_priority_p0(self):
         issue = {
             "number": 50,
@@ -769,6 +779,17 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         issue = {
             "title": "Please `delete` the prod namespace",
             "body": "Run `kubectl delete ns sandbox` and `drain` node-1",
+            "comments": [],
+            "labels": [],
+        }
+        self.assertEqual(
+            resolver.evaluate_risk_tier(issue), "TIER_3_MUTATING"
+        )
+
+    def test_evaluate_risk_tier_fenced_code_block_mutating(self):
+        issue = {
+            "title": "The prod namespace is wedged, please run:",
+            "body": "```\nkubectl delete ns prod\n```",
             "comments": [],
             "labels": [],
         }
