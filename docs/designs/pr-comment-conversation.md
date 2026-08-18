@@ -57,10 +57,27 @@ started — 48 turns a day to be told "no unaddressed issues" 47 times.
 round trip, no model, no turn, and no tokens. Work is handed off by filing a kanban card assigned to
 `platform`; the model wakes then and only then.
 
-The script is a dispatcher over a `SWEEPS` registry. Today it holds one sweep, `issues`, which shells
+The script is a dispatcher over a `SWEEPS` registry. The first sweep is `issues`, which shells
 `resolver.py poll` — that script already emits a `{"status": ...}` vocabulary and already performs
-the stale sweep as a side effect, so nothing inside it changes. §4 adds `pr_comments` as a second
-entry rather than a second job.
+the stale sweep as a side effect, so nothing inside it changes. A second, `pr-review`, has since
+landed on the same registry: it files a card for an open pull request carrying no review at its
+current head commit, and the `code-review` skill does the reading. §4 adds `pr_comments` as a
+further entry rather than a second job.
+
+`pr-review` and `pr_comments` are complementary rather than alternatives, and the split is by
+authorship. `pr-review` deliberately **excludes** pull requests whose head branch starts with
+`platform-agent/`, and any whose author matches `CODE_REVIEW_SELF_LOGIN` when that is set — those
+are the agent's own, and reviewing them is the agent marking its own homework. §4 sweeps exactly
+that excluded set, to answer reviewers on it. Neither sweep sees a pull request the other handles.
+
+The env knobs that bound `pr-review` are read by `code_review.py` rather than by the gate, so
+changing one needs no roster edit:
+
+- **`CODE_REVIEW_RULES_PATH`** — the repository-committed rules file the review is measured against,
+  default `.kube-agents/review.md`. Read at the pull request's **base** commit, never its head, so a
+  pull request cannot rewrite the standard it is about to be judged by.
+- **`CODE_REVIEW_SELF_LOGIN`** — the login to treat as the harness's own when deciding whether a
+  pull request is agent-authored. Unset, the branch-prefix test above is the whole check.
 
 Three properties are load-bearing, and each has a test:
 

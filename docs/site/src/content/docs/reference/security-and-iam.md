@@ -165,7 +165,7 @@ The agent never has direct write access to running infrastructure — see [Decla
 
 ## Secure write path: pull-request review
 
-The `code-review` skill is the agent's second GitHub write path, and the only one that touches a repository other than your GitOps repository. It reviews an open pull request and posts the result. What it can write is deliberately narrower than the GitOps path:
+The `code-review` skill is the agent's second GitHub write path. It reviews an open pull request and posts the result. The repository is the one the install is already configured against — `spec.integration.github.gitRepo` on the [`PlatformAgent` CR](/kube-agents/operator/platformagent-crd/), which the operator renders into the agent's `SETTINGS.md` — so it is the same repository the GitOps path opens its pull requests against, not a wider grant. What it can write there is deliberately narrower than the GitOps path:
 
 - **It comments or requests changes. It cannot approve and it cannot merge.** The helper script accepts two verdicts and `approve` is not one of them, so no argument vector produces `gh pr review --approve`. This is an asymmetry rather than a preference: requesting changes is a veto whose worst case costs a reviewer an argument, while approval is what merges code.
 - **It pushes no commits.** The review is the entire output.

@@ -52,11 +52,11 @@ Two properties matter more than the check lists:
 
 ### Pollers file cards; watchdogs deliver reports
 
-`github-repo-watcher` shares the Platform Agent's roster but is a different kind of entry. It runs `github_scan_gate.py` as a `no_agent` subprocess every ten minutes, sweeping the target GitHub repository for work — today, unaddressed open issues. Almost every tick finds nothing, prints nothing, and costs no tokens at all. On the rare tick that does find something, it files a kanban card assigned to the Platform Agent, and the model wakes up then.
+`github-repo-watcher` shares the Platform Agent's roster but is a different kind of entry. It runs `github_scan_gate.py` as a `no_agent` subprocess every ten minutes, sweeping the target GitHub repository for work. The sweeps that run today are `issues`, which finds unaddressed open issues and hands them to the [`github-issue-resolver`](/kube-agents/skills/) skill, and `pr-review`, which finds open pull requests carrying no review at their current head commit and hands them to `code-review`. Almost every tick finds nothing, prints nothing, and costs no tokens at all. On the rare tick that does find something, it files a kanban card assigned to the Platform Agent naming the skill to load, and the model wakes up then.
 
 That inversion is the point. As a prompt job the same poll ran a third as often and still spent 48 model turns a day — persona, skill, and a deterministic API call — to be told "nothing to do" 47 times. The trade-off is that a card is not a cron run: the roster's `skills`, `model` and `deliver` do not reach the work the card produces. The Tirith scan does reach it, by the other route described above. That is acceptable for a poller, whose product goes to GitHub rather than to a chat channel, and unacceptable for a watchdog, whose product _is_ the delivery — which is why the seven audits are prompt jobs and stay that way. `agents/platform/cron/README.md` holds the full argument.
 
-`deliver: "all"` still matters for the gate itself: a sweep that cannot reach the forge prints one `⚠️` line and that line has to be audible. A sweep can be turned off without touching the roster by setting `GITHUB_WATCHER_SWEEPS` to the comma-separated list you want; unset means all of them.
+`deliver: "all"` still matters for the gate itself: a sweep that cannot reach the forge prints one `⚠️` line and that line has to be audible. A sweep can be turned off without touching the roster by setting `GITHUB_WATCHER_SWEEPS` to the comma-separated list you want — the names are `issues` and `pr-review`; unset means all of them. A name that matches no sweep is reported rather than silently selecting nothing, so a typo does not read as "disable everything".
 
 ### The retired jobs
 
