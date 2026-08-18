@@ -42,7 +42,7 @@ misconfigurations:
   # Ignore KSV-0056: manager-role requires networkpolicies access to manage agent sandboxes
   - id: KSV-0056
     paths:
-      - "k8s-operator/config/**"
+      - "k8s-operator/config/rbac/**"
 
   # Ignore KSV-0118: sample manifests, testdata, and kustomize overlays do not define full security contexts
   - id: KSV-0118

@@ -25,7 +25,7 @@ updates:
       - "dependencies"
       - "go"
     commit-message:
-      prefix: "deps"
+      prefix: "ci"
 
   - package-ecosystem: "pip"
     directories:
@@ -40,7 +40,7 @@ updates:
       - "dependencies"
       - "python"
     commit-message:
-      prefix: "deps"
+      prefix: "ci"
 
   - package-ecosystem: "npm"
     directories:
@@ -54,7 +54,7 @@ updates:
       - "dependencies"
       - "javascript"
     commit-message:
-      prefix: "deps"
+      prefix: "ci"
 
   - package-ecosystem: "docker"
     directories:
