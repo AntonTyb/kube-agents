@@ -80,6 +80,31 @@ init_agent_ready_timeout
 
 # ─── Step Implementations ─────────────────────────────────────────────────────
 
+# Ask the API server whether this cluster has the gvisor RuntimeClass, and
+# distinguish "it answered no" from "it did not answer". Discarding stderr and
+# reading a non-zero exit as "absent" would turn an expired credential, an RBAC
+# denial on node.k8s.io/runtimeclasses, throttling, a 5xx or a disconnected
+# kubectl into a silent decision to deploy the agent on the host kernel — a
+# fail-open on the one control this step is checking. The operator makes the
+# same distinction: validateRuntimeClass branches on errors.IsNotFound and
+# returns a hard error for everything else.
+#
+# Echoes "present", "absent", or "unknown: <what kubectl said>".
+gvisor_runtimeclass_state() {
+  local out
+  if out=$(kubectl get runtimeclass gvisor 2>&1); then
+    echo "present"
+    return 0
+  fi
+  # kubectl spells the reason the operator matches on into its message:
+  #   Error from server (NotFound): runtimeclasses.node.k8s.io "gvisor" not found
+  case "$out" in
+    *NotFound*) echo "absent" ;;
+    *) echo "unknown: ${out}" ;;
+  esac
+  return 1
+}
+
 # Step 1: Connect kubectl
 verify_kubeconfig() {
   local current_ctx
@@ -188,16 +213,31 @@ execute_custom_resource() {
   # sandbox would be the worst possible response to it. The default is a
   # preference, and clusters provisioned before this became the default have no
   # gvisor pool — the redeploy workflows (reusable-deploy-agent.yml runs only
-  # this step, never provision_02) hit exactly that.
-  if is_truthy "$ENABLE_GVISOR" && ! kubectl get runtimeclass gvisor >/dev/null 2>&1; then
-    if [ "${GVISOR_EXPLICIT:-0}" -eq 1 ]; then
-      print_error "ENABLE_GVISOR=true, but cluster '${CLUSTER_NAME}' has no 'gvisor' RuntimeClass."
-      print_error "Run provision_02_gvisor_nodepool.sh to create the sandbox node pool, or set ENABLE_GVISOR=false."
-      return 1
-    fi
-    print_warning "Cluster '${CLUSTER_NAME}' has no 'gvisor' RuntimeClass; deploying WITHOUT sandbox isolation."
-    print_warning "Run provision_02_gvisor_nodepool.sh to create the sandbox node pool, then redeploy."
-    ENABLE_GVISOR="false"
+  # this step, never provision_02) hit exactly that. An unanswered probe is
+  # neither: dropping the sandbox because the API server was unreachable would
+  # be a fail-open, so it stops.
+  if is_truthy "$ENABLE_GVISOR"; then
+    local rc_state
+    rc_state="$(gvisor_runtimeclass_state)" || true
+    case "$rc_state" in
+      present) ;;
+      absent)
+        if [ "${GVISOR_EXPLICIT:-0}" -eq 1 ]; then
+          print_error "ENABLE_GVISOR=true, but cluster '${CLUSTER_NAME}' has no 'gvisor' RuntimeClass."
+          print_error "Run provision_02_gvisor_nodepool.sh to create the sandbox node pool, or set ENABLE_GVISOR=false."
+          return 1
+        fi
+        print_warning "Cluster '${CLUSTER_NAME}' has no 'gvisor' RuntimeClass; deploying WITHOUT sandbox isolation."
+        print_warning "Run provision_02_gvisor_nodepool.sh to create the sandbox node pool, then redeploy."
+        ENABLE_GVISOR="false"
+        ;;
+      *)
+        print_error "Could not ask cluster '${CLUSTER_NAME}' whether it has the 'gvisor' RuntimeClass:"
+        print_error "  ${rc_state#unknown: }"
+        print_error "Refusing to guess: fix the cluster connection, or set ENABLE_GVISOR=false to deploy without sandbox isolation."
+        return 1
+        ;;
+    esac
   fi
 
   # The template ships the field enabled, so only the opt-out needs an edit.

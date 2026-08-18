@@ -45,6 +45,32 @@ _CR_TEMPLATE = _SCRIPTS / "platform-agent.yaml.template"
 _INSTALL = _REPO / "install.sh"
 
 
+def _shell_function(script: pathlib.Path, name: str) -> str:
+    """One function definition, lifted out of a provisioning script.
+
+    Running the script's own code is the only way these stay honest: a copy here would
+    pass forever after the script stopped agreeing with it.
+    """
+    lines = script.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line == f"{name}() {{")
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start : end + 1])
+
+
+def _fake_bin(directory: pathlib.Path, name: str) -> pathlib.Path:
+    """A stand-in executable that echoes $FAKE_STDERR and exits $FAKE_EXIT."""
+    directory.mkdir(parents=True, exist_ok=True)
+    fake = directory / name
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ -n "${FAKE_STDOUT:-}" ]; then printf "%s\\n" "$FAKE_STDOUT"; fi\n'
+        'if [ -n "${FAKE_STDERR:-}" ]; then printf "%s\\n" "$FAKE_STDERR" >&2; fi\n'
+        'exit "${FAKE_EXIT:-0}"\n'
+    )
+    fake.chmod(0o755)
+    return fake
+
+
 def _render_template() -> str:
     """The CR manifest as `provision_08` renders it, through the same `envsubst`.
 
@@ -242,11 +268,156 @@ class RuntimeClassProbeTest(unittest.TestCase):
         # An explicit request must fail rather than be silently downgraded; only the
         # default may fall back.
         self.assertIn("GVISOR_EXPLICIT", script)
-        probe = script[script.index("kubectl get runtimeclass gvisor") :]
+        decision = self._decision_block()
         self.assertLess(
-            probe.index("return 1"),
-            probe.index('ENABLE_GVISOR="false"'),
+            decision.index("return 1"),
+            decision.index('ENABLE_GVISOR="false"'),
             msg="an explicit ENABLE_GVISOR=true no longer fails when the RuntimeClass is absent",
+        )
+
+    def test_an_unanswered_probe_does_not_drop_the_sandbox(self):
+        # "The cluster says no" and "the cluster did not answer" are different facts.
+        # Treating the second as the first is a fail-open on the one control this step
+        # checks: the CR applies with no runtimeClassName, the operator reconciles it
+        # healthy because a nil RuntimeClassName validates fine, and the only record is
+        # a warning on a green build.
+        decision = self._decision_block()
+        absent_arm = decision[decision.index("absent)") : decision.index("*)")]
+        unknown_arm = decision[decision.index("*)") :]
+        self.assertIn('ENABLE_GVISOR="false"', absent_arm)
+        self.assertNotIn(
+            'ENABLE_GVISOR="false"',
+            unknown_arm,
+            msg="an unreadable probe still falls back to deploying without the sandbox",
+        )
+        self.assertIn(
+            "return 1",
+            unknown_arm,
+            msg="an unreadable probe no longer stops the step",
+        )
+
+    def _decision_block(self) -> str:
+        """What provision_08 does with the probe's answer."""
+        script = _PROVISION_08.read_text()
+        start = script.index('case "$rc_state"')
+        return script[start : script.index("esac", start)]
+
+
+class RuntimeClassProbeAnswersTest(unittest.TestCase):
+    """`gvisor_runtimeclass_state` must separate a "no" from a non-answer.
+
+    `kubectl` reports every one of these as a non-zero exit, so a probe that reads the
+    exit code alone cannot tell an absent RuntimeClass from an expired credential, an
+    RBAC denial on `node.k8s.io/runtimeclasses`, throttling, or a kubectl that never
+    reached a server. The operator does not conflate them either — `validateRuntimeClass`
+    branches on `errors.IsNotFound` and returns a hard error for the rest.
+    """
+
+    def _state(self, exit_code: int, stderr: str) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = pathlib.Path(tmp) / "bin"
+            _fake_bin(bin_dir, "kubectl")
+            script = "\n".join(
+                [
+                    _shell_function(_PROVISION_08, "gvisor_runtimeclass_state"),
+                    "gvisor_runtimeclass_state",
+                ]
+            )
+            result = subprocess.run(
+                ["bash", "-c", script],
+                env={
+                    "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                    "FAKE_EXIT": str(exit_code),
+                    "FAKE_STDERR": stderr,
+                },
+                capture_output=True,
+                text=True,
+            )
+            return result.stdout.strip()
+
+    def test_a_runtimeclass_that_exists_reads_present(self):
+        self.assertEqual(self._state(0, ""), "present")
+
+    def test_the_api_servers_notfound_reads_absent(self):
+        self.assertEqual(
+            self._state(
+                1,
+                'Error from server (NotFound): runtimeclasses.node.k8s.io "gvisor" not found',
+            ),
+            "absent",
+        )
+
+    def test_every_other_failure_reads_unknown(self):
+        for stderr in (
+            'Error from server (Forbidden): runtimeclasses.node.k8s.io is forbidden: '
+            'User "x" cannot get resource "runtimeclasses" in API group "node.k8s.io"',
+            "Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout",
+            "error: You must be logged in to the server (Unauthorized)",
+            "Error from server (TooManyRequests): the server has received too many requests",
+            "Error from server (InternalError): an error on the server has prevented the request",
+        ):
+            with self.subTest(stderr=stderr.split(":")[0]):
+                state = self._state(1, stderr)
+                self.assertTrue(
+                    state.startswith("unknown"),
+                    msg=f"{stderr!r} was read as {state!r} rather than an unanswered probe",
+                )
+
+
+class AutopilotNodePoolSkipTest(unittest.TestCase):
+    """Step 02 must not try to create a node pool on a cluster that refuses them.
+
+    Autopilot manages its own nodes and rejects `node-pools create`, and `run_step`
+    turns that into `exit 1` — so with the default on, the whole pipeline dies at step 2
+    of 13 on a cluster where GKE Sandbox needs no pool at all. Autopilot is reachable
+    here: `provision_01` skips creation for an existing cluster, `provision_03` detects
+    Autopilot and adapts cert-manager to it, and `terraform/modules/gke-cluster` builds
+    one.
+    """
+
+    def _is_autopilot(self, described: str) -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = pathlib.Path(tmp) / "bin"
+            _fake_bin(bin_dir, "gcloud")
+            script = "\n".join(
+                [
+                    f'source "{_COMMON}"',  # is_truthy
+                    _shell_function(_PROVISION_02, "cluster_is_autopilot"),
+                    "if cluster_is_autopilot; then echo AUTOPILOT; else echo STANDARD; fi",
+                ]
+            )
+            result = subprocess.run(
+                ["bash", "-c", script],
+                env={
+                    "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                    "HOME": os.environ.get("HOME", ""),
+                    "VARS_FILE": str(pathlib.Path(tmp) / "vars.sh"),
+                    "FAKE_STDOUT": described,
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            return "AUTOPILOT" in result.stdout
+
+    def test_an_autopilot_cluster_is_detected(self):
+        # `--format='value(autopilot.enabled)'` prints True, and nothing at all on a
+        # Standard cluster.
+        self.assertTrue(self._is_autopilot("True"))
+
+    def test_a_standard_cluster_is_not(self):
+        self.assertFalse(self._is_autopilot(""))
+        self.assertFalse(self._is_autopilot("False"))
+
+    def test_the_skip_happens_before_the_node_pool_is_attempted(self):
+        script = _PROVISION_02.read_text()
+        guard = script.index("if cluster_is_autopilot; then")
+        create = script.index('run_step "1. Provision gVisor Node Pool"')
+        self.assertLess(guard, create, msg="the Autopilot check runs too late to help")
+        self.assertIn(
+            "exit 0",
+            script[guard:create],
+            msg="Autopilot is detected but the script still goes on to create a pool",
         )
 
 

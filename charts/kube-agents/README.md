@@ -260,14 +260,20 @@ node's cache. The two install surfaces agree on `Always` for the mutable-tag
 case they were both written for, and `make iac-parity-check` holds them there;
 an install at a pinned release tag is the case that wants the override.
 
-Two knobs have no Terraform or chart-side infrastructure behind them:
+`deployment.availability.runtimeClassName: gvisor` has no Terraform or
+chart-side infrastructure behind it: it needs the GKE Sandbox node pool that
+[`provision_02_gvisor_nodepool.sh`](../../k8s-operator/scripts/provision_02_gvisor_nodepool.sh)
+creates, and the Autopilot `gke-cluster` module has no equivalent.
 
-- `deployment.availability.runtimeClassName: gvisor` needs the GKE Sandbox node
-  pool that [`provision_02_gvisor_nodepool.sh`](../../k8s-operator/scripts/provision_02_gvisor_nodepool.sh)
-  creates; the Autopilot `gke-cluster` module has no equivalent.
-- `harness.hermes.dashboardEnabled` is the one field where the two install paths
-  disagree by default: the CRD defaults it to `true`, the script path to
-  `false`. Set it explicitly when the two installs must match.
+These fields disagree by default between the install paths, so set them
+explicitly when the two installs must match:
+
+- `deployment.availability.runtimeClassName`: the script path defaults it to
+  `gvisor`, this chart to `""`. A chart install therefore runs the agent on the
+  host kernel until you set it — which, on a Standard cluster, means creating
+  the node pool above first.
+- `harness.hermes.dashboardEnabled`: the CRD defaults it to `true`, the script
+  path to `false`.
 
 ### ServiceAccount ownership
 
