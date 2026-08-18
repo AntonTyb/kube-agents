@@ -765,6 +765,17 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
                     resolver.evaluate_risk_tier(issue), "TIER_3_MUTATING"
                 )
 
+    def test_evaluate_risk_tier_inline_code_mutating(self):
+        issue = {
+            "title": "Please `delete` the prod namespace",
+            "body": "Run `kubectl delete ns sandbox` and `drain` node-1",
+            "comments": [],
+            "labels": [],
+        }
+        self.assertEqual(
+            resolver.evaluate_risk_tier(issue), "TIER_3_MUTATING"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,11 +122,6 @@ agent:
 # pattern-flagged command outright, which would stop the audits doing their job.
 # `approve` waives the PROMPT for those commands.
 #
-# Note on verbs: Read-only diagnostic verbs (get, list, describe, logs) are
-# expected for autonomous watchdog execution, while mutating actions (delete,
-# patch, apply, exec, drain) are advisory boundaries governed by persona prompts
-# and skill guidelines rather than runtime-enforced gates.
-#
 # It does not waive the Tirith content scan. Upstream conflated the two — it ran
 # the scanner only on the `deny` arm, so `cron_mode: approve` shipped every
 # command in every cron run unscanned — and the image patch at

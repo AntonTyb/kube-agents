@@ -461,9 +461,14 @@ def evaluate_risk_tier(issue: dict) -> str:
         text_parts.append(sanitize_untrusted_text(c_body))
     sanitized_content = " ".join(str(p) for p in text_parts)
 
-    # Strip code blocks and inline snippets to avoid false positives on logs / error messages
-    prose_content = re.sub(r"```[\s\S]*?```", "", sanitized_content)
-    prose_content = re.sub(r"`[^`]+`", "", prose_content).lower()
+    # Strip multiline fenced code blocks (e.g. log output / error traces) per field,
+    # and retain inline code words by converting backticks to whitespace rather than deleting them.
+    prose_parts = []
+    for p in text_parts:
+        no_fences = re.sub(r"```[\s\S]*?```", "", p)
+        no_inline_ticks = no_fences.replace("`", " ")
+        prose_parts.append(no_inline_ticks)
+    prose_content = " ".join(prose_parts).lower()
 
     # Explicit destructive / mutating action verbs or privileged request patterns
     tier3_patterns = [
