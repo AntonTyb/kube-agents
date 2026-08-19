@@ -20,11 +20,11 @@ This repository contains the Kubernetes Agentic Harness (`kube-agents`). It is a
   - `architecture/`: The end-state architecture specification (`01`–`08`). Describes the target, not
     what ships today.
   - `designs/`: Per-feature design documents.
-- `k8s-operator/`: Go/Kubebuilder operator reconciling `PlatformAgent` Custom Resources, plus provisioning scripts.
+- `k8s-operator/`: Go/Kubebuilder operator reconciling `PlatformAgent` Custom Resources, plus the shared installer helpers under `scripts/`.
 - `examples/`: Example integrations (LiteLLM provider configs, vLLM serving, inference replay).
 - `bench/`: Evaluation harness that runs [kubernetes-sigs/devops-bench](https://github.com/kubernetes-sigs/devops-bench) against the Platform Agent as a pip-installed library.
 - `images.json`: Inventory of every container image an install pulls, with its upstream reference
-  and pin. Read by `make mirror-images`, the provisioning scripts, and the docs generator.
+  and pin. Read by `make mirror-images`, the kustomize deploy targets, and the docs generator.
 - `INSTALL.md`: Installation guide.
 - `README.md`: Project overview.
 
@@ -102,7 +102,7 @@ adding a paragraph, check whether the topic already has an owner:
 | User-facing narrative, how-to, and reference             | `docs/site/src/content/docs/`                |
 | End-state architecture                                   | `docs/architecture/`                         |
 | Per-feature design rationale                             | `docs/designs/`                              |
-| What each provisioning script does                       | `k8s-operator/scripts/README.md`             |
+| Shared installer defaults and the `vars.sh` state model  | `k8s-operator/scripts/README.md`             |
 | Which container images an install pulls, and their pins  | `images.json`                                |
 | The install procedure (self-contained, agent-executable) | `INSTALL.md`                                 |
 | What the agent is and is not permitted to do             | the site's `reference/security-and-iam.md`   |
@@ -111,7 +111,7 @@ adding a paragraph, check whether the topic already has an owner:
 Rules:
 
 - **Do not hand-write a table that mirrors a machine-readable file.** The cron schedule, the skill
-  catalogue, the provisioning steps, and the container-image inventory are generated into
+  catalogue, and the container-image inventory are generated into
   `<!-- BEGIN GENERATED -->` regions by `scripts/generate_docs.py`, which also writes
   `docs/family-roster.txt` whole. Edit the source, then run `make docs-generate`.
 - **Do not restate the `make` targets.** `make help` prints them from the Makefile. New targets get

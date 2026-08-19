@@ -3,6 +3,11 @@ locals {
   # existing cluster (create_cluster = false) CMEK is a gcloud update the
   # caller runs outside Terraform, against whatever key they choose.
   manage_kms = var.create_cluster && var.enable_database_encryption
+
+  # Cloud KMS has no zonal locations, so a zonal cluster location maps to its
+  # enclosing region — the same derivation as derive_kms_location in
+  # k8s-operator/scripts/installer_common.sh.
+  kms_location = replace(var.location, "/-[a-z]$/", "")
 }
 
 # The module predates cluster_mode; the Autopilot cluster used to be the only
@@ -25,7 +30,7 @@ resource "google_project_service_identity" "gke_service_agent" {
 resource "google_kms_key_ring" "gke_keyring" {
   count    = local.manage_kms ? 1 : 0
   name     = var.kms_keyring_name
-  location = var.location
+  location = local.kms_location
   project  = var.project_id
 }
 

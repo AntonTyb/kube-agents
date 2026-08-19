@@ -7,9 +7,11 @@ locals {
 # both create the same resource, and the script's check-then-create would
 # adopt a Terraform-managed plan without Terraform knowing.
 resource "google_gke_backup_backup_plan" "this" {
-  name     = local.backup_plan_name
-  project  = var.project_id
-  location = var.location
+  name    = local.backup_plan_name
+  project = var.project_id
+  # Backup for GKE plans are regional; the cluster path keeps the cluster's
+  # own location, which for a zonal Standard cluster is the zone.
+  location = replace(var.location, "/-[a-z]$/", "")
   cluster  = "projects/${var.project_id}/locations/${var.location}/clusters/${var.cluster_name}"
 
   backup_config {

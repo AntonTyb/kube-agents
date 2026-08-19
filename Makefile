@@ -211,7 +211,7 @@ prompt-check: ## Verify the agent's instructions cite skills and files that exis
 	@python3 scripts/check_prompt_assets.py
 
 # Documentation that mirrors a machine-readable source is generated rather than
-# hand-kept: the cron jobs, the skill catalogue and the provisioning steps as
+# hand-kept: the cron jobs, the skill catalogue and the image inventory as
 # <!-- BEGIN GENERATED --> regions, plus docs/family-roster.txt written whole.
 docs-generate: ## Regenerate the generated doc regions and files from their sources.
 	@python3 scripts/generate_docs.py

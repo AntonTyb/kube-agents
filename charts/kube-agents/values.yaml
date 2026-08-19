@@ -144,8 +144,8 @@ litellm:
     projectId: ""
     location: ""
   # Keep in step with the kustomize base
-  # (k8s-operator/config/integrations/litellm/base/deployment.yaml); the
-  # parity check fails the build when they diverge.
+  # (k8s-operator/config/integrations/litellm/base/deployment.yaml), which is
+  # the dev copy of this gateway.
   image:
     repository: ghcr.io/berriai/litellm
     # Keep in step with images.json, which is what `make mirror-images`
@@ -311,7 +311,6 @@ platformAgent:
       # Always, matching platform-agent.yaml.template — and load-bearing for the
       # Terraform composition, whose image_tag defaults to "latest": under
       # IfNotPresent a node with a cached "latest" never picks up a new build.
-      # The parity check compares this against the template.
       #
       # Set IfNotPresent when you pin `tag` to a release: on an immutable tag
       # Always only adds a registry round-trip per pod start, and turns an

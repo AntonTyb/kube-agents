@@ -424,7 +424,7 @@ init_var_memory_provider() {
 
 # True when the selected provider is backed by the in-cluster Hindsight service.
 # `kube_agents_memory` wraps the upstream `hindsight` plugin, so both talk to the
-# same API server and both need step 13 to have run; nothing else does.
+# same API server and both need the Hindsight store deployed; nothing else does.
 memory_provider_uses_hindsight() {
   local provider
   provider=$(echo "${1:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
@@ -439,9 +439,8 @@ is_non_interactive() {
 }
 
 # IMAGE_TAG is deliberately NOT persisted to vars.sh: the tag usually changes
-# between deploys, so it is scoped to a single pipeline execution. provision.sh
-# prompts once up front and exports it; the per-step scripts inherit it from
-# the environment and only prompt when run standalone.
+# between deploys, so it is scoped to a single execution. Callers export it
+# (or are prompted when run standalone).
 #
 # Only the steps that deploy an image built from this repo need one, and they
 # say so by setting REQUIRES_IMAGE_TAG=1 before calling load_state. Demanding it
@@ -681,7 +680,7 @@ connect_cluster() {
   gcloud container clusters get-credentials "$CLUSTER_NAME" --location "$REGION" --project "$PROJECT_ID" --quiet $GKE_DNS_ENDPOINT_FLAG
 }
 
-# Shared readiness budget for stages 08 and 13. Accepts a bare number of
+# Shared readiness budget for agent and Hindsight rollouts. Accepts a bare number of
 # seconds or an s/m/h suffix. kubectl rejects a bare integer for --timeout
 # ("time: missing unit in duration"), and without this normalization that
 # parse error would be reported as the rollout having failed.

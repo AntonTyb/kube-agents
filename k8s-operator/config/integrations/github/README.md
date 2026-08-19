@@ -27,7 +27,7 @@ errors retrieving GitHub installation: failed to get access token url for org <n
   ... Get "https://api.github.com/orgs/<name>/installation": retryable status code: 404
 ```
 
-This holds regardless of App ID, key, or installation state, so it is worth ruling out first: a 404 here means the org lookup, whereas a bad or mismatched key returns 401. The tooling checks this for you. `install.sh` validates the answer at the prompt and re-asks, so a bad value is settled before any GCP resource exists; `provision_04_gcp_iam.sh` and `provision_10_deploy_github_minter.sh` re-check and refuse to continue if `GITHUB_ORG` is a user account or does not exist, which also covers a `vars.sh` edited by hand. All three only warn when the lookup itself is inconclusive — an unreachable or rate-limited api.github.com must not block a provision that is otherwise fine. Set `SKIP_GITHUB_ORG_CHECK=true` to bypass the check everywhere if it is ever wrong about your account; the Minter's own behaviour is unchanged by it.
+This holds regardless of App ID, key, or installation state, so it is worth ruling out first: a 404 here means the org lookup, whereas a bad or mismatched key returns 401. The tooling checks this for you: `install.sh` validates the answer at the prompt and re-asks, so a bad value is settled before any GCP resource exists, and re-checks before the apply, which also covers a `vars.sh` edited by hand. It only warns when the lookup itself is inconclusive — an unreachable or rate-limited api.github.com must not block an install that is otherwise fine. Set `SKIP_GITHUB_ORG_CHECK=true` to bypass the check if it is ever wrong about your account; the Minter's own behaviour is unchanged by it.
 
 Create the GitOps repository under an organization, or transfer an existing repository into one — a free organization suffices. GitHub shares a single namespace between users and organizations, so an organization cannot take the same name as your personal account.
 
@@ -59,7 +59,7 @@ Minty was originally designed for integration with GitHub Actions, which inheren
 
 ## Cryptographic Key Import via Minty CLI
 
-During provisioning, the scripts clone the `github-token-minter` repository to leverage its included CLI tool (`minty tools import-pk`) for uploading the GitHub `.pem` file to Google Cloud KMS.
+During the install, `install.sh` runs the Minty CLI (`go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk`) to upload the GitHub `.pem` file to Google Cloud KMS.
 
 This approach is required due to the cryptographic wrapping prerequisites of the Google Cloud KMS API. Uploading an asymmetric private key natively via the Google Cloud CLI (`gcloud kms keys versions import`) strictly requires that the target key be explicitly converted from PKCS#1 into an unencrypted PKCS#8 format, and necessitates the provisioning of a separate KMS "Import Job" to facilitate secure RSA-OAEP wrapping.
 
@@ -69,7 +69,7 @@ The Minty CLI abstracts this complex cryptographic workflow. It automatically pr
 
 **Skip this unless the automatic import failed.** With a working Go toolchain on the provisioning host the CLI does all of the above for you and there is nothing to do here.
 
-It is worth knowing the recovery path exists, though, because the script's own advice is circular when Go is the missing piece: it warns `Go is required to run the Minty CLI tool` or `Failed to import GitHub Private Key to KMS. You must import it manually` — and the manual instructions it prints are another `go run ./cmd/minty` invocation. Either way it continues, leaving the KMS key with no enabled version, so the Minter deploys and then never passes its readiness probe.
+It is worth knowing the recovery path exists, though, because the installer's own advice is circular when Go is the missing piece: it warns `Go is not installed, so the App key cannot be imported automatically` — and the manual command it prints is another `go run …/cmd/minty` invocation. Either way it continues, leaving the KMS key with no enabled version, so the Minter deploys and then never passes its readiness probe.
 
 `gcloud` does the same import in four commands. Run them, then restart the minter Deployment:
 

@@ -54,7 +54,7 @@ fi
 # 3. Prompt user for confirmation
 echo "The script will perform the setup for GitHub Actions WIF in the following project: $PROJECT_ID"
 if [ "$IS_ADMIN" = true ]; then
-  echo "Mode: ADMIN (Includes extended IAM roles for teardown.sh + provision.sh cycles)"
+  echo "Mode: ADMIN (Includes extended IAM roles for full install/uninstall cycles)"
 else
   echo "Mode: STANDARD (Base roles only. Use --admin for autonomous E2E pipeline support)"
 fi
@@ -95,7 +95,7 @@ ROLES=(
   "roles/serviceusage.serviceUsageConsumer"
 )
 
-# Extended roles required for full autonomous E2E lifecycle (teardown.sh + provision.sh):
+# Extended roles required for full autonomous E2E lifecycle (install.sh + uninstall.sh):
 if [ "$IS_ADMIN" = true ]; then
   echo "Admin mode selected. Adding extended lifecycle administration roles..."
   ROLES+=(

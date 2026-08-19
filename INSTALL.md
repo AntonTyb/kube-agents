@@ -7,8 +7,8 @@ This comprehensive, step-by-step guide explains how to install, configure, deplo
 > commands and nothing else.
 >
 > For the explanatory material — why each component exists, architecture, troubleshooting in depth,
-> and the concept guides — see **<https://gke-labs.github.io/kube-agents/>**. For what each
-> provisioning script does, see
+> and the concept guides — see **<https://gke-labs.github.io/kube-agents/>**. For the shared
+> installer defaults and the `vars.sh` state model, see
 > [`k8s-operator/scripts/README.md`](k8s-operator/scripts/README.md).
 
 ---
@@ -43,7 +43,7 @@ curl -fsSL https://gke-labs.github.io/kube-agents/install.sh | bash
 
 When prompted for the image/source revision, enter a SemVer release tag or the full 40-character
 commit SHA behind a validated RC tag. The installer rejects mutable refs such as `latest` and `main`
-so the provisioning scripts and container images stay on the same revision. On the one-liner above
+so the install sources and container images stay on the same revision. On the one-liner above
 there is no local checkout yet, so a value is required; running `./install.sh` from a kube-agents
 clone instead offers that clone's `HEAD` as the default — which only works if a container image was
 published for that commit (CI builds one per `main` commit and per release tag).
@@ -54,7 +54,7 @@ _(Alternatively via GitHub raw URL: `curl -fsSL https://raw.githubusercontent.co
 
 - **`gcloud` Authentication**: Checks login state and launches auth flows if needed.
 - **GCP Project & Region Selection**: Auto-detects the active project and prompts for confirmation; you can type a project ID that the discovered list does not show.
-- **Provisioning Sources**: Puts the provisioning scripts on disk (this checkout, or a clone at the requested revision) and verifies they match the image ref _before_ the interview starts.
+- **Install Sources**: Puts the Terraform configuration and chart on disk (this checkout, or a clone at the requested revision) and verifies they match the image ref _before_ the interview starts.
 - **GKE Cluster Setup**: Provisions the supported GKE Standard topology or connects to an existing cluster.
 - **Chat Integrations**: Configures Google Chat and/or Slack when selected.
 - **AI Model Credentials**: Prompts for Gemini, OpenAI, or Anthropic credentials, or selects Vertex AI (no key — Workload Identity).
@@ -448,7 +448,7 @@ kubectl rollout status deployment -n kubeagents-system
 
 To optionally deploy the LiteLLM Gateway or GitHub Token Minter:
 
-`GITHUB_ORG` must be a GitHub **organization**. The Token Minter looks App installations up at `/orgs/{org}/installation`, which does not exist for personal accounts, so a user-owned GitOps repo deploys cleanly and then fails every token request with a 404. This manual path skips the provisioning scripts' preflight check — see [`k8s-operator/config/integrations/github/README.md`](k8s-operator/config/integrations/github/README.md).
+`GITHUB_ORG` must be a GitHub **organization**. The Token Minter looks App installations up at `/orgs/{org}/installation`, which does not exist for personal accounts, so a user-owned GitOps repo deploys cleanly and then fails every token request with a 404. This manual path skips the installer's preflight check — see [`k8s-operator/config/integrations/github/README.md`](k8s-operator/config/integrations/github/README.md).
 
 ```bash
 # Deploy LiteLLM Gateway

@@ -11,9 +11,12 @@ resource "google_service_account_iam_member" "workload_identity" {
 }
 
 resource "google_kms_key_ring" "minter" {
-  project  = var.project_id
-  name     = var.kms_keyring_name
-  location = var.location
+  project = var.project_id
+  name    = var.kms_keyring_name
+  # Cloud KMS has no zonal locations; a zonal cluster location maps to its
+  # region, matching the chart's KMS_KEY_NAME derivation and the installer's
+  # derive_kms_location.
+  location = replace(var.location, "/-[a-z]$/", "")
 }
 
 # The key is created import-only and without an initial version: the GitHub

@@ -147,6 +147,30 @@ opt-in (`litellm.otel=true`) — enable it only on clusters that run a reachable
 collector, since without one the otel callback aborts every LLM request on DNS
 failure.
 
+### Hindsight memory store
+
+`hindsight.*` renders the agents' long-term memory store — the Hindsight API
+Deployment, the Postgres/pgvector StatefulSet behind it, an ingress-only
+NetworkPolicy standing in for the database's deliberate lack of a password,
+and a PodMonitoring. `hindsight.enabled` is a tri-state: `null` (the default)
+follows `platformAgent.harness.memory.provider`, so selecting a
+Hindsight-backed provider (`kube_agents_memory`, `hindsight`) brings the store
+with it and everything else renders nothing; `true`/`false` override. The
+image pins mirror `images.json`; `hindsight.postgresql.storage` sizes the
+volumeClaimTemplate (immutable once the StatefulSet exists), and the PVC —
+which **is** the memory — survives uninstall.
+
+### GitHub token minter
+
+`githubMinter.*` renders the minty Deployment, Service, NetworkPolicy,
+Workload Identity KSA, and rule ConfigMap, plus the `github-app-credentials`
+Secret when `githubMinter.appId` is set (leave it empty to manage that Secret
+yourself). `org` and `repo` are required when enabled. This is the Kubernetes
+half only: the minter GSA, its Workload Identity binding, and the import-only
+KMS signing key come from `terraform/modules/github-minter`, and the App
+private key must be imported into that key (see the module README) before the
+Deployment passes its readiness probe.
+
 ### Telemetry
 
 `telemetry.otlpEndpoint` (default `""`) is the OTLP/HTTP collector base URL.
@@ -165,7 +189,7 @@ fails the render, so set `telemetry.collectorNamespace` (or
 `gke-managed-otel`, since nothing exports through it. Full precedence
 ladder and discovery rules: [Deploy → Telemetry](https://gke-labs.github.io/kube-agents/deploy/telemetry/#pointing-at-your-own-collector).
 
-#### Vertex AI (`litellm.modelProvider=vertex`)
+#### Vertex AI (`litellm.modelProvider=vertex_ai`)
 
 Vertex AI has no API key. The gateway calls
 `projects/<litellm.vertex.projectId>/locations/<litellm.vertex.location>`
@@ -229,7 +253,7 @@ Use `telemetry.otlpEndpoint` instead when you do have a collector to point at.
 Chat and Slack each need a one-time manual registration that no install
 automation can perform (the Chat app on the Chat API console page pointed at
 the Pub/Sub topic; Socket Mode + bot scopes in the Slack app console) —
-[INSTALL.md § Enable Google Chat & Slack Integrations](../../INSTALL.md#step-5-enable-google-chat--slack-integrations-manual-required-steps)
+[INSTALL.md § Enable Google Chat & Slack Integrations](../../INSTALL.md#step-4-enable-google-chat--slack-integrations-manual-required-steps)
 is the canonical walkthrough, including the pairing-code approval.
 
 ### Agent runtime knobs

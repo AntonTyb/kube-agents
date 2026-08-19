@@ -135,10 +135,10 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 # empty string rather than failing, which renders `image:` — a null the API
 # server rejects with a message that says nothing about the missing variable.
 # Check first, and name where the value comes from.
-# $(3) says where the script gets the value, because the three integrations do
-# not agree: the two third-party images are resolved from images.json, while
-# the replay proxy is built here and follows REGISTRY_PREFIX.
-require-var = @test -n "$${$(1)}" || { echo "$(1) is not set. Export it, or run $(2), which resolves it from $(3)." >&2; exit 1; }
+# $(2) says where the value lives, because the integrations do not agree: the
+# third-party pins are in images.json, while the replay proxy is built here
+# and follows REGISTRY_PREFIX.
+require-var = @test -n "$${$(1)}" || { echo "$(1) is not set. Export it; the reference lives in $(2)." >&2; exit 1; }
 
 # The third-party images default to their upstream pin straight from the
 # inventory, so the documented manual sequences (INSTALL.md Step 5, README
@@ -169,7 +169,7 @@ HINDSIGHT_VARS = $$HINDSIGHT_API_IMAGE $$HINDSIGHT_POSTGRES_IMAGE
 
 .PHONY: deploy-litellm
 deploy-litellm: kustomize ## Deploy LiteLLM integration.
-	$(call require-var,LITELLM_IMAGE,scripts/provision_09_deploy_litellm.sh,images.json)
+	$(call require-var,LITELLM_IMAGE,images.json)
 	@if [ "$$MODEL_PROVIDER" = "vertex_ai" ]; then \
 		$(KUSTOMIZE) build config/integrations/litellm/overlays/vertex_ai | envsubst '$(LITELLM_VERTEX_VARS)' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -; \
 	else \
@@ -186,8 +186,8 @@ undeploy-litellm: kustomize ## Undeploy LiteLLM integration.
 
 .PHONY: deploy-hindsight
 deploy-hindsight: kustomize ## Deploy the Hindsight memory store.
-	$(call require-var,HINDSIGHT_API_IMAGE,scripts/provision_13_deploy_hindsight.sh,images.json)
-	$(call require-var,HINDSIGHT_POSTGRES_IMAGE,scripts/provision_13_deploy_hindsight.sh,images.json)
+	$(call require-var,HINDSIGHT_API_IMAGE,images.json)
+	$(call require-var,HINDSIGHT_POSTGRES_IMAGE,images.json)
 	$(KUSTOMIZE) build config/integrations/hindsight | envsubst '$(HINDSIGHT_VARS)' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -
 
 .PHONY: undeploy-hindsight
@@ -196,7 +196,7 @@ undeploy-hindsight: kustomize ## Undeploy the Hindsight memory store (keeps its 
 
 .PHONY: deploy-inference-replay
 deploy-inference-replay: kustomize ## Deploy Inference Replay proxy integration.
-	$(call require-var,REPLAY_IMAGE,scripts/provision_11_deploy_inference_replay.sh,REGISTRY_PREFIX)
+	$(call require-var,REPLAY_IMAGE,REGISTRY_PREFIX)
 	$(KUSTOMIZE) build config/integrations/inference-replay/base | envsubst '$$NAMESPACE $$REPLAY_IMAGE' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -
 
 .PHONY: undeploy-inference-replay
@@ -205,7 +205,7 @@ undeploy-inference-replay: kustomize ## Undeploy Inference Replay proxy integrat
 
 .PHONY: deploy-github
 deploy-github: kustomize ## Deploy GitHub integration.
-	$(call require-var,GITHUB_MINTER_IMAGE,scripts/provision_10_deploy_github_minter.sh,images.json)
+	$(call require-var,GITHUB_MINTER_IMAGE,images.json)
 	$(KUSTOMIZE) build config/integrations/github | envsubst '$$NAMESPACE $$PROJECT_ID $$REGION $$CLUSTER_NAME $$KMS_KEYRING $$KMS_KEY $$KMS_KEY_VERSION $$KMS_LOCATION $$GITHUB_ORG $$GITHUB_REPO $$GITHUB_MINTER_KSA_NAME $$GITHUB_MINTER_GSA_NAME $$PLATFORM_AGENT_GSA_NAME $$GITHUB_MINTER_IMAGE' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -
 
 .PHONY: undeploy-github

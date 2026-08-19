@@ -59,8 +59,8 @@ PARAM_DRY_RUN="${DRY_RUN:-false}"
 PARAM_PROJECT_ID="${PROJECT_ID:-}"
 PARAM_REGION="${REGION:-}"
 PARAM_CLUSTER_NAME="${CLUSTER_NAME:-}"
-# Left empty on purpose: resolved from common.sh's DEFAULT_* once the
-# provisioning helpers are sourced, so no default is spelled twice.
+# Left empty on purpose: resolved from installer_common.sh's DEFAULT_* once
+# the installer helpers are sourced, so no default is spelled twice.
 PARAM_MODEL_PROVIDER="${MODEL_PROVIDER:-}"
 PARAM_VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}"
 PARAM_VERTEX_LOCATION="${VERTEX_LOCATION:-}"
@@ -235,7 +235,7 @@ EOF
 }
 
 # Re-applied after sourcing common.sh, which defines its own print_* helpers
-# formatted for the provisioning pipeline.
+# formatted for the state file.
 define_print_helpers() {
   print_step() { echo -e "\n${C_MAGENTA}${C_BOLD}>>> $1 <<<${C_RESET}"; }
   print_success() { echo -e "  ${C_GREEN}✓ $1${C_RESET}"; }
@@ -384,7 +384,7 @@ verify_local_source_ref() {
       unverified="true"
       print_warning "Provisioning scripts have uncommitted changes; they do not match '$expected_ref'."
     else
-      print_error "Refusing to provision from a dirty checkout because its scripts do not exactly match '$expected_ref'."
+      print_error "Refusing to provision from a dirty checkout because its sources do not exactly match '$expected_ref'."
       print_info "Pass --allow-unverified-source to provision anyway, or stash the changes first."
       return 1
     fi
@@ -392,15 +392,15 @@ verify_local_source_ref() {
 
   SOURCE_REF_VERIFIED="${repo_dir}@${expected_ref}"
   if [ "$unverified" = "true" ]; then
-    print_warning "Continuing with unverified provisioning sources: the cluster will get local scripts plus the image built from ${expected_ref}."
+    print_warning "Continuing with unverified install sources: the cluster will get this checkout's configuration plus the image built from ${expected_ref}."
     return 0
   fi
-  print_success "Verified provisioning scripts and image ref resolve to commit ${expected_commit}."
+  print_success "Verified install sources and image ref resolve to commit ${expected_commit}."
 }
 
-# Put the provisioning scripts on disk and return the directory holding them.
+# Put the install sources on disk and return the directory holding them.
 # Runs before the interview so a bad source ref or a dirty tree fails immediately,
-# and so common.sh — which owns every provisioning default — can be sourced.
+# and so installer_common.sh — which owns every installer default — can be sourced.
 acquire_source_repo() {
   # Stores the directory in the variable named by $1 rather than echoing it: the
   # progress lines below would otherwise be captured along with the path.
@@ -420,7 +420,7 @@ acquire_source_repo() {
     if [ -d "$resolved_dir" ]; then
       print_info "Using existing repository at $resolved_dir without modifying local changes."
     else
-      print_info "Cloning kube-agents provisioning scripts at '$expected_ref' into $resolved_dir..."
+      print_info "Cloning kube-agents install sources at '$expected_ref' into $resolved_dir..."
       git clone --filter=blob:none --no-checkout https://github.com/gke-labs/kube-agents.git "$resolved_dir"
       git -C "$resolved_dir" fetch --depth=1 origin "$expected_ref"
       git -C "$resolved_dir" checkout --detach FETCH_HEAD
@@ -1872,6 +1872,12 @@ main() {
   # 12. Execute the Terraform Engine
   print_step "12. Applying the Install (Terraform + Helm)"
   print_info "Provisioning GCP APIs, GKE Cluster, cert-manager, Operator, LiteLLM gateway, and Platform Agent..."
+
+  # Re-validate the GitOps org before spending an apply on it. The interview
+  # already settled it interactively; this catches a vars.sh edited by hand
+  # and the non-interactive flag path. Warns-only when GitHub is unreachable;
+  # SKIP_GITHUB_ORG_CHECK=true bypasses it.
+  check_github_org_is_organization "${GITHUB_ORG:-}"
 
   # The one provision_01 behaviour a data source cannot express: CMEK on a
   # cluster that already exists. No-op when the cluster does not exist yet or

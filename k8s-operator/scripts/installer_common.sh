@@ -294,12 +294,32 @@ hcl_csv_list() {
   printf '%s]' "$out"
 }
 
-# Whether this install's Terraform state already manages the cluster. Read
+# Whether this install's Terraform state already MANAGES the cluster. Read
 # straight from the state object in GCS — cheaper and earlier than an init, and
 # it works from a fresh clone. Any read failure means "not ours".
+#
+# Parsed, not grepped, for two reasons. An existing-cluster install records a
+# data-mode "google_container_cluster" entry in the same state, and matching on
+# the type alone would flip such an install's create_cluster back to true on
+# every re-run — planning a second cluster over the real one. And a
+# `gcloud | grep -q` pipeline under pipefail can report a cluster that IS in
+# state as absent when grep exits before gcloud finishes writing (the same trap
+# lifecycle.sh documents for its own state reads).
 tf_state_has_cluster() {
-  gcloud storage cat "gs://$(tf_state_bucket)/$(tf_state_prefix)/default.tfstate" 2>/dev/null |
-    grep -q '"type": *"google_container_cluster"'
+  local state
+  state=$(gcloud storage cat "gs://$(tf_state_bucket)/$(tf_state_prefix)/default.tfstate" 2>/dev/null) || return 1
+  printf '%s' "$state" | python3 -c '
+import json, sys
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+managed = any(
+    r.get("type") == "google_container_cluster" and r.get("mode") == "managed"
+    for r in doc.get("resources", [])
+)
+sys.exit(0 if managed else 1)
+'
 }
 
 # Writes the terraform.tfvars the full-install composition consumes, from the

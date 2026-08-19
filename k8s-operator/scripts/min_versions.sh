@@ -3,9 +3,9 @@
 # Minimum Supported Tool Versions
 # ==============================================================================
 # The single home for every "you need at least version X" number in the
-# provisioning pipeline. Kept free of side effects — no state loading, no
+# installer front doors. Kept free of side effects — no state loading, no
 # argument parsing, no output at source time — because both the standalone
-# installer (install.sh, which does not source common.sh) and the provisioning
+# installer (install.sh, which does not source common.sh) and the pipeline
 # scripts (which do, via common.sh) need these numbers. Sourcing this file must
 # be safe from either.
 #
@@ -14,7 +14,7 @@
 
 # gcloud 576.0.0 (2026-07-14) promoted --managed-otel-scope to GA on
 # `container clusters create`, `create-auto`, and `update`. Earlier releases
-# expose it on the alpha/beta tracks only, so provision_01_gcp_cluster.sh — which
+# expose it on the alpha/beta tracks only, so the retired provision_01 — which
 # passes the flag on the GA surface — fails argument parsing before it issues a
 # single API call. That failure arrives *after* the APIs and the Cloud KMS key
 # have been provisioned, which is why the check runs up front rather than being

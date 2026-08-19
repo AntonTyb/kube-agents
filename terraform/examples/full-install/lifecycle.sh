@@ -192,7 +192,9 @@ adopt_kms() {
   local project location keyring key
   load_state
   project=$(tfvar project_id)
-  location=$(tfvar location)
+  # KMS locations are regional; a zonal cluster location maps to its region,
+  # matching the modules' own derivation.
+  location=$(sed -E 's/-[a-z]$//' <<<"$(tfvar location)")
 
   # address <TAB> gcloud-kind <TAB> resource id
   local -a targets=()
@@ -325,7 +327,8 @@ purge_backups() {
   # flipped off, and the describe below already handles the plan-absent case.
   local project location plan
   project=$(tfvar project_id)
-  location=$(tfvar location)
+  # Backup for GKE plans are regional, whatever the cluster location is.
+  location=$(sed -E 's/-[a-z]$//' <<<"$(tfvar location)")
   plan="$(tfvar cluster_name)-backup-plan"
 
   gcloud beta container backup-restore backup-plans describe "$plan" \

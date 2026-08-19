@@ -234,9 +234,10 @@ model_list:
 litellm_settings:
   callbacks: {{ .callbacks }}
 {{- /*
-  Prompt caching. Kept identical to the kustomize base — scripts/check_iac_parity.py
-  compares the two — and see that file for why the breakpoints live here rather
-  than in the agent's own config, and why non-Anthropic backends are unaffected.
+  Prompt caching. Kept identical to the kustomize base
+  (k8s-operator/config/integrations/litellm/base/config.yaml) — see that file
+  for why the breakpoints live here rather than in the agent's own config, and
+  why non-Anthropic backends are unaffected.
 */}}
 router_settings:
   default_litellm_params:

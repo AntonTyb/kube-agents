@@ -443,7 +443,7 @@ of any install that changed its provider after the fact.
 
 ### The two pods
 
-Hindsight is self-hosted in-cluster, installed by provisioning step 13 from
+Hindsight is self-hosted in-cluster, rendered by the chart's `hindsight.*` values from the same manifests kept in
 [`k8s-operator/config/integrations/hindsight/`](../../k8s-operator/config/integrations/hindsight/README.md).
 It adds exactly two workloads to `kubeagents-system`.
 

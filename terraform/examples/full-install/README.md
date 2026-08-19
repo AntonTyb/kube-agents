@@ -170,8 +170,8 @@ vocabulary the installer's `--permission-set` flag uses):
 | `gke-admin`           | `local.gke_admin_roles` in [`main.tf`](main.tf)         |
 | `custom`              | whatever `project_roles` lists — setting it is required |
 
-Both lists are copied verbatim from the script and are the values the parity
-check compares; read them there rather than from this page.
+Both lists live in [`main.tf`](main.tf); read them there rather than from
+this page.
 
 `project_roles` still wins when set, whatever `permission_set` says, so an
 existing configuration keeps the roles it had. `project_roles = []` grants
@@ -211,19 +211,20 @@ certificate, and cert-manager is what issues it. `enable_cert_manager`
 
 Three differences from the script path are worth knowing:
 
-- **This is not idempotent against an existing install.** install.sh probes for
-  cert-manager when a `cert-manager-webhook` Deployment is already available;
-  Terraform does not look, and the apply fails on the CRDs that are already
-  there. Set `enable_cert_manager = false` on such a cluster — the webhooks
-  keep working, they just use the cert-manager that is already installed.
+- **This is not idempotent against an existing install.** install.sh probes an
+  existing cluster for a `cert-manager` Deployment in the `cert-manager`
+  namespace and turns this off when it finds one; a hand-written tfvars does
+  not get that probe, and the apply fails on the CRDs that are already there.
+  Set `enable_cert_manager = false` on such a cluster — the webhooks keep
+  working, they just use the cert-manager that is already installed.
 - **Destroying takes the CRDs with it**, and therefore every `Certificate`,
   `Issuer`, and `ClusterIssuer` in the cluster — not only the ones this
   composition created. On any cluster that shares cert-manager with another
   workload, install it separately and set `enable_cert_manager = false`.
-- **Leader election moves rather than switching off.** The script patches
-  `--leader-elect=false` onto the Autopilot deployments because cert-manager's
-  leases default to `kube-system`, which Autopilot restricts. This sets
-  `global.leaderElection.namespace = "cert-manager"`, which clears the same
+- **Leader election moves rather than switching off.** cert-manager's leases
+  default to `kube-system`, which Autopilot restricts (the retired script path
+  patched `--leader-elect=false` for the same reason). This sets
+  `global.leaderElection.namespace = "cert-manager"`, which clears the
   restriction without giving up the lock.
 
 The chart's `failurePolicy` stays at its default of `Ignore` here. Helm applies
@@ -260,7 +261,7 @@ install.sh collects. Slack needs no GCP resources, so this is
 purely configuration — the Slack app itself is a manual step (below).
 
 **Manual steps that no IaC can perform** — canonical walkthrough:
-[INSTALL.md § Enable Google Chat & Slack Integrations](../../../INSTALL.md#step-5-enable-google-chat--slack-integrations-manual-required-steps):
+[INSTALL.md § Enable Google Chat & Slack Integrations](../../../INSTALL.md#step-4-enable-google-chat--slack-integrations-manual-required-steps):
 
 - **Google Chat:** register the Chat app on the Chat API configuration page —
   select Cloud Pub/Sub and enter the created topic (the `chat_topic_name`
@@ -293,9 +294,9 @@ the [chart README](../../../charts/kube-agents/README.md).
 
 ## Teardown and re-apply
 
-Use Terraform for teardown; do not mix this install path with the shell provisioner's
-`teardown_*.sh` scripts. In particular, `teardown_08_deploy_platform_agent.sh` removes the
-Terraform-managed `kube-agents-host` label out of band and causes plan drift.
+Use `lifecycle.sh destroy` for teardown; anything that mutates the
+Terraform-managed resources out of band (for instance removing the
+`kube-agents-host` label by hand) causes plan drift the next apply reverts.
 
 Four things in this stack are not symmetric — applying them is not the inverse
 of destroying them — and each one breaks a plain `terraform destroy`, or the

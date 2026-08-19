@@ -10,11 +10,11 @@ agent's identity. The canonical identifiers (GSA `kubeagents-platform-gsa`, KSA
 `k8s-operator/scripts/common.sh` for the dev tooling, and the module's defaults mirror
 them.
 
-By default the module grants the same read-only role set the script grants (its
-`read-only` permission set, also the script's default). Pass `project_roles = []` to grant
+By default the module grants the read-only role set (the composition's
+`permission_set = "read-only"`, also the installer's default). Pass `project_roles = []` to grant
 nothing and manage roles yourself — but note the agent fails every GCP call until an
-equivalent role set exists. The script's `gke-admin` set can be reproduced by passing those
-roles explicitly.
+equivalent role set exists. The `gke-admin` set can be reproduced by passing those
+roles explicitly (see `local.gke_admin_roles` in the full-install composition).
 
 ## Usage
 
