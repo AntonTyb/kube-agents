@@ -245,11 +245,11 @@ define_print_helpers() {
 }
 define_print_helpers
 
-# Minimum tool versions, shared with the provisioning scripts so the numbers
-# live in exactly one place. This installer is also downloaded and run on its
-# own, before any checkout exists, so the source is guarded: in that case the
-# workspace step clones the repository and provision_01 enforces the same
-# minimum a few steps later.
+# Minimum tool versions, kept in k8s-operator/scripts/min_versions.sh so the
+# numbers live in exactly one place. This installer is also downloaded and run
+# on its own, before any checkout exists, so the source is guarded: in that
+# case the workspace step clones the repository and the check runs against the
+# clone's copy.
 _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo "")"
 _min_versions="${_script_dir}/k8s-operator/scripts/min_versions.sh"
 if [ -r "$_min_versions" ]; then
@@ -291,7 +291,7 @@ default_image_tag() {
   # running the curl | bash one-liner from inside any unrelated Git repository
   # would offer that repository's HEAD, which then fails at `git fetch` for a
   # ref the kube-agents clone has never heard of.
-  if [ ! -f "${repo_dir}/k8s-operator/scripts/provision.sh" ]; then
+  if [ ! -f "${repo_dir}/k8s-operator/scripts/installer_common.sh" ]; then
     return 0
   fi
   git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo ""
@@ -301,7 +301,7 @@ default_image_tag() {
 # it the way git does and say where it came from. Empty outside a Git worktree.
 default_image_tag_label() {
   local repo_dir="${1:-.}"
-  if [ ! -f "${repo_dir}/k8s-operator/scripts/provision.sh" ]; then
+  if [ ! -f "${repo_dir}/k8s-operator/scripts/installer_common.sh" ]; then
     return 0
   fi
   local short=""
@@ -409,10 +409,10 @@ acquire_source_repo() {
   local resolved_dir=""
   local script_dir=""
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo "")"
-  if [ -n "$script_dir" ] && [ -f "${script_dir}/k8s-operator/scripts/provision.sh" ]; then
+  if [ -n "$script_dir" ] && [ -f "${script_dir}/k8s-operator/scripts/installer_common.sh" ]; then
     resolved_dir="$script_dir"
     print_success "Using repository directory: $resolved_dir"
-  elif [ -f "k8s-operator/scripts/provision.sh" ]; then
+  elif [ -f "k8s-operator/scripts/installer_common.sh" ]; then
     resolved_dir="$(pwd)"
     print_success "Using current repository directory: $resolved_dir"
   else
@@ -431,26 +431,27 @@ acquire_source_repo() {
   printf -v "$dest_var" '%s' "$resolved_dir"
 }
 
-# k8s-operator/scripts/ is the source of truth for provisioning defaults and
-# validation rules. The installer sources common.sh and reads them from there
-# rather than keeping its own copies, which is how the two drifted apart before
-# (an installer menu defaulting to gke-admin against a read-only default, an
-# a us-central1 default against us-east4, a second copy of derive_kms_location).
+# k8s-operator/scripts/installer_common.sh is the source of truth for install
+# defaults, validation rules, and the terraform.tfvars generator. The installer
+# sources it rather than keeping its own copies, which is how the two drifted
+# apart before (an installer menu defaulting to gke-admin against a read-only
+# default, a us-central1 default against us-east4, a second copy of
+# derive_kms_location).
 source_provisioning_helpers() {
   local repo_dir="$1"
-  local common_script="${repo_dir}/k8s-operator/scripts/common.sh"
-  if [ ! -f "$common_script" ]; then
-    print_error "Cannot find provisioning helpers at $common_script."
+  local helper_script="${repo_dir}/k8s-operator/scripts/installer_common.sh"
+  if [ ! -f "$helper_script" ]; then
+    print_error "Cannot find installer helpers at $helper_script."
     exit 1
   fi
   SCRIPT_DIR="${repo_dir}/k8s-operator/scripts"
   VARS_FILE="${SCRIPT_DIR}/vars.sh"
   # shellcheck source=/dev/null
-  source "$common_script"
-  # common.sh brings its own colours and print_* helpers; restore the installer's.
-  configure_colors
-  define_print_helpers
-  print_success "Loaded provisioning defaults from k8s-operator/scripts/common.sh"
+  source "$helper_script"
+  # gke_dns_endpoint_flag, for the credentials fetch before the health checks.
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/gke_dns_endpoint.sh"
+  print_success "Loaded installer defaults from k8s-operator/scripts/installer_common.sh"
 }
 
 # Fill in the parameters whose default lives in common.sh. Called once, after
@@ -718,10 +719,25 @@ auto_install_tool() {
   if [[ "$install_choice" =~ ^[Yy]$ ]]; then
     if command -v brew >/dev/null 2>&1; then
       print_info "Installing $tool via Homebrew..."
-      brew install "$tool" || true
+      if [ "$tool" = "terraform" ]; then
+        # homebrew-core disabled the terraform formula after the licence
+        # change; HashiCorp's tap is the supported source.
+        brew install hashicorp/tap/terraform || true
+      else
+        brew install "$tool" || true
+      fi
     elif command -v apt-get >/dev/null 2>&1; then
       print_info "Installing $tool via apt..."
-      if [ "$tool" = "gh" ]; then
+      if [ "$tool" = "terraform" ]; then
+        # Stock apt has no terraform package; add HashiCorp's repository the
+        # way their docs prescribe.
+        type -p curl >/dev/null || sudo apt-get install curl -y
+        type -p gpg >/dev/null || sudo apt-get install gnupg -y
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(. /etc/os-release && echo "$VERSION_CODENAME") main" | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+        sudo apt-get update >/dev/null 2>&1 || true
+        sudo apt-get install terraform -y || true
+      elif [ "$tool" = "gh" ]; then
         type -p curl >/dev/null || sudo apt-get install curl -y
         curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
         sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
@@ -777,6 +793,130 @@ EOF
   print_success "Machine-readable report written to: ${C_BOLD}${report_file}${C_RESET}"
 }
 
+# ─── Terraform Engine ─────────────────────────────────────────────────────────
+# The install engine is terraform/examples/full-install driven through its
+# lifecycle.sh (which adopts undeletable KMS resources before every apply).
+# State lives in a GCS bucket derived from the install coordinates — see
+# installer_common.sh's tf_state_bucket/tf_state_prefix — so uninstall.sh and
+# upgrade.sh can find it from a fresh clone.
+tf_compose_dir() {
+  echo "${1}/terraform/examples/full-install"
+}
+
+# Runs lifecycle.sh apply against the generated terraform.tfvars. Reads the
+# install coordinates from the environment (source vars.sh first).
+run_lifecycle_apply() {
+  local repo_dir="$1"
+  local log_file="$2"
+  (
+    cd "$(tf_compose_dir "$repo_dir")"
+    export KUBE_AGENTS_STATE_BUCKET="${KUBE_AGENTS_STATE_BUCKET:-auto}"
+    export KUBE_AGENTS_STATE_PREFIX
+    KUBE_AGENTS_STATE_PREFIX="$(tf_state_prefix)"
+    ./lifecycle.sh apply -auto-approve -input=false
+  ) 2>&1 | tee "$log_file"
+}
+
+# CMEK on a pre-existing cluster is the one provision_01 behaviour Terraform
+# cannot express: a data source cannot mutate the cluster it reads. Mirrors the
+# retired script — ensure the keyring/key and the GKE service agent's binding,
+# then update the cluster — and skips clusters that are already encrypted, do
+# not exist yet (Terraform creates those encrypted), or where the operator
+# explicitly allowed unencrypted secrets.
+ensure_existing_cluster_cmek() {
+  local project_id="$1" cluster_name="$2" region="$3"
+  local enc_state
+  enc_state=$(gcloud container clusters describe "$cluster_name" \
+    --location="$region" --project="$project_id" \
+    --format="value(databaseEncryption.state)" 2>/dev/null || echo "")
+  [ -n "$enc_state" ] || return 0
+  if is_valid_cmek_encryption_state "$enc_state"; then
+    print_success "Existing cluster '$cluster_name' already has CMEK database encryption ($enc_state)."
+    return 0
+  fi
+  if is_truthy "${ALLOW_UNENCRYPTED_SECRETS:-false}"; then
+    print_warning "Existing cluster '$cluster_name' has no CMEK encryption ('$enc_state'), but ALLOW_UNENCRYPTED_SECRETS=true is set. Skipping."
+    return 0
+  fi
+
+  local kms_location keyring="${GKE_DB_KMS_KEYRING:-platform-agent-keyring}" key="${GKE_DB_KMS_KEY:-k8s-secret-encryption-key}"
+  kms_location="$(derive_kms_location "$region")"
+  local key_resource="projects/${project_id}/locations/${kms_location}/keyRings/${keyring}/cryptoKeys/${key}"
+  print_info "Enabling CMEK database encryption on existing cluster '$cluster_name' (key: $key_resource)..."
+  gcloud services enable cloudkms.googleapis.com --project="$project_id"
+  gcloud kms keyrings create "$keyring" --location="$kms_location" --project="$project_id" 2>/dev/null || true
+  gcloud kms keys create "$key" --keyring="$keyring" --location="$kms_location" \
+    --purpose="encryption" --project="$project_id" 2>/dev/null || true
+  local project_number service_agent
+  project_number=$(gcloud projects describe "$project_id" --format="value(projectNumber)")
+  service_agent="service-${project_number}@container-engine-robot.iam.gserviceaccount.com"
+  gcloud beta services identity create --service=container.googleapis.com --project="$project_id" 2>/dev/null || true
+  gcloud kms keys add-iam-policy-binding "$key" --keyring="$keyring" --location="$kms_location" \
+    --member="serviceAccount:${service_agent}" \
+    --role="roles/cloudkms.cryptoKeyEncrypterDecrypter" --project="$project_id" --quiet >/dev/null
+  print_info "Updating the live cluster control plane; this can take several minutes..."
+  gcloud container clusters update "$cluster_name" --location "$region" \
+    --database-encryption-key="$key_resource" --project "$project_id" --quiet
+}
+
+# provision_01 passed --managed-otel-scope on create; neither google provider
+# has a field for it, so it is set out-of-band after the apply. Best-effort by
+# design: on a gcloud where the update surface lacks the flag, the install is
+# still complete — only managed OpenTelemetry collection needs a manual step.
+apply_managed_otel_scope() {
+  local project_id="$1" cluster_name="$2" region="$3"
+  if gcloud container clusters update "$cluster_name" --location "$region" --project "$project_id" \
+    --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS --quiet >/dev/null 2>&1; then
+    print_success "Managed OpenTelemetry scope set on '$cluster_name'."
+  else
+    print_warning "Could not set --managed-otel-scope on '$cluster_name' (create-only on this gcloud?)."
+    print_info "Set it manually if you want managed OTel collection: gcloud container clusters update $cluster_name --location $region --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS"
+  fi
+}
+
+# One-shot import of the GitHub App private key into the minter's KMS signing
+# key, via the Minty CLI. The PEM never enters Terraform state — that is why
+# this is not a Terraform resource. Skipped when a key version is already
+# ENABLED (the import happened on an earlier run) and downgraded to printed
+# instructions when Go is unavailable.
+import_github_pem() {
+  local project_id="$1" region="$2"
+  [ -n "${GITHUB_ORG:-}" ] && [ -n "${GITHUB_REPO:-}" ] && [ -n "${GITHUB_APP_ID:-}" ] || return 0
+  local pem_path="${GITHUB_PEM_PATH:-}"
+  local kms_location keyring="${KMS_KEYRING:-github-token-minter-keyring}" key="${KMS_KEY:-github-token-minter-key}"
+  kms_location="$(derive_kms_location "$region")"
+
+  local enabled_version
+  enabled_version=$(gcloud kms keys versions list --key "$key" --keyring "$keyring" \
+    --location "$kms_location" --project "$project_id" \
+    --filter='state=ENABLED' --format='value(name.basename())' 2>/dev/null | head -1 || echo "")
+  if [ -n "$enabled_version" ]; then
+    print_success "GitHub minter KMS key already has an ENABLED version ($enabled_version); skipping PEM import."
+    return 0
+  fi
+
+  local import_cmd="go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk -project-id=${project_id} -location=${kms_location} -key-ring=${keyring} -key=${key} -private-key=@<path-to-pem>"
+  if [ -z "$pem_path" ] || [ ! -f "$pem_path" ]; then
+    print_warning "No GitHub App private key PEM available (GITHUB_PEM_PATH='${pem_path}')."
+    print_info "The minter deployment stays unready until the key is imported: ${import_cmd}"
+    return 0
+  fi
+  if ! command -v go >/dev/null 2>&1; then
+    print_warning "Go is not installed, so the App key cannot be imported automatically."
+    print_info "Import it manually: ${import_cmd/<path-to-pem>/$pem_path}"
+    return 0
+  fi
+  print_info "Importing the GitHub App private key into KMS via the Minty CLI..."
+  if retry 6 5 go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk \
+    -project-id="$project_id" -location="$kms_location" -key-ring="$keyring" -key="$key" \
+    -private-key=@"$(realpath "$pem_path" 2>/dev/null || echo "$pem_path")"; then
+    print_success "GitHub App private key imported into ${keyring}/${key}."
+  else
+    print_warning "PEM import failed; the minter deployment stays unready until it succeeds."
+    print_info "Retry manually: ${import_cmd/<path-to-pem>/$pem_path}"
+  fi
+}
+
 # ─── Day-2 Control Panel Menu System (raspi-config style) ──────────────────────
 run_menu_system() {
   # The control panel is inherently interactive: without a terminal its menu
@@ -790,19 +930,15 @@ run_menu_system() {
   local repo_dir
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local vars_file="${repo_dir}/k8s-operator/scripts/vars.sh"
-  local common_script="${repo_dir}/k8s-operator/scripts/common.sh"
+  local helper_script="${repo_dir}/k8s-operator/scripts/installer_common.sh"
 
-  if [ ! -f "$common_script" ]; then
-    print_error "Cannot find provisioning helpers at $common_script."
+  if [ ! -f "$helper_script" ]; then
+    print_error "Cannot find installer helpers at $helper_script."
     exit 1
   fi
   export VARS_FILE="$vars_file"
   # shellcheck disable=SC1090
-  source "$common_script"
-  # common.sh defines the colour variables unconditionally and its own print_*
-  # helpers; restore the installer's, as source_provisioning_helpers does.
-  configure_colors
-  define_print_helpers
+  source "$helper_script"
 
   if [ -f "$vars_file" ]; then
     # shellcheck disable=SC1090
@@ -916,7 +1052,6 @@ run_menu_system() {
             prompt_read "Vertex AI Project ID" vertex_project_id "$vertex_project_id"
             prompt_read "Vertex AI Location" vertex_location "$vertex_location"
             prompt_read "Vertex Model ID (publisher model, e.g. gemini-3.5-flash)" model_default_name "${model_default_name:-$(default_model_for_provider vertex_ai)}"
-            print_info "Vertex also needs 'make gcp-provision-04-iam' and 'make gcp-provision-09-litellm' re-run: Save & Apply only redeploys the agent."
             ;;
           3)
             model_provider="openai"
@@ -999,11 +1134,16 @@ run_menu_system() {
         save_var NO_CONFIRM "1"
         print_success "Updated configuration saved to: $vars_file"
 
-        print_info "Re-applying Platform Agent Custom Resource to GKE cluster '$cluster_name'..."
-        cd "${repo_dir}/k8s-operator"
-        IMAGE_TAG="$image_tag" bash scripts/provision_08_deploy_platform_agent.sh --no-confirm
-        cd "${repo_dir}"
-        print_success "Platform Agent re-deployed with new configuration!"
+        # One engine for every kind of change: a full terraform apply
+        # reconciles GCP resources and chart values alike, so a Vertex switch
+        # lands its IAM, the gateway, and the agent in one pass. When nothing
+        # GCP-side moved, the apply is a fast no-op around the Helm upgrade.
+        # shellcheck disable=SC1090
+        source "$vars_file"
+        write_tfvars_from_state "$(tf_compose_dir "$repo_dir")/terraform.tfvars" "$image_tag"
+        print_info "Re-applying the install to GKE cluster '$cluster_name' (terraform apply)..."
+        run_lifecycle_apply "$repo_dir" "/tmp/kube-agents-apply-$(date -u +%Y%m%dT%H%M%SZ).log"
+        print_success "Configuration applied!"
         ;;
       7)
         print_info "Exiting Control Panel."
@@ -1056,11 +1196,12 @@ main() {
 
   # 2. Prerequisite CLI Tools Check & Auto-Installation
   print_step "1. Checking Prerequisites & Installing Missing Tools"
-  # jq is required from step 03 onward: the provisioning scripts read every
-  # third-party image reference, and the cert-manager version, out of
-  # images.json. Missing it fails at step 03 with the cluster already created,
-  # so it is checked here with the rest rather than discovered halfway through.
-  for tool in git make gcloud kubectl gh helm jq; do
+  # terraform is the install engine (terraform/examples/full-install through
+  # lifecycle.sh); kubectl is used by lifecycle.sh and the health checks; helm
+  # serves upgrade.sh's fast path; jq and gh remain for the surrounding
+  # tooling. Everything is checked up front rather than discovered halfway
+  # through with the cluster already created.
+  for tool in git gcloud kubectl gh helm jq terraform; do
     if command -v "$tool" >/dev/null 2>&1; then
       print_success "Found CLI tool: $tool"
     else
@@ -1644,13 +1785,23 @@ main() {
   # sidecar behind on the tag of the install that wrote this file.
   write_state_var "$vars_file" OPERATOR_IMAGE "${registry_prefix}/k8s-operator"
   write_state_var "$vars_file" PLATFORM_AGENT_IMAGE "${registry_prefix}/platform-agent"
-  write_state_var "$vars_file" INFERENCE_REPLAY_ENABLED "false"
+  write_state_var "$vars_file" ENABLE_GKE_BACKUP_PLAN "${ENABLE_GKE_BACKUP_PLAN:-false}"
   write_state_var "$vars_file" NO_CONFIRM "1"
   chmod 600 "$vars_file"
   mv -f -- "$vars_file" "$final_vars_file"
   vars_file="$final_vars_file"
   umask "$old_umask"
   print_success "Configuration saved to: $vars_file"
+
+  # The engine input, generated from the state file just written so the two
+  # can never disagree. Re-sourcing vars.sh is what puts that state in the
+  # environment write_tfvars_from_state reads.
+  # shellcheck disable=SC1090
+  source "$vars_file"
+  local tfvars_file
+  tfvars_file="$(tf_compose_dir "$repo_dir")/terraform.tfvars"
+  write_tfvars_from_state "$tfvars_file" "$image_tag"
+  print_success "Terraform input saved to: $tfvars_file"
 
   # Pre-Flight Summary & Final Confirmation Checkpoint
   print_step "11. Pre-Flight Configuration Summary"
@@ -1682,6 +1833,26 @@ main() {
   echo -e "${C_RESET}"
 
   if [ "$PARAM_DRY_RUN" = "true" ]; then
+    # A real resource preview, not just a config write: validate always, and
+    # plan when Application Default Credentials exist. Local state only —
+    # a dry run must not create the state bucket.
+    print_info "Dry-run: validating the Terraform configuration (local state; nothing is created)."
+    (
+      cd "$(tf_compose_dir "$repo_dir")"
+      terraform init -backend=false -input=false >/dev/null
+      terraform validate >/dev/null
+    )
+    print_success "Terraform configuration is valid."
+    if gcloud auth application-default print-access-token >/dev/null 2>&1; then
+      print_info "Previewing the resources a real run would create (terraform plan)..."
+      (
+        cd "$(tf_compose_dir "$repo_dir")"
+        terraform plan -input=false -lock=false
+      )
+    else
+      print_warning "No Application Default Credentials; skipping the resource preview (terraform plan)."
+      print_info "Run 'gcloud auth application-default login' for a full dry-run preview."
+    fi
     print_success "Dry-run execution complete! Configuration generated without touching cloud resources."
     write_json_report "DRY_RUN_SUCCESS"
     exit 0
@@ -1692,31 +1863,40 @@ main() {
     prompt_read "\nProceed with automated GKE cluster & Platform Agent provisioning? (Y/n)" confirm_choice "y"
     if [[ ! "$confirm_choice" =~ ^[Yy]$ ]]; then
       print_warning "Provisioning paused by user. Configuration saved to: $vars_file"
-      print_info "To launch provisioning later, run: ${C_BOLD}cd k8s-operator && make gcp-provision${C_RESET}"
+      print_info "To launch provisioning later, run: ${C_BOLD}cd terraform/examples/full-install && KUBE_AGENTS_STATE_BUCKET=auto ./lifecycle.sh apply${C_RESET}"
       write_json_report "PAUSED"
       exit 0
     fi
   fi
 
-  # 12. Execute Automated Provisioning
-  print_step "12. Launching Automated GKE Provisioning Pipeline"
+  # 12. Execute the Terraform Engine
+  print_step "12. Applying the Install (Terraform + Helm)"
   print_info "Provisioning GCP APIs, GKE Cluster, cert-manager, Operator, LiteLLM gateway, and Platform Agent..."
-  print_info "Starting build..."
 
-  cd "${repo_dir}/k8s-operator"
+  # The one provision_01 behaviour a data source cannot express: CMEK on a
+  # cluster that already exists. No-op when the cluster does not exist yet or
+  # is already encrypted.
+  ensure_existing_cluster_cmek "$project_id" "$cluster_name" "$region"
+
   local provisioning_log
   provisioning_log="/tmp/kube-agents-provision-$(date -u +%Y%m%dT%H%M%SZ).log"
   print_info "Provisioning output is also being saved to: ${C_BOLD}${provisioning_log}${C_RESET}"
-  if [ "$PARAM_NON_INTERACTIVE" = "true" ]; then
-    IMAGE_TAG="$image_tag" make gcp-provision ARGS="-y" </dev/null 2>&1 | tee "$provisioning_log"
-  else
-    IMAGE_TAG="$image_tag" make gcp-provision ARGS="-y" </dev/tty 2>&1 | tee "$provisioning_log"
-  fi
-  cd "${repo_dir}"
+  run_lifecycle_apply "$repo_dir" "$provisioning_log"
+
+  # Post-apply steps Terraform cannot carry: the managed-OTel scope (no
+  # provider field) and the GitHub App key import (the PEM must not enter
+  # state).
+  apply_managed_otel_scope "$project_id" "$cluster_name" "$region"
+  import_github_pem "$project_id" "$region"
 
   # 12. Workload & Pod Health Verification Checkpoint
   print_step "13. Verifying Workload & Pod Health"
   print_info "Verifying deployment rollouts in namespace 'kubeagents-system'..."
+  GKE_DNS_ENDPOINT_FLAG=""
+  gke_dns_endpoint_flag "$cluster_name" "$region" "$project_id" || true
+  # shellcheck disable=SC2086
+  gcloud container clusters get-credentials "$cluster_name" --location "$region" \
+    --project "$project_id" $GKE_DNS_ENDPOINT_FLAG >/dev/null
   if ! kubectl get ns kubeagents-system >/dev/null 2>&1; then
     print_error "Namespace 'kubeagents-system' was not created. Installation is incomplete."
     exit 1
