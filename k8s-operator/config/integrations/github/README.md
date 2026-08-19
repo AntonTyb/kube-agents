@@ -59,7 +59,7 @@ Minty was originally designed for integration with GitHub Actions, which inheren
 
 ## Cryptographic Key Import via Minty CLI
 
-During the install, `install.sh` runs the Minty CLI (`go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk`) to upload the GitHub `.pem` file to Google Cloud KMS.
+During the install, `install.sh` runs the Minty CLI (a shallow clone of the tag, then `go run ./cmd/minty tools import-pk` — the `go run <module>@v2.7.1` form does not resolve, because upstream's go.mod lacks the `/v2` suffix its v2 tags require) to upload the GitHub `.pem` file to Google Cloud KMS.
 
 This approach is required due to the cryptographic wrapping prerequisites of the Google Cloud KMS API. Uploading an asymmetric private key natively via the Google Cloud CLI (`gcloud kms keys versions import`) strictly requires that the target key be explicitly converted from PKCS#1 into an unencrypted PKCS#8 format, and necessitates the provisioning of a separate KMS "Import Job" to facilitate secure RSA-OAEP wrapping.
 

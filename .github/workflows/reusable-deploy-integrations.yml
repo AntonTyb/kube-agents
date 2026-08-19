@@ -355,10 +355,15 @@ jobs:
             --project "$PROJECT_ID" --filter='state=ENABLED' --format='value(name)' 2>/dev/null | head -1 || true)
           if [ -z "$enabled" ] && [ -s "$GITHUB_PEM_PATH" ]; then
             echo "Importing the GitHub App private key into KMS via the Minty CLI..."
-            go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk \
+            # Clone-and-run, not `go run <module>@v2.7.1`: upstream's go.mod
+            # lacks the /v2 suffix its v2 tags require, so Go rejects the
+            # module form outright.
+            git clone --quiet --depth 1 --branch v2.7.1 \
+              https://github.com/abcxyz/github-token-minter.git "$RUNNER_TEMP/minty"
+            (cd "$RUNNER_TEMP/minty" && go run ./cmd/minty tools import-pk \
               -project-id="$PROJECT_ID" -location="$KMS_LOCATION" \
               -key-ring=github-token-minter-keyring -key=github-token-minter-key \
-              -private-key=@"$GITHUB_PEM_PATH"
+              -private-key=@"$GITHUB_PEM_PATH")
           fi
           echo "Redeploying GitHub Token Minter via helm upgrade"
           helm upgrade kube-agents charts/kube-agents -n kubeagents-system \

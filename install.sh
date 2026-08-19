@@ -950,7 +950,13 @@ import_github_pem() {
     return 0
   fi
 
-  local import_cmd="go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk -project-id=${project_id} -location=${kms_location} -key-ring=${keyring} -key=${key} -private-key=@<path-to-pem>"
+  # Clone the tag and run the CLI from the tree, exactly as the retired
+  # provision_10 did. `go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1`
+  # cannot work: the upstream go.mod declares the module without the /v2 suffix
+  # its v2 tags require, so Go rejects the version with or without /v2 in the
+  # path. The gcloud-only recovery recipe lives in
+  # k8s-operator/config/integrations/github/README.md.
+  local import_cmd="git clone --depth 1 --branch v2.7.1 https://github.com/abcxyz/github-token-minter.git /tmp/minty && cd /tmp/minty && go run ./cmd/minty tools import-pk -project-id=${project_id} -location=${kms_location} -key-ring=${keyring} -key=${key} -private-key=@<path-to-pem>"
   if [ -z "$pem_path" ] || [ ! -f "$pem_path" ]; then
     print_warning "No GitHub App private key PEM available (GITHUB_PEM_PATH='${pem_path}')."
     print_info "The minter deployment stays unready until the key is imported: ${import_cmd}"
@@ -959,17 +965,25 @@ import_github_pem() {
   if ! command -v go >/dev/null 2>&1; then
     print_warning "Go is not installed, so the App key cannot be imported automatically."
     print_info "Import it manually: ${import_cmd/<path-to-pem>/$pem_path}"
+    print_info "Without Go, the gcloud-only import recipe is in k8s-operator/config/integrations/github/README.md."
     return 0
   fi
   print_info "Importing the GitHub App private key into KMS via the Minty CLI..."
-  if retry 6 5 go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk \
-    -project-id="$project_id" -location="$kms_location" -key-ring="$keyring" -key="$key" \
-    -private-key=@"$(realpath "$pem_path" 2>/dev/null || echo "$pem_path")"; then
+  local minty_dir pem_abs
+  minty_dir="$(mktemp -d "${TMPDIR:-/tmp}/minty-XXXXXX")"
+  pem_abs="$(realpath "$pem_path" 2>/dev/null || echo "$pem_path")"
+  if git clone --quiet --depth 1 --branch v2.7.1 \
+      https://github.com/abcxyz/github-token-minter.git "$minty_dir" &&
+    (cd "$minty_dir" && retry 6 5 go run ./cmd/minty tools import-pk \
+      -project-id="$project_id" -location="$kms_location" -key-ring="$keyring" -key="$key" \
+      -private-key=@"$pem_abs"); then
     print_success "GitHub App private key imported into ${keyring}/${key}."
   else
     print_warning "PEM import failed; the minter deployment stays unready until it succeeds."
     print_info "Retry manually: ${import_cmd/<path-to-pem>/$pem_path}"
+    print_info "If Go itself is the problem (killed compiler, no toolchain), the gcloud-only recipe is in k8s-operator/config/integrations/github/README.md."
   fi
+  rm -rf "$minty_dir"
 }
 
 # ─── Day-2 Control Panel Menu System (raspi-config style) ──────────────────────

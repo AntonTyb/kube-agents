@@ -5,7 +5,10 @@ Reusable Terraform module for provisioning the GitHub token minter's Google Serv
 The KMS key is created **import-only and empty** (`skip_initial_version_creation = true`): importing the GitHub App private key PEM into it is a separate one-shot step — the PEM must never enter Terraform state — using the Minty CLI for the cryptographic wrapping:
 
 ```bash
-go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk \
+# Clone-and-run: `go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1`
+# does not resolve — upstream's go.mod lacks the /v2 suffix its v2 tags require.
+git clone --depth 1 --branch v2.7.1 https://github.com/abcxyz/github-token-minter.git /tmp/minty
+cd /tmp/minty && go run ./cmd/minty tools import-pk \
   -project-id=<project> -location=<region> \
   -key-ring=github-token-minter-keyring -key=github-token-minter-key \
   -private-key=@/path/to/app-private-key.pem

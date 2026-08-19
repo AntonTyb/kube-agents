@@ -52,7 +52,7 @@ A personal-account App is created as "Only on this account", which cannot instal
 - **Auditable.** Every sign operation logs to Cloud Audit Logs.
 - **Rotatable without redeploy.** Import a new key version to KMS; Minty picks it up.
 
-The Minty CLI handles the KMS import — it deals with PKCS#1 to PKCS#8 conversion, provisions the KMS Import Job, and does RSA-OAEP wrapping automatically. The installer runs `go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk` (requires `go` on the install host). The import is deliberately not a Terraform resource, so the PEM never enters Terraform state.
+The Minty CLI handles the KMS import — it deals with PKCS#1 to PKCS#8 conversion, provisions the KMS Import Job, and does RSA-OAEP wrapping automatically. The installer shallow-clones the Minty repo at `v2.7.1` and runs `go run ./cmd/minty tools import-pk` from the tree (requires `git` and `go` on the install host; the `go run <module>@v2.7.1` form does not resolve because upstream's go.mod lacks the `/v2` suffix its v2 tags require). The import is deliberately not a Terraform resource, so the PEM never enters Terraform state.
 
 When that path is unavailable — no Go toolchain, or a host security agent that kills the compiler — `gcloud` can do the same import in four commands. The [integration README](https://github.com/gke-labs/kube-agents/blob/main/k8s-operator/config/integrations/github/README.md) has the recipe; re-running the installer afterwards skips the Go step entirely, because it only imports when the key has no enabled version.
 
