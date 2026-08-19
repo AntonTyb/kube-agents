@@ -55,7 +55,7 @@ const (
 	// private registry. Set on the controller-manager Deployment; a CR's
 	// spec.deployment.image still takes precedence over PLATFORM_AGENT_IMAGE.
 	platformAgentImageEnvVar   = "PLATFORM_AGENT_IMAGE"
-	credentialProxyImageEnvVar = "CREDENTIAL_PROXY_IMAGE"
+	credentialProxyImageEnvVar = "CREDENTIAL_PROXY_IMAGE" // #nosec G101 -- Environment variable name, not hardcoded credentials
 	fluentBitImageEnvVar       = "FLUENT_BIT_IMAGE"
 
 	defaultSurgePercent = "25%"
@@ -185,6 +185,11 @@ func fluentBitImage() string {
 }
 
 // resolveAgentImage determines the full image reference using the optional deployment spec and a fallback default.
+//
+// qualify_image_ref() in k8s-operator/scripts/common.sh is the provisioning-time
+// twin of this rule and must agree on how a reference is split. The no-tag
+// fallback deliberately differs: this path is serving a live CR and settles for
+// "latest", while the shell helper can still abort the run and does.
 func resolveAgentImage(deployment *agentv1alpha1.DeploymentSpec, defaultImage string) string {
 	image := defaultImage
 	if deployment != nil && deployment.Image != "" {
