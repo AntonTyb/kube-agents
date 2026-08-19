@@ -249,6 +249,42 @@ variable "slack_home_channel_name" {
   default     = ""
 }
 
+variable "chat_topic_name" {
+  description = "Pub/Sub topic for Google Chat events. The default matches the chat-pubsub module and the chart."
+  type        = string
+  default     = "platform-agent-chat-events"
+}
+
+variable "chat_subscription_name" {
+  description = "Pub/Sub subscription for Google Chat events."
+  type        = string
+  default     = "platform-agent-chat-events-sub"
+}
+
+variable "hermes_dashboard_enabled" {
+  description = "Whether the Hermes Web UI dashboard is enabled on the agent. null leaves the field out of the CR so the CRD default (true) applies; the retired script path defaulted it to false."
+  type        = bool
+  default     = null
+}
+
+variable "memory_enabled" {
+  description = "Whether agent memory persistence is enabled. null defers to the CRD default (false)."
+  type        = bool
+  default     = null
+}
+
+variable "memory_provider" {
+  description = "Agent memory provider (multiuser_memory, kube_agents_memory, hindsight, none, ...). Empty defers to the CRD default. Selecting a hindsight-backed provider makes the chart render the Hindsight store automatically."
+  type        = string
+  default     = ""
+}
+
+variable "user_profile_enabled" {
+  description = "Whether per-user profiles are enabled in agent memory. null defers to the CRD default (false)."
+  type        = bool
+  default     = null
+}
+
 variable "github_repo" {
   description = "Target GitOps repository for the agent's GitHub integration (owner/repo or URL). Empty leaves the GitHub integration unconfigured. Independent of enable_github_minter, which only provisions the minter's GCP identity."
   type        = string
@@ -259,6 +295,18 @@ variable "enable_github_minter" {
   description = "Provision the GitHub token minter: its GCP resources (service account, KMS key ring and signing key) and, through the chart, its Kubernetes workload. Requires github_repo in owner/repo (or github.com URL) form. The App private key must be imported into the KMS key before the minter goes Ready."
   type        = bool
   default     = false
+}
+
+variable "github_minter_kms_keyring" {
+  description = "Cloud KMS key ring holding the GitHub minter's signing key."
+  type        = string
+  default     = "github-token-minter-keyring"
+}
+
+variable "github_minter_kms_key" {
+  description = "Cloud KMS asymmetric signing key the minter signs GitHub App JWTs with. The App private key is imported into it outside Terraform."
+  type        = string
+  default     = "github-token-minter-key"
 }
 
 variable "github_app_id" {

@@ -91,6 +91,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 COMMON_SH = REPO / "k8s-operator/scripts/common.sh"
+INSTALLER_COMMON_SH = REPO / "k8s-operator/scripts/installer_common.sh"
 PROVISION_01 = REPO / "k8s-operator/scripts/provision_01_gcp_cluster.sh"
 PROVISION_03 = REPO / "k8s-operator/scripts/provision_03_gcp_gke_operator.sh"
 PROVISION_04 = REPO / "k8s-operator/scripts/provision_04_gcp_iam.sh"
@@ -396,11 +397,11 @@ def check_litellm_cache_points(f: Failures) -> None:
 
 
 def check_model_defaults(f: Failures) -> None:
-    """common.sh's per-provider default model vs the chart's dict."""
-    text = read(COMMON_SH)
+    """installer_common.sh's per-provider default model vs the chart's dict."""
+    text = read(INSTALLER_COMMON_SH)
     body = re.search(r"default_model_for_provider\(\)\s*\{(.*?)\n\}", text, re.S)
     if not body:
-        sys.exit(f"ERROR: no default_model_for_provider in {COMMON_SH.relative_to(REPO)}")
+        sys.exit(f"ERROR: no default_model_for_provider in {INSTALLER_COMMON_SH.relative_to(REPO)}")
     script: dict[str, str] = {}
     fallback: str | None = None
     # The alternatives inside a case arm exclude "|" so each one has exactly one
@@ -415,7 +416,7 @@ def check_model_defaults(f: Failures) -> None:
                 # name explicitly resolves here — which is how gemini and
                 # vertex_ai both get gemini-3.5-flash without being listed.
                 # Reading it as an alias for one named provider made every
-                # later fall-through provider look absent from common.sh.
+                # later fall-through provider look absent from installer_common.sh.
                 fallback = model
             else:
                 script[provider] = model
@@ -434,20 +435,22 @@ def check_model_defaults(f: Failures) -> None:
 
     for provider, model in sorted(chart.items()):
         if known and provider not in known:
-            f.add("model-defaults", f"chart knows provider {provider!r}, common.sh does not")
+            f.add("model-defaults", f"chart knows provider {provider!r}, installer_common.sh does not")
             continue
         expected = script.get(provider, fallback)
         if expected is None:
-            f.add("model-defaults", f"chart knows provider {provider!r}, common.sh does not")
+            f.add("model-defaults", f"chart knows provider {provider!r}, installer_common.sh does not")
         elif expected != model:
             f.add(
                 "model-defaults",
-                f"{provider}: chart defaults to {model}, common.sh to {expected}",
+                f"{provider}: chart defaults to {model}, installer_common.sh to {expected}",
             )
 
 
 def check_registry_prefix(f: Failures) -> None:
-    prefix = shell_assignment(read(COMMON_SH), "DEFAULT_REGISTRY_PREFIX", COMMON_SH)
+    prefix = shell_assignment(
+        read(INSTALLER_COMMON_SH), "DEFAULT_REGISTRY_PREFIX", INSTALLER_COMMON_SH
+    )
     values = simple_yaml(read(CHART_VALUES))
     for key, image in (
         ("operator.image.repository", "k8s-operator"),
@@ -457,7 +460,7 @@ def check_registry_prefix(f: Failures) -> None:
         if actual != f"{prefix}/{image}":
             f.add(
                 "registry-prefix",
-                f"chart {key} is {actual}, common.sh's DEFAULT_REGISTRY_PREFIX implies "
+                f"chart {key} is {actual}, installer_common.sh's DEFAULT_REGISTRY_PREFIX implies "
                 f"{prefix}/{image}",
             )
 

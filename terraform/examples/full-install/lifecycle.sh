@@ -210,11 +210,12 @@ adopt_kms() {
   fi
 
   if [[ "$(tfvar enable_github_minter)" == "true" ]]; then
-    # Not surfaced as composition variables; these are the github-minter module's
-    # defaults, which mirror k8s-operator/scripts/common.sh.
+    local minter_keyring minter_key
+    minter_keyring=$(tfvar github_minter_kms_keyring)
+    minter_key=$(tfvar github_minter_kms_key)
     targets+=(
-      "module.github_minter[0].google_kms_key_ring.minter	keyring	projects/$project/locations/$location/keyRings/github-token-minter-keyring"
-      "module.github_minter[0].google_kms_crypto_key.minter	key	projects/$project/locations/$location/keyRings/github-token-minter-keyring/cryptoKeys/github-token-minter-key"
+      "module.github_minter[0].google_kms_key_ring.minter	keyring	projects/$project/locations/$location/keyRings/$minter_keyring"
+      "module.github_minter[0].google_kms_crypto_key.minter	key	projects/$project/locations/$location/keyRings/$minter_keyring/cryptoKeys/$minter_key"
     )
   fi
 
@@ -249,6 +250,29 @@ adopt_kms() {
   drop_override
   trap - EXIT
   log "KMS adoption complete: $adopted imported"
+}
+
+# create_cluster = false means "somebody else's cluster" — but if THIS state
+# already manages the cluster, flipping the variable off does not hand the
+# cluster back: it removes the resource from configuration, and the next apply
+# plans the cluster's destruction. The installer derives create_cluster from a
+# liveness probe, so a re-run against an install whose cluster Terraform
+# created is exactly the run that would hit this.
+guard_cluster_ownership() {
+  [[ "$(tfvar create_cluster)" == "false" ]] || return 0
+  load_state
+  local addr
+  for addr in \
+    "module.gke_cluster.google_container_cluster.autopilot[0]" \
+    "module.gke_cluster.google_container_cluster.standard[0]" \
+    "module.gke_cluster.google_container_cluster.autopilot"; do
+    if in_state "$addr"; then
+      warn "create_cluster is false, but this state already manages the cluster ($addr)."
+      warn "Applying now would plan the cluster's DESTRUCTION. Set create_cluster = true"
+      warn "in terraform.tfvars — this state created the cluster, so it is Terraform's to keep."
+      exit 1
+    fi
+  done
 }
 
 delete_agent_cr() {
@@ -388,6 +412,7 @@ case "${1:-}" in
   apply)
     shift
     ensure_init
+    guard_cluster_ownership
     adopt_kms
     log "terraform apply"
     # No -input=false: this prompts like plain `terraform apply` does. Pass

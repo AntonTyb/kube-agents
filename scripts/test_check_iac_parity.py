@@ -410,7 +410,7 @@ class ModelDefaultsTest(unittest.TestCase):
         chart = '{{- $defaultModels := dict %s }}' % chart_dict
         f = parity.Failures()
         with unittest.mock.patch.object(
-            parity, "read", side_effect=lambda path: self.COMMON_SH if path == parity.COMMON_SH else chart
+            parity, "read", side_effect=lambda path: self.COMMON_SH if path == parity.INSTALLER_COMMON_SH else chart
         ):
             parity.check_model_defaults(f)
         return list(f)
@@ -436,7 +436,7 @@ class ModelDefaultsTest(unittest.TestCase):
         self.assertEqual(self._run('"chatgpt" "gpt-5.4" "openai" "gpt-5.4"'), [])
         self.assertEqual(
             self._run('"openai" "gpt-4"'),
-            [("model-defaults", "openai: chart defaults to gpt-4, common.sh to gpt-5.4")],
+            [("model-defaults", "openai: chart defaults to gpt-4, installer_common.sh to gpt-5.4")],
         )
 
     def test_drift_on_a_fall_through_provider_is_caught(self):
@@ -449,7 +449,7 @@ class ModelDefaultsTest(unittest.TestCase):
         """`*` answers for any string, so this can only come from the validator."""
         failures = self._run('"nosuchprovider" "gemini-3.5-flash"')
         self.assertEqual(len(failures), 1, failures)
-        self.assertIn("common.sh does not", failures[0][1])
+        self.assertIn("installer_common.sh does not", failures[0][1])
 
 
 class ArmScannerBacktrackingTest(unittest.TestCase):

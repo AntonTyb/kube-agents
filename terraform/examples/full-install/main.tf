@@ -251,6 +251,8 @@ module "chat_pubsub" {
 
   project_id                  = var.project_id
   agent_service_account_email = module.kube_agents_iam.service_account_email
+  topic_name                  = var.chat_topic_name
+  subscription_name           = var.chat_subscription_name
 
   depends_on = [google_project_service.required]
 }
@@ -259,9 +261,11 @@ module "github_minter" {
   source = "../../modules/github-minter"
   count  = var.enable_github_minter ? 1 : 0
 
-  project_id = var.project_id
-  location   = var.location
-  namespace  = var.namespace
+  project_id       = var.project_id
+  location         = var.location
+  namespace        = var.namespace
+  kms_keyring_name = var.github_minter_kms_keyring
+  kms_key_name     = var.github_minter_kms_key
 
   depends_on = [google_project_service.required]
 }
@@ -377,10 +381,25 @@ resource "helm_release" "kube_agents" {
         clusterName = module.gke_cluster.cluster_name
         location    = module.gke_cluster.cluster_location
         projectId   = var.project_id
+        # null leaves a field out of the CR so the CRD default applies — the
+        # chart's compactFields drops nulls and empty strings.
+        hermes = {
+          dashboardEnabled = var.hermes_dashboard_enabled
+        }
+        memory = {
+          enabled            = var.memory_enabled
+          provider           = var.memory_provider
+          userProfileEnabled = var.user_profile_enabled
+        }
       }
       deployment = {
         image = {
           tag = var.image_tag
+        }
+        availability = {
+          # The gVisor pool only exists to run the agent sandboxed, so the two
+          # move together, the way ENABLE_GVISOR did on the script path.
+          runtimeClassName = var.enable_gvisor_node_pool ? "gvisor" : ""
         }
       }
       security = {
@@ -429,6 +448,10 @@ resource "helm_release" "kube_agents" {
       org     = local.github_org
       repo    = local.github_repo_name
       appId   = var.github_app_id
+      kms = {
+        keyring = var.github_minter_kms_keyring
+        key     = var.github_minter_kms_key
+      }
     }
     }),
     # Second document rather than a merge() into the first: Helm deep-merges

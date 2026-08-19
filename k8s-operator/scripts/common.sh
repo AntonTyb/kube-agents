@@ -23,6 +23,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/min_versions.sh"
 # shellcheck source=k8s-operator/scripts/gke_dns_endpoint.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gke_dns_endpoint.sh"
 
+# Defaults, validators, vars.sh persistence, and the terraform.tfvars
+# generator, shared with the installer front-ends (install.sh, uninstall.sh,
+# upgrade.sh). The definitions moved there so the installers do not have to
+# source this whole pipeline helper; this file keeps only what the numbered
+# provision/teardown steps need on top.
+# shellcheck source=k8s-operator/scripts/installer_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/installer_common.sh"
+
 # ─── ANSI Colors ──────────────────────────────────────────────────────────────
 # Empty unless stdout is a terminal and NO_COLOR is unset. This pipeline's output
 # is routinely redirected — install.sh tees it to a log, CI captures it — and
@@ -68,26 +76,6 @@ wait_for_a_bit() {
   tput cnorm 2>/dev/null || true
 }
 
-retry() {
-  local max_retries=$1
-  local delay=$2
-  shift 2
-  local count=0
-
-  while [ $count -lt $max_retries ]; do
-    count=$((count + 1))
-    if "$@"; then
-      return 0
-    fi
-    if [ $count -lt $max_retries ]; then
-      echo -e "  ${C_YELLOW}⚠ [Retry $count/$max_retries] Waiting ${delay}s before next attempt...${C_RESET}" >&2
-      sleep "$delay"
-    fi
-  done
-
-  return 1
-}
-
 cleanup() { tput cnorm 2>/dev/null || true; }
 trap cleanup EXIT
 
@@ -101,90 +89,8 @@ for arg in "$@"; do
   esac
 done
 
-save_var() {
-  local var_name=$1
-  local var_val=$2
-  export "${var_name}=${var_val}"
-  if [ "${DRY_RUN:-0}" -eq 1 ]; then
-    return 0
-  fi
-
-  local old_umask
-  old_umask=$(umask)
-  umask 077
-
-  if [ -f "$VARS_FILE" ]; then
-    chmod 600 "$VARS_FILE" 2>/dev/null || true
-    grep -E -v "^[[:space:]]*export[[:space:]]+${var_name}=" "$VARS_FILE" > "$VARS_FILE.tmp" 2>/dev/null || true
-    chmod 600 "$VARS_FILE.tmp" 2>/dev/null || true
-    mv "$VARS_FILE.tmp" "$VARS_FILE"
-  fi
-  printf "export %s=%q\n" "$var_name" "$var_val" >> "$VARS_FILE"
-  chmod 600 "$VARS_FILE" 2>/dev/null || true
-
-  umask "$old_umask"
-}
-
-save_secret_var() {
-  local var_name=$1
-  local var_val=$2
-  export "${var_name}=${var_val}"
-  if [ "${DRY_RUN:-0}" -eq 1 ]; then
-    return 0
-  fi
-  if is_truthy "${PERSIST_SECRETS_ON_DISK:-true}"; then
-    save_var "$var_name" "$var_val"
-  else
-    if [ -f "$VARS_FILE" ]; then
-      local old_umask
-      old_umask=$(umask)
-      umask 077
-      chmod 600 "$VARS_FILE" 2>/dev/null || true
-      grep -E -v "^[[:space:]]*export[[:space:]]+${var_name}=" "$VARS_FILE" > "$VARS_FILE.tmp" 2>/dev/null || true
-      chmod 600 "$VARS_FILE.tmp" 2>/dev/null || true
-      mv "$VARS_FILE.tmp" "$VARS_FILE"
-      chmod 600 "$VARS_FILE" 2>/dev/null || true
-      umask "$old_umask"
-    fi
-  fi
-}
-
-# ─── Boolean Parsing ──────────────────────────────────────────────────────────
-# Interpret a value as a boolean toggle. Returns 0 (success) for common
-# affirmative spellings and 1 otherwise. Matching is case-insensitive and
-# surrounding whitespace is ignored, so all of the following are truthy:
-#   true, yes, y, 1, on  (in any letter case, e.g. "True", "YES", "On")
-# Everything else — including false, no, n, 0, off, and empty/unset — is falsy.
-is_truthy() {
-  local val="${1:-}"
-  val="${val//[[:space:]]/}"
-  case "$val" in
-    [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss] | [Yy] | 1 | [Oo][Nn]) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 is_ci_pipeline() {
   is_truthy "${CI:-}"
-}
-
-# Checks if GKE databaseEncryption.state is a valid CMEK-encrypted state.
-# Accepts an array of valid active encryption states:
-#   - ENCRYPTED: Standard CMEK database encryption state in GKE
-#   - ALL_OBJECTS_ENCRYPTION_ENABLED: Present in GKE 1.35+ when Application-layer Secrets Encryption is active
-is_valid_cmek_encryption_state() {
-  local state="${1:-}"
-  local valid_states=(
-    "ENCRYPTED"
-    "ALL_OBJECTS_ENCRYPTION_ENABLED"
-  )
-
-  for valid in "${valid_states[@]}"; do
-    if [ "$state" = "$valid" ]; then
-      return 0
-    fi
-  done
-  return 1
 }
 
 init_var() {
@@ -206,40 +112,9 @@ init_var() {
   fi
 }
 
-# ─── Shared Provisioning Defaults ─────────────────────────────────────────────
-# The values the per-step provision scripts and the zero-friction installer must
-# agree on. install.sh sources this file rather than restating them, so each
-# default has exactly one home and the two entry points cannot drift apart.
-DEFAULT_CLUSTER_NAME="platform-agent-host"
-DEFAULT_REGION="us-central1"
-DEFAULT_MODEL_PROVIDER="gemini"
-
-# Model provider → the model the pipeline defaults to for that provider.
-default_model_for_provider() {
-  case "${1:-}" in
-    openai) echo "gpt-5.4" ;;
-    anthropic) echo "claude-opus-5" ;;
-    *) echo "gemini-3.5-flash" ;;
-  esac
-}
-
-is_valid_model_provider() {
-  [[ "${1:-}" =~ ^(gemini|vertex_ai|anthropic|openai)$ ]]
-}
-
-# The GCP IAM role bundles provision_04_gcp_iam.sh knows how to grant. Kubernetes
-# RBAC is read-only in every one of them; see the site's reference/security-and-iam.
-is_valid_permission_set() {
-  [[ "${1:-}" =~ ^(read-only|gke-admin|custom)$ ]]
-}
-
 # ─── Container Registry ───────────────────────────────────────────────────────
-# All kube-agents images (k8s-operator, platform-agent, credential-proxy,
-# replay-proxy) default to this public registry prefix. Behind-the-firewall
-# installs export REGISTRY_PREFIX to pull the mirrored images from a private
-# registry instead; individual *_IMAGE variables still win over the prefix.
-DEFAULT_REGISTRY_PREFIX="ghcr.io/gke-labs/kube-agents"
-
+# DEFAULT_REGISTRY_PREFIX comes from installer_common.sh; individual *_IMAGE
+# variables still win over the prefix.
 registry_prefix() {
   local prefix="${REGISTRY_PREFIX:-$DEFAULT_REGISTRY_PREFIX}"
   echo "${prefix%/}"
@@ -449,18 +324,6 @@ qualify_image_ref() {
       ;;
   esac
   echo "$ref"
-}
-
-# Cloud KMS has no zonal locations, so a zonal cluster's REGION (eg.
-# "us-central1-c") is not a valid key location. REGION doubles as the cluster
-# location, which for a zonal cluster must stay the zone, so KMS needs its own
-# variable. Default to the enclosing region and allow an explicit override.
-derive_kms_location() {
-  local loc="${1:-}"
-  if [[ "$loc" =~ ^(.+)-[a-z]$ ]]; then
-    loc="${BASH_REMATCH[1]}"
-  fi
-  echo "$loc"
 }
 
 init_var_kms_location() {
@@ -778,101 +641,6 @@ check_prereqs() {
       exit 1
     fi
   done
-}
-
-# Classifies a GitHub account name against the public API, echoing exactly one
-# of: organization | user | missing | unknown.
-#
-# "unknown" is the catch-all for every inconclusive answer — curl absent, the
-# network down, rate limiting, an unexpected payload — so a caller can tell
-# "GitHub says no" apart from "we could not ask". Never exits and never prints,
-# so it is safe to call from an interactive prompt loop; callers decide whether
-# an answer is fatal. install.sh uses it to validate before provisioning starts.
-github_account_type() {
-  local name="${1:-}"
-  if [ -z "$name" ] || ! command -v curl &>/dev/null; then
-    echo "unknown"
-    return 0
-  fi
-
-  # Status is appended on its own line so a transport failure (curl non-zero)
-  # stays distinguishable from an HTTP error (curl zero, status in the body).
-  local response status body
-  if ! response=$(curl -sS --max-time 10 -H "Accept: application/vnd.github+json" \
-      -w '\n%{http_code}' "https://api.github.com/users/${name}" 2>/dev/null); then
-    echo "unknown"
-    return 0
-  fi
-  status="${response##*$'\n'}"
-  body="${response%$'\n'*}"
-
-  if [ "$status" = "404" ]; then
-    echo "missing"
-    return 0
-  fi
-  if [ "$status" != "200" ]; then
-    echo "unknown"
-    return 0
-  fi
-
-  # Organization is matched first so it wins even if the payload somehow carries
-  # both spellings, and both spacings are covered because the API is not
-  # guaranteed to keep pretty-printing its JSON.
-  case "$body" in
-    *'"type": "Organization"'*|*'"type":"Organization"'*) echo "organization" ;;
-    *'"type": "User"'*|*'"type":"User"'*) echo "user" ;;
-    *) echo "unknown" ;;
-  esac
-}
-
-# Minty resolves App installations with GET /orgs/{org}/installation and has no
-# fallback to the /users/{user}/installation endpoint that serves personal
-# accounts, so a user-owned GitOps repo can never mint a token. Left unchecked
-# that surfaces far downstream, as an HTTP 500 from a Minty that deployed and
-# passed its readiness probes, so catch it while GITHUB_ORG is still being set.
-#
-# This exits, so it is the wrong entry point for anything that can still
-# re-prompt: install.sh calls github_account_type directly and settles the value
-# before provisioning starts. An inconclusive lookup is never fatal — an
-# unreachable api.github.com must not block a provision that is otherwise fine.
-check_github_org_is_organization() {
-  local org="${1:-}"
-  [ -z "$org" ] && return 0
-
-  if is_truthy "${SKIP_GITHUB_ORG_CHECK:-false}"; then
-    print_warning "SKIP_GITHUB_ORG_CHECK=true is set; not verifying that '${org}' is an organization."
-    return 0
-  fi
-
-  case "$(github_account_type "$org")" in
-    organization) return 0 ;;
-    user)
-      print_error "GITHUB_ORG='${org}' is a GitHub user account, not an organization."
-      print_error "The GitHub Token Minter looks installations up at /orgs/${org}/installation,"
-      print_error "which does not exist for personal accounts, so every token request would"
-      print_error "fail with a 404 after deployment."
-      print_error "Move the GitOps repository to an organization (a free one is enough) and set"
-      print_error "GITHUB_ORG in ${VARS_FILE:-scripts/vars.sh} to it, or re-run with"
-      print_error "SKIP_GITHUB_ORG_CHECK=true to bypass this check."
-      print_error "See k8s-operator/config/integrations/github/README.md."
-      exit 1
-      ;;
-    missing)
-      print_error "GITHUB_ORG='${org}' does not exist on GitHub."
-      print_error "Check the spelling. The Token Minter resolves installations at"
-      print_error "/orgs/${org}/installation, so a name that does not exist fails every"
-      print_error "token request after deployment."
-      print_error "Edit GITHUB_ORG in ${VARS_FILE:-scripts/vars.sh}, or re-run with"
-      print_error "SKIP_GITHUB_ORG_CHECK=true to bypass this check."
-      print_error "(GitHub Enterprise Server is not supported: this check, and the Minter,"
-      print_error "both talk to api.github.com.)"
-      exit 1
-      ;;
-    *)
-      print_warning "Could not determine whether '${org}' is an organization; continuing."
-      return 0
-      ;;
-  esac
 }
 
 cluster_exists() {
