@@ -1568,10 +1568,13 @@ main() {
   print_step "8. GitOps Infrastructure Repository Setup"
   local github_org="${PARAM_GITOPS_ORG:-}"
   local github_repo="${PARAM_GITOPS_REPO:-gke-fleet-iac}"
-  local github_app_id=""
-  local kms_keyring="github-token-minter-keyring"
-  local kms_key="github-token-minter-key"
-  local github_pem_path=""
+  # Env fallbacks, not bare empties: the non-interactive path never reaches
+  # the interview prompts below, so GITHUB_APP_ID / GITHUB_PEM_PATH exported
+  # into the run are the only way an automated install can enable the minter.
+  local github_app_id="${GITHUB_APP_ID:-}"
+  local kms_keyring="${KMS_KEYRING:-github-token-minter-keyring}"
+  local kms_key="${KMS_KEY:-github-token-minter-key}"
+  local github_pem_path="${GITHUB_PEM_PATH:-}"
 
   if [ "$PARAM_NON_INTERACTIVE" != "true" ]; then
     local gitops_choice=""
@@ -1985,7 +1988,9 @@ main() {
     exit 1
   fi
   local slow_rollouts=()
-  for deployment in kubeagents-controller-manager litellm platform-agent-gateway; do
+  # kube-agents-controller-manager, not kubeagents-: the chart prefixes the
+  # operator Deployment with the release name.
+  for deployment in kube-agents-controller-manager litellm platform-agent-gateway; do
     if ! kubectl get deployment "$deployment" -n kubeagents-system >/dev/null 2>&1; then
       print_error "Expected deployment '$deployment' was not created."
       exit 1

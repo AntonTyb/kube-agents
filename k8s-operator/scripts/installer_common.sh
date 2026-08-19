@@ -345,12 +345,23 @@ write_tfvars_from_state() {
   # home is the live Secret, so recover any missing key from it the way the
   # retired provision_07 did — best-effort, since on a fresh install there is
   # no cluster to ask yet and the keys are still in the environment.
+  #
+  # Only when kubectl's CURRENT context is this install's cluster (the name
+  # get-credentials writes, which uninstall.sh and upgrade.sh have set by the
+  # time they generate). A stale context pointing at some other install would
+  # otherwise silently donate that environment's credentials to this one.
   local secret_key secret_val
-  if command -v kubectl >/dev/null 2>&1; then
+  local expected_ctx="gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}"
+  if command -v kubectl >/dev/null 2>&1 &&
+    [ "$(kubectl config current-context 2>/dev/null || true)" = "$expected_ctx" ]; then
     for secret_key in API_SERVER_KEY GEMINI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
       [ -z "${!secret_key:-}" ] || continue
-      secret_val=$(kubectl get secret platform-agent-secrets -n "${NAMESPACE:-kubeagents-system}" \
-        -o jsonpath="{.data.${secret_key}}" 2>/dev/null | base64 --decode 2>/dev/null) || secret_val=""
+      # Every stage exits 0 on its own (|| true inside the substitution):
+      # install.sh runs an inherited ERR trap (set -E), and a failing kubectl
+      # here — no cluster yet, stale context — must be a silent no-op, not a
+      # trap-and-abort the outer || can never see.
+      secret_val="$({ kubectl get secret platform-agent-secrets -n "${NAMESPACE:-kubeagents-system}" \
+        -o jsonpath="{.data.${secret_key}}" 2>/dev/null || true; } | base64 --decode 2>/dev/null || true)"
       if [ -n "$secret_val" ]; then
         export "${secret_key}=${secret_val}"
         print_info "Recovered ${secret_key} from the live 'platform-agent-secrets' Secret (vars.sh does not persist it)."

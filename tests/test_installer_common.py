@@ -213,6 +213,9 @@ class InstallerCommonTest(unittest.TestCase):
         kubectl_stub = (
             "#!/usr/bin/env bash\n"
             'case "$*" in\n'
+            # Recovery is gated on the current context being this install's
+            # cluster; the stub answers with the expected gke_<p>_<r>_<c> name.
+            '  *"config current-context"*) printf "gke_test-project_us-central1_test-cluster" ;;\n'
             f'  *"get secret platform-agent-secrets"*) printf "%s" "{recovered_b64}" ;;\n'
             "  *) exit 1 ;;\n"
             "esac\n"
@@ -225,6 +228,26 @@ class InstallerCommonTest(unittest.TestCase):
             )
             self.assertIn("rc=0", proc.stdout, proc.stderr)
             self.assertIn('api_server_key    = "recovered-key"', dest.read_text())
+
+    def test_tfvars_recovery_refuses_a_foreign_kube_context(self):
+        # A stale context pointing at some other install must not donate that
+        # environment's credentials: recovery skips, and the generator fails
+        # on the missing key instead.
+        recovered_b64 = "cmVjb3ZlcmVkLWtleQ=="
+        kubectl_stub = (
+            "#!/usr/bin/env bash\n"
+            'case "$*" in\n'
+            '  *"config current-context"*) printf "gke_other-project_us-east1_other-cluster" ;;\n'
+            f'  *"get secret platform-agent-secrets"*) printf "%s" "{recovered_b64}" ;;\n'
+            "  *) exit 1 ;;\n"
+            "esac\n"
+        )
+        proc = self._run(
+            'rc=0; write_tfvars_from_state /dev/null || rc=$?; echo "rc=$rc"',
+            kubectl_script=kubectl_stub,
+        )
+        self.assertIn("rc=1", proc.stdout, proc.stderr)
+        self.assertIn("API_SERVER_KEY", proc.stderr)
 
 
 if __name__ == "__main__":
