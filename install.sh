@@ -1890,7 +1890,15 @@ main() {
   # the minter when its KMS key holds an ENABLED version (a minter without
   # one never passes readiness and the apply waits on it), so the import is
   # what makes a fresh install with a PEM deploy the minter in one pass.
-  import_github_pem "$project_id" "$region"
+  # Never on a dry run — the import enables the KMS API, creates permanent
+  # key rings, and uploads the key, none of which "creates nothing".
+  if [ "$PARAM_DRY_RUN" = "true" ]; then
+    if [ -n "${GITHUB_APP_ID:-}" ]; then
+      print_info "Dry-run: skipping the GitHub App key import (it creates real KMS objects). Without an ENABLED key version the preview below may defer the minter; the real run imports first and enables it."
+    fi
+  else
+    import_github_pem "$project_id" "$region"
+  fi
 
   local tfvars_file
   tfvars_file="$(tf_compose_dir "$repo_dir")/terraform.tfvars"

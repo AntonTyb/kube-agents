@@ -360,6 +360,20 @@ write_tfvars_from_state() {
       create_cluster="false"
       print_info "Cluster '${CLUSTER_NAME}' already exists and is not in Terraform state; installing onto it (create_cluster = false)."
     fi
+  else
+    # Only a genuine NOT_FOUND means "create it". Reading any other failure —
+    # auth expiry, a network blip — as absence would regenerate
+    # cluster_mode="standard"/create_cluster=true against a live Autopilot
+    # install and plan its replacement under -auto-approve. Refuse to guess.
+    local describe_err
+    describe_err="$({ gcloud container clusters describe "${CLUSTER_NAME}" \
+      --location "${REGION}" --project "${PROJECT_ID}" \
+      --format="value(name)" 2>&1 >/dev/null || true; })"
+    if ! printf '%s' "$describe_err" | grep -qiE "not.?found|404"; then
+      print_error "Could not probe cluster '${CLUSTER_NAME}': ${describe_err:-unknown gcloud failure}"
+      print_info "Refusing to guess between creating and adopting — a wrong guess can plan a live cluster's replacement. Fix the gcloud error and re-run."
+      return 1
+    fi
   fi
 
   # The generator's create/adopt decision, exported for the callers that need

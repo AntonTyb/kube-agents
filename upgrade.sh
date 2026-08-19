@@ -509,7 +509,9 @@ main() {
   print_step "5. Post-Upgrade Health Verification"
   kubectl get ns kubeagents-system >/dev/null
   if [ "$PARAM_UPGRADE_MODE" = "operator" ] || [ "$PARAM_UPGRADE_MODE" = "full" ]; then
-    kubectl rollout status deployment/kubeagents-controller-manager -n kubeagents-system --timeout=120s
+    # kube-agents-controller-manager, not kubeagents-: the chart prefixes the
+    # operator Deployment with the release name.
+    kubectl rollout status deployment/kube-agents-controller-manager -n kubeagents-system --timeout=120s
   fi
   if [ "$PARAM_UPGRADE_MODE" = "harness" ] || [ "$PARAM_UPGRADE_MODE" = "full" ] || [ "$restarted_agent" = "true" ]; then
     kubectl rollout status deployment/platform-agent-gateway -n kubeagents-system --timeout=120s

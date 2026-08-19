@@ -47,7 +47,7 @@ class InstallerCommonTest(unittest.TestCase):
         gcloud_exit=0,
         env=None,
         kubectl_script=None,
-        describe_stub="exit 1",
+        describe_stub='echo "ERROR: (gcloud.container.clusters.describe) NOT_FOUND" >&2; exit 1',
         kms_versions="",
     ):
         """Source installer_common.sh with print stubs and run `script`.
@@ -207,6 +207,18 @@ class InstallerCommonTest(unittest.TestCase):
             content = dest.read_text()
             self.assertIn('cluster_mode               = "standard"', content)
             self.assertIn("create_cluster             = true", content)
+
+    def test_tfvars_refuses_to_guess_on_a_transient_describe_failure(self):
+        # Anything other than NOT_FOUND must abort: reading an auth expiry or
+        # network blip as "cluster absent" regenerates standard/create=true
+        # against a live Autopilot install and plans its replacement.
+        proc = self._run(
+            'rc=0; write_tfvars_from_state /dev/null || rc=$?; echo "rc=$rc"',
+            env={"API_SERVER_KEY": "k"},
+            describe_stub='echo "ERROR: (gcloud) PERMISSION_DENIED: token expired" >&2; exit 1',
+        )
+        self.assertIn("rc=1", proc.stdout, proc.stderr)
+        self.assertIn("Could not probe cluster", proc.stderr)
 
     def test_tfvars_generation_recovers_credentials_from_live_secret(self):
         # PERSIST_SECRETS_ON_DISK=false leaves vars.sh without the keys; the

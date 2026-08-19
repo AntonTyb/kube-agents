@@ -459,8 +459,8 @@ It adds exactly two workloads to `kubeagents-system`.
   [#712](https://github.com/gke-labs/kube-agents/issues/712) a 30s liveness delay
   carried that budget instead, which put the third failure at t=50s and killed
   cold containers mid-load. The timings and the reasoning behind each are in
-  `api.yaml`'s probe comment, which is canonical for them; step 13's rollout gate
-  is sized to cover a pull plus that budget.
+  `api.yaml`'s probe comment, which is canonical for them; any rollout wait on
+  this Deployment is sized to cover a pull plus that budget.
 - `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`. The embedding and reranking
   models are baked into the image, so the pod needs **no Hugging Face egress** —
   and both flags must stay set, or the libraries reach out on every cold start and
