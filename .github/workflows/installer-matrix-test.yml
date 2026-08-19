@@ -70,7 +70,14 @@ jobs:
             secrets\ versions\ access*) echo "test-model-key" ;;
             config\ set\ project*) ;;
             # The tfvars generator's liveness probes: no cluster, no state.
-            container\ clusters\ describe*) exit 1 ;;
+            # The describe stub must fail the way real gcloud does — a
+            # NOT_FOUND on stderr — because the generator only reads that as
+            # "cluster absent" and refuses to guess on any other failure
+            # (guessing is how a transient error plans a live cluster's
+            # replacement).
+            container\ clusters\ describe*) echo "ERROR: (gcloud.container.clusters.describe) NOT_FOUND: Not found." >&2; exit 1 ;;
+            # The minter gate's key-version probe: no ENABLED version.
+            kms\ keys\ versions\ list*) exit 0 ;;
             storage\ cat*) exit 1 ;;
             *) echo "Unexpected gcloud invocation: $*" >&2; exit 1 ;;
           esac
