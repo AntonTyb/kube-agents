@@ -171,23 +171,27 @@ main() {
 
   local script_dir repo_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${script_dir}/k8s-operator/scripts/teardown.sh" ]; then
+  if [ -f "${script_dir}/terraform/examples/full-install/lifecycle.sh" ]; then
     repo_dir="$script_dir"
-  elif [ -f "$(pwd)/k8s-operator/scripts/teardown.sh" ]; then
+  elif [ -f "$(pwd)/terraform/examples/full-install/lifecycle.sh" ]; then
     repo_dir="$(pwd)"
   else
     TEMP_REPO_DIR="$(mktemp -d)"
     repo_dir="${TEMP_REPO_DIR}/kube-agents"
     if [ -n "$PARAM_SOURCE_REF" ]; then
-      print_info "Fetching the teardown scripts pinned at '${PARAM_SOURCE_REF}'..."
+      print_info "Fetching the teardown engine pinned at '${PARAM_SOURCE_REF}'..."
       git clone --filter=blob:none --no-checkout https://github.com/gke-labs/kube-agents.git "$repo_dir"
       git -C "$repo_dir" fetch --depth=1 origin "$PARAM_SOURCE_REF"
       git -C "$repo_dir" checkout --detach FETCH_HEAD
     else
-      print_warning "No --source-ref given; fetching the teardown scripts from main, which may be newer than your installed release."
+      print_warning "No --source-ref given; fetching the teardown engine from main, which may be newer than your installed release."
       git clone --depth=1 https://github.com/gke-labs/kube-agents.git "$repo_dir"
     fi
   fi
+  # Defaults, validators, and the terraform.tfvars generator shared with
+  # install.sh. Print helpers are already defined above, as the file expects.
+  # shellcheck disable=SC1091
+  source "${repo_dir}/k8s-operator/scripts/installer_common.sh"
   if [ -f "${repo_dir}/k8s-operator/scripts/vars.sh" ]; then
     # shellcheck disable=SC1091
     if ! source "${repo_dir}/k8s-operator/scripts/vars.sh"; then
@@ -235,10 +239,9 @@ main() {
 
   print_step "2. Executing Automated Teardown Engine"
 
-  # The delegated teardown steps re-source vars.sh via ensure_teardown_state,
-  # so exporting alone is not enough: an explicit CLI target override must be
-  # written into the state file, or teardown would silently act on the saved
-  # project/cluster/region instead of the target confirmed above.
+  # Keep the state file agreeing with the confirmed target: the tfvars
+  # generator below reads the environment, but a saved vars.sh that names a
+  # different cluster would mislead the next tool that sources it.
   local state_file="${repo_dir}/k8s-operator/scripts/vars.sh"
   if [ -f "$state_file" ]; then
     if [ -n "$PARAM_PROJECT_ID" ]; then
@@ -257,10 +260,32 @@ main() {
   export REGION="$target_region"
   export NO_CONFIRM="1"
 
-  cd "${repo_dir}/k8s-operator"
-  bash scripts/teardown.sh -y --no-confirm
-  rm -f scripts/vars.sh
-  cd "$repo_dir"
+  # The engine is `lifecycle.sh destroy` against the install's Terraform state
+  # in GCS (derived from the coordinates, so a fresh clone finds it). An
+  # install with no state anywhere was made by the retired script pipeline —
+  # this uninstaller cannot take it apart, but the release that installed it
+  # can, which is exactly what --source-ref pins.
+  local compose_dir="${repo_dir}/terraform/examples/full-install"
+  export KUBE_AGENTS_STATE_BUCKET="${KUBE_AGENTS_STATE_BUCKET:-auto}"
+  export KUBE_AGENTS_STATE_PREFIX
+  KUBE_AGENTS_STATE_PREFIX="$(tf_state_prefix)"
+  if ! gcloud storage cat "gs://$(tf_state_bucket)/$(tf_state_prefix)/default.tfstate" >/dev/null 2>&1 \
+    && [ ! -f "${compose_dir}/terraform.tfstate" ]; then
+    print_error "No Terraform state found for '${target_cluster}' (gs://$(tf_state_bucket)/$(tf_state_prefix)) and none locally."
+    print_info "If this install was made by a release with the script pipeline (pre-Terraform engine), re-run with --source-ref=<that release> so its own teardown runs."
+    exit 1
+  fi
+
+  # terraform destroy still evaluates the configuration, so required variables
+  # must be present even from a fresh clone; the placeholder key feeds nothing
+  # that survives the destroy.
+  export API_SERVER_KEY="${API_SERVER_KEY:-uninstall-placeholder}"
+  write_tfvars_from_state "${compose_dir}/terraform.tfvars"
+  (
+    cd "$compose_dir"
+    ./lifecycle.sh destroy -auto-approve -input=false
+  )
+  rm -f "$state_file"
 
   write_report "SUCCESS"
 

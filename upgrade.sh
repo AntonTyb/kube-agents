@@ -298,16 +298,16 @@ main() {
 
   local script_dir repo_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${script_dir}/k8s-operator/scripts/provision_03_gcp_gke_operator.sh" ]; then
+  if [ -f "${script_dir}/k8s-operator/scripts/installer_common.sh" ]; then
     repo_dir="$script_dir"
     verify_local_source_ref "$repo_dir" "$PARAM_IMAGE_TAG"
-  elif [ -f "$(pwd)/k8s-operator/scripts/provision_03_gcp_gke_operator.sh" ]; then
+  elif [ -f "$(pwd)/k8s-operator/scripts/installer_common.sh" ]; then
     repo_dir="$(pwd)"
     verify_local_source_ref "$repo_dir" "$PARAM_IMAGE_TAG"
   else
     TEMP_REPO_DIR="$(mktemp -d)"
     repo_dir="${TEMP_REPO_DIR}/kube-agents"
-    print_info "Fetching provisioning scripts for '${PARAM_IMAGE_TAG}'..."
+    print_info "Fetching the upgrade engine for '${PARAM_IMAGE_TAG}'..."
     git clone --filter=blob:none --no-checkout https://github.com/gke-labs/kube-agents.git "$repo_dir"
     git -C "$repo_dir" fetch --depth=1 origin "$PARAM_IMAGE_TAG"
     git -C "$repo_dir" checkout --detach FETCH_HEAD
@@ -317,6 +317,18 @@ main() {
   print_step "1. Validating Upgrade Target & Environment"
   print_info "Upgrade Mode: ${C_BOLD}${PARAM_UPGRADE_MODE}${C_RESET}"
   print_info "Target Image Tag: ${C_BOLD}${PARAM_IMAGE_TAG}${C_RESET}"
+
+  local required_tools=(gcloud kubectl helm)
+  if [ "$PARAM_UPGRADE_MODE" = "full" ]; then
+    required_tools+=(terraform)
+  fi
+  local tool
+  for tool in "${required_tools[@]}"; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      print_error "Required CLI tool '$tool' is not installed."
+      exit 1
+    fi
+  done
 
   local state_file="${repo_dir}/k8s-operator/scripts/vars.sh"
   local state_loaded="false"
@@ -407,29 +419,67 @@ main() {
   print_step "3. Reconciling Pod-Scoped Session Keys"
   backfill_session_kv_keys "$target_namespace"
 
+  # Shared defaults and the terraform.tfvars generator. Print helpers are
+  # already defined above, as the file expects.
+  # shellcheck disable=SC1091
+  source "${repo_dir}/k8s-operator/scripts/installer_common.sh"
+
+  # Helm never touches the crds/ directory on upgrade — that is Helm's own
+  # documented behaviour, and the Terraform helm provider inherits it — so CRD
+  # schema changes are applied here first, for every mode that rolls the
+  # operator. Server-side apply, because these objects are large and have had
+  # several owners.
+  apply_crd_upgrades() {
+    print_info "Applying CRD updates from charts/kube-agents/crds..."
+    kubectl apply --server-side --force-conflicts -f "${repo_dir}/charts/kube-agents/crds/" >/dev/null
+  }
+
+  # The chart-only fast path: a mode that moves no GCP resource re-tags one
+  # image on the live release and leaves the rest of the values as they are.
+  # The regenerated tfvars carry the same new tag, so the next full
+  # `terraform apply` agrees with the release instead of reverting it.
+  helm_retag() {
+    local set_key="$1"
+    helm upgrade kube-agents "${repo_dir}/charts/kube-agents" \
+      --namespace "$target_namespace" --reuse-values \
+      --set "${set_key}=${PARAM_IMAGE_TAG}" --wait --timeout 10m
+  }
+
+  write_tfvars_from_state "${repo_dir}/terraform/examples/full-install/terraform.tfvars" "$PARAM_IMAGE_TAG"
+
+  if ! helm status kube-agents -n "$target_namespace" >/dev/null 2>&1; then
+    print_error "No Helm release 'kube-agents' in namespace '$target_namespace'."
+    print_info "This install predates the Terraform + Helm engine. Upgrade it with the release that installed it (curl the matching versioned upgrade.sh), or re-install with install.sh to adopt the new engine."
+    exit 1
+  fi
+
   case "$PARAM_UPGRADE_MODE" in
     operator)
       print_step "4. Upgrading Kubernetes Operator (CRDs & Controller Manager)"
-      cd "${repo_dir}/k8s-operator"
-      IMAGE_TAG="$PARAM_IMAGE_TAG" NO_CONFIRM=1 ./scripts/provision_03_gcp_gke_operator.sh
-      cd "$repo_dir"
+      apply_crd_upgrades
+      helm_retag "operator.image.tag"
       print_success "Kubernetes Operator upgraded successfully!"
       ;;
 
     harness)
       print_step "4. Upgrading Platform Agent Deployment & Identity"
-      cd "${repo_dir}/k8s-operator"
-      IMAGE_TAG="$PARAM_IMAGE_TAG" NO_CONFIRM=1 ./scripts/provision_08_deploy_platform_agent.sh
-      cd "$repo_dir"
+      helm_retag "platformAgent.deployment.image.tag"
       print_success "Platform Agent deployment upgraded successfully!"
       ;;
 
     full)
-      print_step "4. Executing Full Atomic Upgrade (Operator, Harness & Skills)"
-      cd "${repo_dir}/k8s-operator"
-      IMAGE_TAG="$PARAM_IMAGE_TAG" NO_CONFIRM=1 ./scripts/provision_03_gcp_gke_operator.sh
-      IMAGE_TAG="$PARAM_IMAGE_TAG" NO_CONFIRM=1 ./scripts/provision_08_deploy_platform_agent.sh
-      cd "$repo_dir"
+      print_step "4. Executing Full Atomic Upgrade (Terraform + Helm)"
+      apply_crd_upgrades
+      # A full terraform apply against the regenerated tfvars: both image tags
+      # move, and every setting saved in vars.sh is re-rendered — the successor
+      # of the old path's re-render of the CR from saved state.
+      (
+        cd "${repo_dir}/terraform/examples/full-install"
+        export KUBE_AGENTS_STATE_BUCKET="${KUBE_AGENTS_STATE_BUCKET:-auto}"
+        export KUBE_AGENTS_STATE_PREFIX
+        KUBE_AGENTS_STATE_PREFIX="$(tf_state_prefix)"
+        ./lifecycle.sh apply -auto-approve -input=false
+      )
       print_success "Full atomic upgrade completed successfully!"
       ;;
   esac
