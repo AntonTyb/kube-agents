@@ -47,24 +47,19 @@ START_TIME=$SECONDS
 echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Cleaning Up GKE Resources ==="
 
 STEP_START=$SECONDS
-echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Step 1: Undeploying LiteLLM Gateway ==="
-./k8s-operator/scripts/teardown_09_deploy_litellm.sh --no-confirm || true
-echo "✓ LiteLLM Gateway teardown finished in $((SECONDS - STEP_START))s"
+echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Step 1: Uninstalling the kube-agents release ==="
+# The chart's pre-delete hook removes the PlatformAgent CR and waits for the
+# operator to clear its finalizer, so one uninstall replaces the old
+# per-step teardown scripts (09 LiteLLM, 08 CR, 07 secrets, 03 operator).
+helm uninstall kube-agents -n "${NAMESPACE}" --wait --timeout 10m || true
+echo "✓ Release uninstall finished in $((SECONDS - STEP_START))s"
 
 STEP_START=$SECONDS
-echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Step 2: Deleting PlatformAgent Custom Resource ==="
-./k8s-operator/scripts/teardown_08_deploy_platform_agent.sh --no-confirm || true
-echo "✓ PlatformAgent CR teardown finished in $((SECONDS - STEP_START))s"
-
-STEP_START=$SECONDS
-echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Step 3: Deleting Secrets ==="
-./k8s-operator/scripts/teardown_07_gcp_k8s_secrets.sh --no-confirm || true
-echo "✓ Secrets deletion finished in $((SECONDS - STEP_START))s"
-
-STEP_START=$SECONDS
-echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Step 4: Undeploying Operator Controller Manager & CRDs ==="
-./k8s-operator/scripts/teardown_03_gcp_gke_operator.sh --no-confirm || true
-echo "✓ Operator & CRD teardown finished in $((SECONDS - STEP_START))s"
+echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Step 2: Deleting CRDs ==="
+# Helm leaves crds/ objects behind by design; a PR evaluation cluster should
+# not accumulate them.
+kubectl delete -f charts/kube-agents/crds/ --ignore-not-found || true
+echo "✓ CRD deletion finished in $((SECONDS - STEP_START))s"
 
 TOTAL_DURATION=$((SECONDS - START_TIME))
 echo "=== [$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Cleanup Complete (Total Duration: ${TOTAL_DURATION}s) ==="

@@ -11,11 +11,12 @@ README covers only the manifests in this directory.
 ## Install
 
 Nothing here is a manual step. Hindsight is
-[provisioning step 13](../../../scripts/README.md), so a full install
-brings it up along with everything else:
+the chart (`hindsight.*` in `charts/kube-agents/values.yaml`), which renders
+the same store whenever a hindsight-backed memory provider is selected. These
+kustomize copies are the dev path:
 
 ```sh
-make -C k8s-operator gcp-provision-13-hindsight   # or the whole provision.sh run
+make -C k8s-operator deploy-hindsight
 ```
 
 The step deploys the manifests and waits for `hindsight-api` to become ready,
@@ -109,9 +110,9 @@ retain strategies on the first session that stores anything.
 
 ## Teardown
 
-`teardown_13_deploy_hindsight.sh` removes the workloads and **keeps the volume**.
+`make -C k8s-operator undeploy-hindsight` removes the workloads and **keeps the volume**.
 A StatefulSet's `volumeClaimTemplate` PVC is not owned by these manifests, so
-re-running the provisioning step reattaches it with every memory intact. Discard
+re-deploying reattaches it with every memory intact. Discard
 them explicitly:
 
 ```sh

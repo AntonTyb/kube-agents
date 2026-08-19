@@ -67,9 +67,9 @@ operator:
     # PlatformAgent CR, so on a fresh install the webhooks are registered while
     # the operator is still waiting for a cert cert-manager has not issued yet.
     # Under `Fail` the API server would then reject this chart's own PlatformAgent
-    # CR and the install would deadlock every time. The kustomize path does not
-    # hit this because provision_03 waits for the operator to be Available and a
-    # later step applies the CR.
+    # CR and the install would deadlock every time. The kustomize path did not
+    # hit this because its operator deploy waited for the operator to be
+    # Available before a later step applied the CR.
     #
     # What `Ignore` costs: a PlatformAgent written while the operator is down is
     # admitted without the webhook's defaulting and validation. The CRD's CEL
@@ -391,8 +391,8 @@ platformAgent:
     #   SESSION_KV_SALT     HMAC salt for pseudonymising chat identities
     # With create=true they are generated on install and carried forward on
     # upgrade. With create=false (the production path) they come from whatever
-    # created the Secret — provision_07_gcp_k8s_secrets.sh and the
-    # terraform/examples/full-install composition both generate them.
+    # created the Secret — the terraform/examples/full-install composition
+    # generates them.
     # If they are absent the pod still starts, but not everything in it does:
     #   - the in-pod k8s-event-watcher treats an empty SESSION_KV_API_KEY as
     #     fatal and exits on every start, so NO cluster events are watched.
@@ -410,8 +410,8 @@ platformAgent:
       # URL). Empty leaves the GitHub integration unconfigured.
       gitRepo: ""
     googleChat:
-      # Requires the Chat Pub/Sub backend (provision_05_gcp_gchat.sh or
-      # terraform/modules/chat-pubsub). projectId is taken from
+      # Requires the Chat Pub/Sub backend (terraform/modules/chat-pubsub).
+      # projectId is taken from
       # platformAgent.harness.projectId.
       enabled: false
       topicName: platform-agent-chat-events

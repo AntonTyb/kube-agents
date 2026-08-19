@@ -10,7 +10,7 @@ This repository contains the Kubernetes Agentic Harness (`kube-agents`). It is a
   - `chat/`: The Planning Agent front door — the `default` Hermes profile that receives chat ingress, plans the work, and delegates each piece to a specialist.
   - `platform/`: Configuration for the Platform Agent, scaffolded at pod startup into the `platform` profile.
   - `cluster/`: The Cluster Agent profile _template_ (persona, scoped config, and runtime-debugging skills). The Platform Agent scaffolds this into per-cluster Hermes profiles at runtime; it is not deployed directly.
-- `.agents/skills/`: Repository-level skills, not shipped in the agent images — review skills (adversarial change review, security audits, docs-drift, IaC parity, skill quality) run against pull requests and clusters, plus the `install-kube-agents`/`uninstall-kube-agents`/`upgrade-kube-agents` lifecycle skills that drive the repository's installer scripts.
+- `.agents/skills/`: Repository-level skills, not shipped in the agent images — review skills (adversarial change review, security audits, docs-drift, skill quality) run against pull requests and clusters, plus the `install-kube-agents`/`uninstall-kube-agents`/`upgrade-kube-agents` lifecycle skills that drive the repository's installer scripts.
 - `charts/`: Canonical Helm charts (`kube-agents`) for deploying the Kube-Agents operator and profiles.
 - `terraform/`: Companion reusable Terraform modules (`gke-cluster`, `kube-agents-iam`, `chat-pubsub`, `github-minter`, `gke-backup-plan`) for infrastructure provisioning, plus `examples/full-install/`, the single-apply composition that installs the Helm chart on top.
 - `deploy/`: Deployment infrastructure code (Dockerfile, Kustomize bases, shared runtime assets).
@@ -220,17 +220,15 @@ documentation map (`docs/README.md`) — the same four checks CI runs.
   - **If the change cannot reach a running installation** — docs-only, a CI workflow, a code path
     that needs infrastructure you do not have — write "Not live-tested" and say why. An empty
     section is not an answer.
-- **IaC parity review when a PR touches more than one install surface's territory:**
-  the provisioning scripts (`k8s-operator/scripts/`, `k8s-operator/config/`), the
-  Terraform modules, and the Helm chart each express the same install, and nothing in
-  the languages keeps them together. `make iac-parity-check`
-  (`scripts/check_iac_parity.py`) enforces the scalar subset — image tags, IAM role
-  bundles, identifiers, KMS and backup defaults — and CI runs it. Run the
-  `review-iac-parity` skill (`.agents/skills/review-iac-parity/SKILL.md`) for the
-  structural drift no scalar comparison catches: a resource only one surface creates,
-  a knob only one surface can express. The scripts and `k8s-operator/config/` are the
-  source of truth; deliberate divergences are listed in both the skill and the
-  script's docstring, and adding one means editing both.
+- **The install has one engine: Terraform + Helm.** `terraform/examples/full-install`
+  (through its `lifecycle.sh`) owns every GCP resource and the chart owns every
+  Kubernetes resource; `install.sh` / `uninstall.sh` / `upgrade.sh` are front doors
+  that generate `terraform.tfvars` and drive it. Do not add a second expression of an
+  install step — a kubectl-applied manifest a chart template already renders, a gcloud
+  call the composition already makes. The two places manifests still exist twice on
+  purpose (`k8s-operator/config/crd` + `config/rbac` mirrored into the chart by
+  `make chart-check`, and the kustomize integration manifests kept in step with the
+  chart templates for the dev path) each have a check or a comment saying so.
 - **Expect an automated review after opening a PR.** Opening the pull request starts
   `kube-agents-bot`; see
   [Automated Review After Opening a Pull Request](#automated-review-after-opening-a-pull-request)

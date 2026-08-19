@@ -33,8 +33,8 @@ Canonical GKE-oriented Helm chart for deploying the Kube-Agents Kubernetes Opera
   `create=true` the chart generates them on install and carries the existing
   values forward on upgrade — rotating the salt would re-anonymise every user,
   severing their past sessions from their future ones. With `create=false`,
-  whatever created the Secret supplies them; `provision_07_gcp_k8s_secrets.sh`
-  and the Terraform example both do.
+  whatever created the Secret supplies them; the Terraform full-install
+  composition does.
 
   Absent, the pod starts anyway — but the in-pod `k8s-event-watcher`
   authenticates with `SESSION_KV_API_KEY`, treats an empty value as fatal, and
@@ -186,10 +186,9 @@ resolves to that GSA:
 ```
 
 `terraform/examples/full-install` wires all of this up when
-`model_provider = "vertex_ai"`. The provisioning-script path does the same via
-`make gcp-provision-04-iam` (identity and roles) plus
-`make gcp-provision-09-litellm` (the annotated KSA), both run from
-`k8s-operator/`.
+`model_provider = "vertex_ai"` — the second `kube-agents-iam` module
+instantiation creates the identity and roles, and the chart values above carry
+the annotated KSA.
 
 ### Turning telemetry off
 
@@ -216,9 +215,9 @@ Use `telemetry.otlpEndpoint` instead when you do have a collector to point at.
 ### Integrations
 
 - **Google Chat** — `platformAgent.integration.googleChat.enabled=true` plus the
-  topic/subscription names (defaults match the provisioning scripts and the
-  `chat-pubsub` Terraform module). Requires the Chat Pub/Sub backend to exist
-  (`provision_05_gcp_gchat.sh` or `terraform/modules/chat-pubsub`); `projectId`
+  topic/subscription names (defaults match the `chat-pubsub` Terraform
+  module). Requires the Chat Pub/Sub backend to exist
+  (`terraform/modules/chat-pubsub`); `projectId`
   is taken from `platformAgent.harness.projectId`. Restrict access via
   `allowedUsers` (empty = everyone).
 - **Slack** — `platformAgent.integration.slack.enabled=true`; the bot/app
@@ -236,10 +235,9 @@ is the canonical walkthrough, including the pairing-code approval.
 ### Agent runtime knobs
 
 `platformAgent.harness.hermes`, `platformAgent.harness.memory`, and
-`platformAgent.deployment.availability` expose the remaining fields the
-provisioning scripts substitute into
-[`platform-agent.yaml.template`](../../k8s-operator/scripts/platform-agent.yaml.template),
-so a chart install can reach the same CR as a script install. Each one defaults
+`platformAgent.deployment.availability` expose the remaining PlatformAgent CR
+fields, so a chart install can reach any CR the retired script path could
+render. Each one defaults
 to `null`/`""`, which **omits** the field and lets the CRD's own default apply
 — setting `false` is therefore distinct from leaving it unset, and `replicas: 0`
 means zero rather than unset.
@@ -259,11 +257,12 @@ node's cache. The two install surfaces agree on `Always` for the mutable-tag
 case they were both written for, and `make iac-parity-check` holds them there;
 an install at a pinned release tag is the case that wants the override.
 
-Two knobs have no Terraform or chart-side infrastructure behind them:
+Two knobs need context beyond the chart:
 
-- `deployment.availability.runtimeClassName: gvisor` needs the GKE Sandbox node
-  pool that [`provision_02_gvisor_nodepool.sh`](../../k8s-operator/scripts/provision_02_gvisor_nodepool.sh)
-  creates; the Autopilot `gke-cluster` module has no equivalent.
+- `deployment.availability.runtimeClassName: gvisor` needs a GKE Sandbox node
+  pool on a Standard cluster — the `gke-cluster` module's
+  `enable_gvisor_node_pool` creates one; Autopilot ships the RuntimeClass
+  natively.
 - `harness.hermes.dashboardEnabled` is the one field where the two install paths
   disagree by default: the CRD defaults it to `true`, the script path to
   `false`. Set it explicitly when the two installs must match.

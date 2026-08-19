@@ -43,7 +43,7 @@ The App may be owned by the organization or by a personal account, but an App cr
 
 ### Provisioning Configuration Variables
 
-To deploy the agent with GitHub integration, the `vars.sh` file (used by the `provision.sh` script) must be populated with the details of your GitHub App.
+To deploy the agent with GitHub integration, `install.sh` collects the details of your GitHub App into `vars.sh` (and the chart's `githubMinter.*` values through the generated `terraform.tfvars`).
 
 - `GITHUB_APP_ID`: The unique numeric ID of the GitHub App (found in the App's General Settings).
 - `GITHUB_ORG`: The name of the GitHub organization hosting the repository. This must be an organization, not a user account — see [The Target Repository Must Be Organization-Owned](#the-target-repository-must-be-organization-owned).
@@ -71,7 +71,7 @@ The Minty CLI abstracts this complex cryptographic workflow. It automatically pr
 
 It is worth knowing the recovery path exists, though, because the script's own advice is circular when Go is the missing piece: it warns `Go is required to run the Minty CLI tool` or `Failed to import GitHub Private Key to KMS. You must import it manually` — and the manual instructions it prints are another `go run ./cmd/minty` invocation. Either way it continues, leaving the KMS key with no enabled version, so the Minter deploys and then never passes its readiness probe.
 
-`gcloud` does the same import in four commands. Run them, then re-run `provision_10_deploy_github_minter.sh`:
+`gcloud` does the same import in four commands. Run them, then restart the minter Deployment:
 
 ```bash
 # 1. PKCS#1 (what GitHub downloads) to unencrypted PKCS#8 DER (what KMS accepts).

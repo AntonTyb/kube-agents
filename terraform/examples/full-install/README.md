@@ -1,10 +1,10 @@
 # Full install (Terraform root composition)
 
 A single `terraform apply` that provisions everything a running Platform Agent
-needs — the IaC counterpart of the interactive
-[`k8s-operator/scripts/provision.sh`](../../../k8s-operator/scripts/provision.sh)
-flow. Use one or the other per project, not both: they would fight over the
-same cluster, service accounts, and IAM bindings.
+needs. This composition **is** the install engine: the repository-root
+`install.sh` generates its `terraform.tfvars` and drives it through
+`lifecycle.sh`, and applying it by hand with your own tfvars is the same
+install without the interview.
 
 ## What it provisions
 
@@ -29,9 +29,8 @@ same cluster, service accounts, and IAM bindings.
   ([`github-minter`](../../modules/github-minter) module): minter service
   account plus a KMS key ring and signing key.
 - Unless `enable_cert_manager = false`, [cert-manager](https://cert-manager.io)
-  via `helm_release`, pinned to the same version
-  [`provision_03_gcp_gke_operator.sh`](../../../k8s-operator/scripts/provision_03_gcp_gke_operator.sh)
-  installs. It issues the serving certificate for the operator's admission
+  via `helm_release`, pinned in `cert_manager_version`.
+  It issues the serving certificate for the operator's admission
   webhooks, which this composition turns on (`enable_webhooks`, default true)
   because it can guarantee the dependency — a bare `helm install` of the chart
   cannot, and leaves them off. See [cert-manager](#cert-manager) below.
@@ -160,9 +159,8 @@ cert-manager serving first.
 
 ### IAM roles (`permission_set` and `project_roles`)
 
-`permission_set` names one of the bundles
-[`k8s-operator/scripts/provision_04_gcp_iam.sh`](../../../k8s-operator/scripts/provision_04_gcp_iam.sh)
-grants, using the same vocabulary as the scripts' `PLATFORM_AGENT_PERMISSION_SET`:
+`permission_set` names one of the agent's GCP IAM role bundles (the same
+vocabulary the installer's `--permission-set` flag uses):
 
 | `permission_set`      | Roles granted                                           |
 | --------------------- | ------------------------------------------------------- |

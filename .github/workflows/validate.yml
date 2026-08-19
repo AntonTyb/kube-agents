@@ -58,9 +58,6 @@ jobs:
       - name: Check the container-image inventory
         run: make images-check
 
-      - name: Check the install surfaces agree
-        run: make iac-parity-check
-
       - name: Validate Helm Chart
         run: |
           # clusterName/location/projectId are required values with no
@@ -86,8 +83,7 @@ jobs:
           # it exists over `with`, and the one thing here no other check covers.
           # A regression drops an explicit `dashboardEnabled: false` from the CR,
           # the CRD default of `true` applies, and the render stays valid YAML:
-          # lint passes, iac-parity-check passes (it reads values.yaml, not the
-          # render), and the dashboard comes up on an install that asked for it
+          # lint passes, and the dashboard comes up on an install that asked for it
           # off.
           # --show-only isolates the CR: `memory:` also appears in every
           # resources block, and matching one of those would make this pass for

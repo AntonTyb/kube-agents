@@ -44,12 +44,12 @@ Pinned here so `make mirror-images` and the install ask for the same version.
 | `fluent-bit` | `docker.io/fluent/fluent-bit` | `5.1.0` | `FLUENT_BIT_IMAGE` | The logging sidecar the operator injects into every agent pod. |
 | `k8s` | `docker.io/alpine/k8s` | `1.34.9` | — | The chart's pre-delete cleanup hook Job. |
 | `github-token-minter-server` | `us-docker.pkg.dev/abcxyz-artifacts/docker-images/github-token-minter-server` | `v2.7.1-amd64` | `GITHUB_MINTER_IMAGE` | The optional GitHub integration. |
-| `hindsight-api` | `ghcr.io/vectorize-io/hindsight-api` | `0.9.1@sha256:24a079bead8aa58e45d728bf535ea727bfe559d8784024b6b9f89d56646954ab` | `HINDSIGHT_API_IMAGE` | Provisioning step 13, when the memory provider uses Hindsight. |
-| `hindsight-postgresql` | `docker.io/ankane/pgvector` | `latest@sha256:956744bd14e9cbdf639c61c2a2a7c7c2c48a9c8cdd42f7de4ac034f4e96b90f8` | `HINDSIGHT_POSTGRES_IMAGE` | Provisioning step 13, alongside the Hindsight API. |
-| `cert-manager-controller` | `quay.io/jetstack/cert-manager-controller` | `v1.21.1` | — | cert-manager, installed by provision_03 unless SKIP_CERT_MANAGER is set. |
-| `cert-manager-cainjector` | `quay.io/jetstack/cert-manager-cainjector` | `v1.21.1` | — | cert-manager, installed by provision_03 unless SKIP_CERT_MANAGER is set. |
-| `cert-manager-webhook` | `quay.io/jetstack/cert-manager-webhook` | `v1.21.1` | — | cert-manager, installed by provision_03 unless SKIP_CERT_MANAGER is set. |
-| `cert-manager-acmesolver` | `quay.io/jetstack/cert-manager-acmesolver` | `v1.21.1` | — | cert-manager's controller, via its --acme-http01-solver-image flag. Never pulled by kube-agents itself, but provision_03 rewrites the flag onto the mirror along with the rest of the manifest, so the copy has to exist. |
+| `hindsight-api` | `ghcr.io/vectorize-io/hindsight-api` | `0.9.1@sha256:24a079bead8aa58e45d728bf535ea727bfe559d8784024b6b9f89d56646954ab` | `HINDSIGHT_API_IMAGE` | The chart, when the memory provider uses Hindsight (make deploy-hindsight for the kustomize dev path). |
+| `hindsight-postgresql` | `docker.io/ankane/pgvector` | `latest@sha256:956744bd14e9cbdf639c61c2a2a7c7c2c48a9c8cdd42f7de4ac034f4e96b90f8` | `HINDSIGHT_POSTGRES_IMAGE` | The chart, alongside the Hindsight API. |
+| `cert-manager-controller` | `quay.io/jetstack/cert-manager-controller` | `v1.21.1` | — | cert-manager, installed by the full-install composition unless enable_cert_manager is false. |
+| `cert-manager-cainjector` | `quay.io/jetstack/cert-manager-cainjector` | `v1.21.1` | — | cert-manager, installed by the full-install composition unless enable_cert_manager is false. |
+| `cert-manager-webhook` | `quay.io/jetstack/cert-manager-webhook` | `v1.21.1` | — | cert-manager, installed by the full-install composition unless enable_cert_manager is false. |
+| `cert-manager-acmesolver` | `quay.io/jetstack/cert-manager-acmesolver` | `v1.21.1` | — | cert-manager's controller, via its --acme-http01-solver-image flag. Never pulled by kube-agents itself; the copy exists so a mirrored cert-manager install can point the flag at it. |
 
 ### Base images
 
