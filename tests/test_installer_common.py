@@ -40,12 +40,21 @@ DATA_MODE_STATE = _state_doc(
 
 
 class InstallerCommonTest(unittest.TestCase):
-    def _run(self, script, gcloud_stdout=None, gcloud_exit=0, env=None, kubectl_script=None):
+    def _run(
+        self,
+        script,
+        gcloud_stdout=None,
+        gcloud_exit=0,
+        env=None,
+        kubectl_script=None,
+        describe_stub="exit 1",
+    ):
         """Source installer_common.sh with print stubs and run `script`.
 
         A stub `gcloud` on PATH prints `gcloud_stdout` (when given) and exits
-        `gcloud_exit`, standing in for `gcloud storage cat` on the state
-        object.
+        `gcloud_exit` for `storage cat` calls on the state object;
+        `clusters describe` runs `describe_stub` (default: exit 1, meaning
+        the cluster does not exist).
         """
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = pathlib.Path(tmp) / "bin"
@@ -56,6 +65,9 @@ class InstallerCommonTest(unittest.TestCase):
             gcloud = bin_dir / "gcloud"
             gcloud.write_text(
                 "#!/usr/bin/env bash\n"
+                'case "$*" in\n'
+                f"  *\"clusters describe\"*) {describe_stub} ;;\n"
+                "esac\n"
                 f"[ -f '{state_file}' ] && cat '{state_file}'\n"
                 f"exit {gcloud_exit}\n"
             )
@@ -154,6 +166,45 @@ class InstallerCommonTest(unittest.TestCase):
         self.assertIn("rc=1", proc.stdout, proc.stderr)
         self.assertNotIn("unbound variable", proc.stderr)
         self.assertIn("API_SERVER_KEY", proc.stderr)
+
+    # ── cluster_mode follows the live cluster ────────────────────────────────
+
+    def test_tfvars_autopilot_cluster_keeps_autopilot_mode(self):
+        # Hardcoding "standard" against a live Autopilot install planned the
+        # cluster's destruction on the next uninstall/upgrade regeneration.
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$?"',
+                env={"API_SERVER_KEY": "k"},
+                describe_stub="printf 'True\\n'; exit 0",
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            content = dest.read_text()
+            self.assertIn('cluster_mode               = "autopilot"', content)
+            # Exists but not in state (the stub serves no state object).
+            self.assertIn("create_cluster             = false", content)
+
+    def test_tfvars_standard_cluster_and_fresh_create_stay_standard(self):
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            # An existing Standard cluster: describe succeeds, empty output.
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$?"',
+                env={"API_SERVER_KEY": "k"},
+                describe_stub="printf '\\n'; exit 0",
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            self.assertIn('cluster_mode               = "standard"', dest.read_text())
+            # No cluster at all: the script-parity create.
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$?"',
+                env={"API_SERVER_KEY": "k"},
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            content = dest.read_text()
+            self.assertIn('cluster_mode               = "standard"', content)
+            self.assertIn("create_cluster             = true", content)
 
     def test_tfvars_generation_recovers_credentials_from_live_secret(self):
         # PERSIST_SECRETS_ON_DISK=false leaves vars.sh without the keys; the

@@ -367,9 +367,20 @@ write_tfvars_from_state() {
     return 1
   fi
 
-  local create_cluster="true"
-  if gcloud container clusters describe "${CLUSTER_NAME}" --location "${REGION}" \
-      --project "${PROJECT_ID}" >/dev/null 2>&1; then
+  # cluster_mode follows the LIVE cluster when there is one. Hardcoding
+  # "standard" here planned the destruction of every existing Autopilot
+  # install the moment a front door regenerated tfvars against it — the
+  # autopilot resource's count went to 0, so uninstall's targeted
+  # deletion-protection apply and upgrade's full apply both became cluster
+  # replacements. A fresh create keeps "standard", the script-parity shape.
+  local create_cluster="true" cluster_mode="standard" autopilot_enabled=""
+  if autopilot_enabled=$(gcloud container clusters describe "${CLUSTER_NAME}" \
+      --location "${REGION}" --project "${PROJECT_ID}" \
+      --format="value(autopilot.enabled)" 2>/dev/null); then
+    if [ "$autopilot_enabled" = "True" ]; then
+      cluster_mode="autopilot"
+      print_info "Cluster '${CLUSTER_NAME}' is an Autopilot cluster; generating cluster_mode = \"autopilot\"."
+    fi
     if tf_state_has_cluster; then
       print_info "Cluster '${CLUSTER_NAME}' exists and is managed by this install's Terraform state."
     else
@@ -426,8 +437,9 @@ write_tfvars_from_state() {
     echo "location     = $(hcl_str "${REGION}")"
     echo ""
     echo "# The shape the retired provisioning scripts built: a Standard cluster with"
-    echo "# the DNS endpoint open and no deletion protection."
-    echo "cluster_mode               = \"standard\""
+    echo "# the DNS endpoint open and no deletion protection. An existing cluster"
+    echo "# keeps its own mode — see the probe above."
+    echo "cluster_mode               = $(hcl_str "${cluster_mode}")"
     echo "create_cluster             = ${create_cluster}"
     echo "allow_external_dns_traffic = true"
     echo "deletion_protection        = false"
