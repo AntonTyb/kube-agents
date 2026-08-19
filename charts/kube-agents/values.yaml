@@ -220,6 +220,54 @@ hindsight:
   networkPolicy: true
   podMonitoring: true
 
+# The GitHub token minter (minty): mints short-lived GitHub App tokens for
+# the GitOps workflow, called by the credential proxy. This is the Kubernetes
+# half only; the GCP half — the minter GSA, its Workload Identity binding,
+# and the import-only KMS signing key — is terraform/modules/github-minter,
+# and the App's private key must be imported into that key before the
+# Deployment passes its readiness probe.
+githubMinter:
+  enabled: false
+  # GitOps org and repository the minty rule scopes tokens to. Required when
+  # enabled.
+  org: ""
+  repo: ""
+  # GitHub App ID. Set, the chart creates the github-app-credentials Secret
+  # (what provision_07 used to do); empty, that Secret must already exist in
+  # the release namespace.
+  appId: ""
+  # KSA/GSA pair for Workload Identity; defaults mirror
+  # terraform/modules/kube-agents-iam and the retired scripts.
+  ksaName: kubeagents-github-minter
+  gsaName: kubeagents-github-minter-gsa
+  # The GSA email allowed to request platform-agent-scope tokens. Empty
+  # derives kubeagents-platform-gsa@<harness.projectId>.iam.gserviceaccount.com.
+  allowedServiceAccount: ""
+  kms:
+    # Defaults mirror terraform/modules/github-minter.
+    keyring: github-token-minter-keyring
+    key: github-token-minter-key
+    # The ENABLED version holding the imported App key. "1" is right unless
+    # the key has been rotated or re-imported.
+    keyVersion: "1"
+    # Empty derives the region from platformAgent.harness.location (zone
+    # suffix stripped) — KMS rings are regional.
+    location: ""
+  # Keep in step with images.json.
+  image:
+    repository: us-docker.pkg.dev/abcxyz-artifacts/docker-images/github-token-minter-server
+    tag: v2.7.1-amd64
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  networkPolicy: true
+
 # The logging sidecar the operator injects into every agent pod. The chart
 # never renders this container itself — it passes the reference to the
 # operator as FLUENT_BIT_IMAGE — but the pin has to live somewhere the mirror

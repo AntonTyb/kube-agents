@@ -2,7 +2,16 @@
 
 Reusable Terraform module for provisioning the GitHub token minter's Google Service Account (GSA), its Workload Identity binding, and the KMS asymmetric signing key it signs GitHub App JWTs with.
 
-The KMS key is created **import-only and empty** (`skip_initial_version_creation = true`): importing the GitHub App private key PEM into it is a separate manual step, performed via `k8s-operator/scripts/provision_10_deploy_github_minter.sh`, which uses the Minty CLI for the cryptographic wrapping.
+The KMS key is created **import-only and empty** (`skip_initial_version_creation = true`): importing the GitHub App private key PEM into it is a separate one-shot step — the PEM must never enter Terraform state — using the Minty CLI for the cryptographic wrapping:
+
+```bash
+go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk \
+  -project-id=<project> -location=<region> \
+  -key-ring=github-token-minter-keyring -key=github-token-minter-key \
+  -private-key=@/path/to/app-private-key.pem
+```
+
+`install.sh` runs this import for you when it collects a PEM path. The minter's Kubernetes half (Deployment, Service, NetworkPolicy, KSA, minty rule ConfigMap) is the chart's `githubMinter.*` values; the minter pod fails its readiness probe until the key version imported here is ENABLED.
 
 > **KMS resources cannot be deleted.** Cloud KMS key rings and keys are never actually
 > destroyed — `terraform destroy` only removes them from state, and a subsequent apply

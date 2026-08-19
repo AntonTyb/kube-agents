@@ -256,9 +256,15 @@ variable "github_repo" {
 }
 
 variable "enable_github_minter" {
-  description = "Provision the GitHub token minter's GCP resources (service account, KMS key ring and signing key)"
+  description = "Provision the GitHub token minter: its GCP resources (service account, KMS key ring and signing key) and, through the chart, its Kubernetes workload. Requires github_repo in owner/repo (or github.com URL) form. The App private key must be imported into the KMS key before the minter goes Ready."
   type        = bool
   default     = false
+}
+
+variable "github_app_id" {
+  description = "GitHub App ID the minter signs as. Set, the chart creates the github-app-credentials Secret; empty, that Secret must already exist in the release namespace before the minter pod can start."
+  type        = string
+  default     = ""
 }
 
 variable "enable_backup_agent" {

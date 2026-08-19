@@ -25,6 +25,15 @@ locals {
   vertex_location = var.vertex_location != "" ? var.vertex_location : var.location
   litellm_ksa     = "kubeagents-litellm"
 
+  # The minter chart values need the GitOps repository split into owner and
+  # name. Accepts the same forms integration.github.gitRepo takes: owner/repo,
+  # or a github.com URL. Anything else leaves both parts empty, which the
+  # helm_release precondition rejects when the minter is enabled.
+  github_repo_path  = trimsuffix(trimprefix(trimprefix(trimprefix(var.github_repo, "https://"), "http://"), "github.com/"), ".git")
+  github_repo_parts = split("/", local.github_repo_path)
+  github_org        = length(local.github_repo_parts) == 2 ? local.github_repo_parts[0] : ""
+  github_repo_name  = length(local.github_repo_parts) == 2 ? local.github_repo_parts[1] : ""
+
   required_apis = toset(concat(local.base_apis, local.chat_apis))
 
   # The permission sets provision_04_gcp_iam.sh grants, kept verbatim so the
@@ -410,6 +419,17 @@ resource "helm_release" "kube_agents" {
         } : {}
       )
     }
+    # The minter's Kubernetes half (Deployment, Service, NetworkPolicy, KSA,
+    # minty rule ConfigMap, github-app-credentials Secret); the GCP half is
+    # module.github_minter above. The App private key still has to be imported
+    # into the module's KMS key before the Deployment goes Ready — see the
+    # github-minter module README.
+    githubMinter = {
+      enabled = var.enable_github_minter
+      org     = local.github_org
+      repo    = local.github_repo_name
+      appId   = var.github_app_id
+    }
     }),
     # Second document rather than a merge() into the first: Helm deep-merges
     # successive values documents, so a caller can reach a single leaf
@@ -430,4 +450,11 @@ resource "helm_release" "kube_agents" {
     google_project_iam_member.litellm_vertex_user,
     helm_release.cert_manager,
   ]
+
+  lifecycle {
+    precondition {
+      condition     = !var.enable_github_minter || (local.github_org != "" && local.github_repo_name != "")
+      error_message = "enable_github_minter requires github_repo in owner/repo (or github.com URL) form — the minty rule ConfigMap is scoped to that repository."
+    }
+  }
 }
