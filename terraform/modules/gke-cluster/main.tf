@@ -66,7 +66,7 @@ resource "google_container_cluster" "autopilot" {
   deletion_protection = var.deletion_protection
   resource_labels     = var.resource_labels
 
-  # Matches provision_01's --enable-fqdn-network-policy. Autopilot always runs
+  # Matches the retired provision_01's --enable-fqdn-network-policy. Autopilot always runs
   # Dataplane V2, so the script's --enable-dataplane-v2 needs no counterpart.
   enable_fqdn_network_policy = var.enable_fqdn_network_policy
 
@@ -92,7 +92,7 @@ resource "google_container_cluster" "autopilot" {
   # operator never asked for one -- and this endpoint is governed by IAM alone,
   # so neither the private endpoint nor master-authorized-networks would be
   # holding it shut. Opting in is therefore a deliberate edit to the caller's
-  # configuration; the gcloud path (provision_01_gcp_cluster.sh) enables it on
+  # configuration; the retired gcloud path enabled it on
   # create only, for the same reason.
   #
   # Once set either way the field is Terraform-managed, so change it here rather
@@ -112,10 +112,8 @@ resource "google_container_cluster" "autopilot" {
     }
   }
 
-  # Backup for GKE. provision_01_gcp_cluster.sh creates its cluster with
-  # `--addons=GcpFilestoreCsiDriver,BackupRestore`, so the agent is installed
-  # on a backup-capable cluster either way; the gke-backup-plan module then
-  # schedules the backups themselves. The agent has to be enabled on the
+  # Backup for GKE: the agent is enabled here, and the gke-backup-plan module
+  # then schedules the backups themselves. The agent has to be enabled on the
   # cluster before a BackupPlan can target it.
   #
   # Only the BackupRestore half is mirrored here. Nothing in the harness mounts

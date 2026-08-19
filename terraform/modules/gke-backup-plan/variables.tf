@@ -14,7 +14,7 @@ variable "location" {
 }
 
 variable "name" {
-  description = "Name of the BackupPlan. Null derives <cluster_name>-backup-plan, the name provision_12_gke_backup_plan.sh uses."
+  description = "Name of the BackupPlan. Null derives <cluster_name>-backup-plan."
   type        = string
   default     = null
 }

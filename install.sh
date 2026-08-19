@@ -140,9 +140,9 @@ Flags for AI Agents & Automation:
                                 proxy)
   --third-party-registry-prefix=PATH
                                 Registry path holding the mirrored third-party images
-                                (cert-manager, LiteLLM, fluent-bit, the GitHub token minter,
-                                Hindsight). Unset leaves them on their upstream registries;
-                                --registry-prefix does not imply it. See 'make mirror-images'
+                                (LiteLLM, fluent-bit, the GitHub token minter, Hindsight).
+                                Unset, they follow --registry-prefix when that is set and
+                                stay upstream otherwise. See 'make mirror-images'
   --allow-unverified-source     Provision from a dirty or mismatched checkout (local script edits
                                 are applied even though the deployed image was built elsewhere)
   --enable-google-chat          Enable Google Chat integration

@@ -253,9 +253,9 @@ immutable tag, where `Always` buys nothing and costs a registry round-trip on
 every pod start. It also removes a fallback: if the agent pod is rescheduled
 while ghcr.io is unreachable or rate-limiting, `Always` fails the pull and the
 pod sits in `ImagePullBackOff` where `IfNotPresent` would have started from the
-node's cache. The two install surfaces agree on `Always` for the mutable-tag
-case they were both written for, and `make iac-parity-check` holds them there;
-an install at a pinned release tag is the case that wants the override.
+node's cache. The chart and the Terraform composition agree on `Always` for the
+mutable-tag case they were both written for; an install at a pinned release
+tag is the case that wants the override.
 
 Two knobs need context beyond the chart:
 

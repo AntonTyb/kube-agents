@@ -8,11 +8,12 @@ The plan is only half of the feature: the Backup for GKE **agent** must also be 
 
 > **Cost.** Backup for GKE bills per backed-up pod and per gigabyte of volume snapshot storage. Nothing is charged until a plan exists, which is why both install paths leave it opt-in.
 
-## Relationship to the provisioning scripts
+## Relationship to the install
 
-This module and `k8s-operator/scripts/provision_12_gke_backup_plan.sh` create the **same** BackupPlan — use one or the other for a given cluster, never both. The script does a check-then-create, so it will happily adopt and reconcile a Terraform-managed plan without Terraform noticing.
+This is the module the full-install composition (and therefore `install.sh`, when
+`ENABLE_GKE_BACKUP_PLAN=true`) uses for the scheduled backups.
 
-The defaults mirror the script's: the name `<cluster_name>-backup-plan`, a `0 2 * * *` schedule, 30-day retention, the `kubeagents-system` namespace, secrets and volume data included, and the schedule un-paused.
+The defaults: the name `<cluster_name>-backup-plan`, a `0 2 * * *` schedule, 30-day retention, the `kubeagents-system` namespace, secrets and volume data included, and the schedule un-paused.
 
 ## Teardown is not symmetric
 

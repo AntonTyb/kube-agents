@@ -425,11 +425,11 @@ rendered — `resolveMemoryProvider` in
 
 Three things then read the choice rather than assuming it:
 
-- **Provisioning step 13 deploys nothing** unless the provider is Hindsight-backed.
-  That is the whole gate — `multiuser_memory` and `none` stand up no database. It
-  exits 0 rather than failing, because for those settings "nothing to deploy" is
-  the step succeeding, and switching the provider later is a matter of re-running
-  it.
+- **The chart's `hindsight.*` values render nothing** unless the provider is
+  Hindsight-backed. That is the whole gate — `multiuser_memory` and `none` stand
+  up no database, and switching the provider later is a matter of re-running the
+  install (one `terraform apply` reconciles the store in or out). The dev copy
+  behaves the same way through `make -C k8s-operator deploy-hindsight`.
 - **The specialist profiles get a provider only if it is Hindsight-backed**, via
   the platform profile's overlay. Anything else is blanked there, because
   [what makes a specialist's memory safe](#what-subagents-get-shared-memory-read-only)
@@ -437,9 +437,9 @@ Three things then read the choice rather than assuming it:
   identity to key on nor a read-only mode.
 - **The one-way file import** below is gated the same way.
 
-The teardown for step 13 is deliberately **not** gated. Undeploy is idempotent, and
-a gate there would orphan the workloads of any install that changed its provider
-after the fact.
+The dev-path undeploy (`make -C k8s-operator undeploy-hindsight`) is deliberately
+**not** gated. Undeploy is idempotent, and a gate there would orphan the workloads
+of any install that changed its provider after the fact.
 
 ### The two pods
 

@@ -85,13 +85,13 @@ variable "namespace" {
 }
 
 variable "permission_set" {
-  description = "Which of provision_04_gcp_iam.sh's role bundles the agent's service account gets: read-only, gke-admin, or custom (custom requires project_roles). Ignored when project_roles is set explicitly."
+  description = "Which GCP IAM role bundle the agent's service account gets: read-only, gke-admin, or custom (custom requires project_roles). Ignored when project_roles is set explicitly."
   type        = string
   default     = "read-only"
 
   validation {
     condition     = contains(["read-only", "gke-admin", "custom"], var.permission_set)
-    error_message = "permission_set must be one of read-only, gke-admin, or custom (the same values the provisioning scripts accept)."
+    error_message = "permission_set must be one of read-only, gke-admin, or custom."
   }
 }
 
@@ -316,13 +316,13 @@ variable "github_app_id" {
 }
 
 variable "enable_backup_agent" {
-  description = "Enable the Backup for GKE agent on the cluster (the BackupRestore addon). True matches the cluster provision_01_gcp_cluster.sh creates; it costs nothing until a BackupPlan targets the cluster, but it must be on before enable_gke_backup_plan can work."
+  description = "Enable the Backup for GKE agent on the cluster (the BackupRestore addon). It costs nothing until a BackupPlan targets the cluster, but it must be on before enable_gke_backup_plan can work."
   type        = bool
   default     = true
 }
 
 variable "enable_gke_backup_plan" {
-  description = "Create a scheduled BackupPlan for the release namespace (mirrors provision_12_gke_backup_plan.sh, which is likewise opt-in). Backups include Secrets and volume data and are billed per backed-up pod and per GB of snapshot storage."
+  description = "Create a scheduled BackupPlan for the release namespace (opt-in). Backups include Secrets and volume data and are billed per backed-up pod and per GB of snapshot storage."
   type        = bool
   default     = false
 }
@@ -346,13 +346,13 @@ variable "backup_encryption_key" {
 }
 
 variable "enable_cert_manager" {
-  description = "Install cert-manager, which issues the serving certificate for the operator's admission webhooks (mirrors provision_03_gcp_gke_operator.sh). Set to false when the target cluster already runs cert-manager: unlike the script, Terraform does not detect an existing install and the apply fails on the existing CRDs. Turning this off with enable_webhooks left on leaves the webhooks without a certificate."
+  description = "Install cert-manager, which issues the serving certificate for the operator's admission webhooks. Set to false when the target cluster already runs cert-manager: Terraform does not detect an existing install and the apply fails on the existing CRDs (install.sh probes for one on the existing-cluster path and sets this for you). Turning this off with enable_webhooks left on leaves the webhooks without a certificate."
   type        = bool
   default     = true
 }
 
 variable "cert_manager_version" {
-  description = "cert-manager chart version, pinned to the release provision_03_gcp_gke_operator.sh installs. Values below 1.15.x need the crds.enabled key in main.tf renamed back to installCRDs."
+  description = "cert-manager chart version. Values below 1.15.x need the crds.enabled key in main.tf renamed back to installCRDs."
   type        = string
   default     = "v1.21.1"
 }

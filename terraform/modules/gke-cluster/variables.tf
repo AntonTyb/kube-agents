@@ -97,7 +97,7 @@ variable "enable_database_encryption" {
 variable "enable_fqdn_network_policy" {
   description = <<-EOT
     Whether to enable FQDN NetworkPolicy on the cluster, matching the
-    --enable-fqdn-network-policy flag provision_01_gcp_cluster.sh passes. The
+    --enable-fqdn-network-policy flag the retired script path passed. The
     operator's opt-in FQDNNetworkPolicy companion (the
     kubeagents.x-k8s.io/enable-fqdn-network-policy annotation) can only enforce
     on clusters where this is on.
@@ -121,8 +121,7 @@ variable "kms_key_name" {
 variable "enable_backup_agent" {
   description = <<-EOT
     Whether to enable the Backup for GKE agent (the BackupRestore addon) on the
-    cluster. Defaults to true, matching the cluster
-    k8s-operator/scripts/provision_01_gcp_cluster.sh creates. Enabling the agent
+    cluster. Defaults to true. Enabling the agent
     costs nothing on its own — backups are only taken once a BackupPlan targets
     the cluster (terraform/modules/gke-backup-plan). Requires
     gkebackup.googleapis.com to be enabled on the project.
@@ -132,13 +131,13 @@ variable "enable_backup_agent" {
 }
 
 variable "standard_machine_type" {
-  description = "Machine type for the Standard cluster's default node pool. The default matches provision_01_gcp_cluster.sh's --machine-type. Only used when cluster_mode = \"standard\"."
+  description = "Machine type for the Standard cluster's default node pool. The default matches the retired provision_01's --machine-type. Only used when cluster_mode = \"standard\"."
   type        = string
   default     = "e2-standard-4"
 }
 
 variable "standard_node_count" {
-  description = "Node count per zone for the Standard cluster's default node pool, matching provision_01_gcp_cluster.sh's --num-nodes. Only used when cluster_mode = \"standard\"."
+  description = "Node count per zone for the Standard cluster's default node pool, matching the retired provision_01's --num-nodes. Only used when cluster_mode = \"standard\"."
   type        = number
   default     = 1
 }
@@ -158,7 +157,7 @@ variable "enable_gvisor_node_pool" {
 }
 
 variable "gvisor_pool_name" {
-  description = "Name of the gVisor node pool, matching provision_02_gvisor_nodepool.sh's GVISOR_POOL_NAME."
+  description = "Name of the gVisor node pool, matching the retired provision_02's GVISOR_POOL_NAME."
   type        = string
   default     = "gvisor-pool"
 }

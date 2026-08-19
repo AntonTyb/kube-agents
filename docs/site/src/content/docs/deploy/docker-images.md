@@ -9,7 +9,7 @@ Every image an install pulls or a rebuild needs, and how their tags are managed.
 
 ## Image inventory
 
-[`images.json`](https://github.com/gke-labs/kube-agents/blob/main/images.json) at the repository root is the source of truth for this list. It is what `make mirror-images` copies from, what the provisioning scripts resolve their third-party defaults from, and what the table below is generated from — so there is one pin per image, not one per install path.
+[`images.json`](https://github.com/gke-labs/kube-agents/blob/main/images.json) at the repository root is the source of truth for this list. It is what `make mirror-images` copies from, what the chart and the dev tooling resolve their third-party pins from, and what the table below is generated from — so there is one pin per image, not one per install path.
 
 That cuts both ways: **a version bump edits `images.json` and nothing else.** The manifest,
 Dockerfile, or chart value that used to carry a pin now names a variable, so editing the old
@@ -188,58 +188,38 @@ one for the images it does not.
 
 | Install path                      | First-party            | Third party                      | If the second is unset              | Reaches cert-manager |
 | --------------------------------- | ---------------------- | -------------------------------- | ----------------------------------- | -------------------- |
-| `install.sh`                      | `--registry-prefix`    | `--third-party-registry-prefix`  | those images stay upstream          | yes                  |
-| Provisioning scripts              | `REGISTRY_PREFIX`      | `THIRD_PARTY_REGISTRY_PREFIX`    | those images stay upstream          | yes                  |
+| `install.sh`                      | `--registry-prefix`    | `--third-party-registry-prefix`  | falls back to the first-party value | **no**               |
 | Helm chart                        | `global.imageRegistry` | `global.thirdPartyImageRegistry` | falls back to the first-party value | n/a                  |
 | Terraform `examples/full-install` | `image_registry`       | `third_party_image_registry`     | falls back to the first-party value | **no**               |
 
-What "third party" covers differs by row, because the paths install different things. Every row
-covers LiteLLM and fluent-bit; the scripts additionally cover the GitHub token minter, Hindsight,
-and cert-manager. The chart never renders cert-manager at all — it expects one to be present
-already — so there is nothing for its prefixes to reach. Terraform is the row to read twice: it
-does install cert-manager, as a separate `helm_release` of the upstream chart, and that release
-is not passed either prefix. On an approved-registry cluster set `enable_cert_manager = false`
-and install cert-manager yourself from the mirror; `images.json` carries all four of its images,
-so `make mirror-images` has already copied them. The composition's
+The rows are one path in three coats: `install.sh` generates the Terraform composition's
+`terraform.tfvars` from its flags, and the composition passes both values to the chart's
+`global.*` keys, so "third party" covers the same set everywhere — LiteLLM, fluent-bit, the
+GitHub token minter, and Hindsight. cert-manager is the exception in every row. The chart never
+renders it — it expects one to be present already — and the composition installs it as a separate
+`helm_release` of the upstream chart that is not passed either prefix. On an approved-registry
+cluster set `enable_cert_manager = false` and install cert-manager yourself from the mirror;
+`images.json` carries all four of its images, so `make mirror-images` has already copied them.
+The composition's
 [README](https://github.com/gke-labs/kube-agents/blob/main/terraform/examples/full-install/README.md)
 has the detail.
 
-The "if the second is unset" column is the one asymmetry in this page, and it is deliberate. `REGISTRY_PREFIX`
-shipped long before this inventory and has always meant "the registry holding the images this
-project builds" — a mirror populated against it holds those and nothing else, so inheriting it
-would send an existing install after cert-manager images its registry was never given, and
-provisioning would fail on ImagePullBackOff with the cluster already created. The chart and
-Terraform values are new in comparison and carry no such promise, so they take the safer default
-of covering everything. To mirror everything from the scripts, set both prefixes — usually to the
-same value. The scripts print a warning if `REGISTRY_PREFIX` is customised while the third-party
-one is not, because that is also what a half-mirrored install looks like.
+`REGISTRY_PREFIX` and `THIRD_PARTY_REGISTRY_PREFIX` are persisted to the installer's state file
+(`vars.sh`) like every other knob, so re-runs reuse them; `terraform.tfvars` is regenerated from
+that state on every run. Changing the registry _after_ a first run means re-running `install.sh`
+with the new flag (or editing the saved values in `vars.sh` — saved state wins over a new
+export).
 
-`REGISTRY_PREFIX` is persisted to the scripts' state file (`vars.sh`) like every other knob, so
-re-runs reuse it; the individual `OPERATOR_IMAGE`, `AGENT_IMAGE`, `REPLAY_IMAGE`,
-`LITELLM_IMAGE`, and `GITHUB_MINTER_IMAGE` variables still override it. Changing the registry
-_after_ a first run means editing the saved values in `vars.sh` — saved state wins over a new
-export — and the scripts warn when a saved image no longer matches the effective prefix.
-
-`IMAGE_TAG` is per-run and is deliberately not saved to `vars.sh`, so those `*_IMAGE` variables
-normally hold a bare repository path. The step that consumes one attaches the current
-`IMAGE_TAG` to it when it names neither a tag nor a digest — `provision_03` for the operator,
-agent, and credential-proxy references, `provision_11` for the replay proxy. The third-party
-images are excluded, because their tags come from `images.json` and have nothing to do with
-`IMAGE_TAG`. Set a value explicitly
-(`OPERATOR_IMAGE=registry.example.com/kube-agents/k8s-operator:1.4.0`) to pin a reference
-independently of `IMAGE_TAG`.
-
-cert-manager is the one install step that applies a manifest it does not own. `provision_03`
-rewrites `quay.io/jetstack/` to the third-party prefix before applying it. Two escape hatches
-sit alongside: `CERT_MANAGER_MANIFEST` points the step at a local or mirrored manifest instead of
-the upstream URL, and `SKIP_CERT_MANAGER=1` skips it entirely where the platform team installs
-cert-manager themselves (the operator's admission webhooks still need it to be present).
+`IMAGE_TAG` is per-run and is deliberately not saved to `vars.sh`: the installer passes it into
+`terraform.tfvars` as `image_tag`, which overrides both first-party image tags in the chart. The
+third-party images are excluded, because their tags come from `images.json` and have nothing to
+do with `IMAGE_TAG`.
 
 ### What the prefix does not cover
 
 Two images are resolved by the operator at reconcile time rather than rendered by any install
-manifest, so they need the operator's own environment set — which the chart and `provision_03`
-now both do automatically when a prefix is in effect:
+manifest, so they need the operator's own environment set — which the chart does automatically
+when a prefix is in effect:
 
 - `PLATFORM_AGENT_IMAGE` — the agent image for a `PlatformAgent` that omits
   `spec.deployment.image`.

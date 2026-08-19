@@ -11,10 +11,12 @@ install without the interview.
 - The required Google APIs (`google_project_service`, never disabled on
   destroy), including the Cloud KMS API for GKE database encryption and the Chat
   API when Google Chat is enabled.
-- A GKE Autopilot cluster ([`gke-cluster`](../../modules/gke-cluster) module)
-  with Workload Identity, Cloud KMS database encryption (CMEK), and the Backup
-  for GKE agent enabled, and the `kube-agents-host=true` discovery label
-  applied.
+- A GKE cluster ([`gke-cluster`](../../modules/gke-cluster) module) — Autopilot
+  by default, `cluster_mode = "standard"` for the shape the retired scripts
+  built (with an optional gVisor node pool), or `create_cluster = false` to
+  install onto an existing one — with Workload Identity, Cloud KMS database
+  encryption (CMEK), the Backup for GKE agent enabled, and the
+  `kube-agents-host=true` discovery label applied.
 - Optionally (`enable_gke_backup_plan = true`) a scheduled
   [`gke-backup-plan`](../../modules/gke-backup-plan) for the release namespace.
 - The agent's GCP identity ([`kube-agents-iam`](../../modules/kube-agents-iam)
@@ -180,11 +182,10 @@ choice.
 
 ### Backups
 
-`enable_backup_agent` (default `true`) turns on the Backup for GKE addon,
-matching the cluster `provision_01_gcp_cluster.sh` creates. It costs nothing on
-its own. `enable_gke_backup_plan = true` then adds the scheduled plan that
-`provision_12_gke_backup_plan.sh` creates — opt-in in both paths, because
-backups are billed per backed-up pod and per GB of snapshot storage.
+`enable_backup_agent` (default `true`) turns on the Backup for GKE addon. It
+costs nothing on its own. `enable_gke_backup_plan = true` then adds the
+scheduled plan — opt-in, because backups are billed per backed-up pod and per
+GB of snapshot storage.
 
 Backups include Kubernetes Secrets and persistent volume data, so the agent's
 credentials are inside every snapshot: restrict backup/restore IAM to
@@ -205,12 +206,12 @@ The operator's admission webhooks — defaulting, validation, and the
 delete-protection tripwire on the `PlatformAgent` CR — need a serving
 certificate, and cert-manager is what issues it. `enable_cert_manager`
 (default `true`) installs it as its own `helm_release` at
-`cert_manager_version`, the version `provision_03_gcp_gke_operator.sh` applies;
+`cert_manager_version`;
 `enable_webhooks` (default `true`) then turns the webhooks on in the chart.
 
 Three differences from the script path are worth knowing:
 
-- **This is not idempotent against an existing install.** `provision_03` skips
+- **This is not idempotent against an existing install.** install.sh probes for
   cert-manager when a `cert-manager-webhook` Deployment is already available;
   Terraform does not look, and the apply fails on the CRDs that are already
   there. Set `enable_cert_manager = false` on such a cluster — the webhooks
@@ -255,7 +256,7 @@ Set `github_repo` to wire the agent's GitOps target repository
 
 `enable_slack = true` writes `slack_bot_token` / `slack_app_token` into the
 credentials Secret and turns on the CR's `slack` section, the same pair
-`provision_06_slack.sh` collects. Slack needs no GCP resources, so this is
+install.sh collects. Slack needs no GCP resources, so this is
 purely configuration — the Slack app itself is a manual step (below).
 
 **Manual steps that no IaC can perform** — canonical walkthrough:

@@ -9,7 +9,7 @@ locals {
     "cloudresourcemanager.googleapis.com",
     "monitoring.googleapis.com",
     "logging.googleapis.com",
-    # Unconditional, like provision_01_gcp_cluster.sh: the cluster is created
+    # Unconditional, like the retired script path: the cluster is created
     # with the Backup for GKE agent enabled whether or not a BackupPlan
     # follows, and the addon cannot be enabled without the API.
     "gkebackup.googleapis.com",
@@ -36,7 +36,7 @@ locals {
 
   required_apis = toset(concat(local.base_apis, local.chat_apis))
 
-  # The permission sets provision_04_gcp_iam.sh grants, kept verbatim so the
+  # The agent's GCP IAM permission-set bundles, kept verbatim so the
   # two install paths hand the agent the same authority. Kubernetes RBAC is
   # read-only in both; see the security-and-iam reference.
   read_only_roles = [
@@ -96,7 +96,7 @@ locals {
   # Slack, it holds the whole agent pod in CreateContainerConfigError. The
   # tokens legitimately arrive after the first apply, because creating the
   # Slack app is a manual step, so an empty value has to reach the Secret as
-  # an empty value. provision_07_gcp_k8s_secrets.sh writes the pair
+  # an empty value. The retired script path wrote the pair
   # unconditionally for the same reason.
   slack_credentials = var.enable_slack ? {
     SLACK_BOT_TOKEN = var.slack_bot_token
@@ -105,7 +105,7 @@ locals {
 
   credentials = merge(local.optional_credentials, local.slack_credentials)
 
-  # Verbatim from the resources patch provision_03_gcp_gke_operator.sh applies
+  # Verbatim from the resources patch the retired script path applied
   # to all three cert-manager Deployments. Kept as one local because the script
   # applies one patch to all three, and three copies here could drift apart
   # where the script's cannot.
@@ -271,8 +271,8 @@ module "github_minter" {
 }
 
 # cert-manager, the certificate source for the operator's admission webhooks.
-# provision_03_gcp_gke_operator.sh installs the same version from the release
-# manifest and then patches it; the chart expresses those patches as values.
+# The retired script path installed the same version from the release
+# manifest and then patched it; the chart expresses those patches as values.
 #
 # Two divergences from the script, both deliberate:
 #   - the script disables leader election on Autopilot because cert-manager
@@ -312,7 +312,7 @@ resource "helm_release" "cert_manager" {
       }
     }
 
-    # The quotas provision_03 patches in, so the two installs ask the scheduler
+    # The quotas the retired script path patched in, so the installs ask the scheduler
     # for the same thing. Autopilot bills what is requested, and its defaults
     # are several times these.
     resources = local.cert_manager_resources

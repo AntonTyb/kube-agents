@@ -15,22 +15,20 @@ go run github.com/abcxyz/github-token-minter/cmd/minty@v2.7.1 tools import-pk \
 
 > **KMS resources cannot be deleted.** Cloud KMS key rings and keys are never actually
 > destroyed — `terraform destroy` only removes them from state, and a subsequent apply
-> with the same names fails with a 409 (the provisioning scripts sidestep this by
-> check-then-create). Recover by importing the existing resources back into state
+> with the same names fails with a 409. Recover by importing the existing resources
+> back into state
 > (`terraform import module.<name>.google_kms_key_ring.minter ...`) or by choosing new
 > `kms_keyring_name`/`kms_key_name` values.
 
-## Relationship to the provisioning scripts
+## Relationship to the install
 
-This module creates the **same** GSA, Workload Identity binding, key ring, and key that
-`k8s-operator/scripts/provision_04_gcp_iam.sh` (IAM) and
-`k8s-operator/scripts/provision_10_deploy_github_minter.sh` (KMS) create — pick one path
-for **resource creation**, never both. The later steps of `provision_10` (PEM import via
-the Minty CLI, minter deployment) still apply after a module apply; its creation steps
-skip idempotently over the module-created resources. The canonical identifiers (GSA
-`kubeagents-github-minter-gsa`, KSA `kubeagents-github-minter`, namespace
-`kubeagents-system`) live in `k8s-operator/scripts/common.sh`, and the module's defaults
-mirror them.
+This is the module the full-install composition (and therefore `install.sh`, when the
+GitHub integration is configured) uses for the minter's GCP half; the chart's
+`githubMinter.*` values render the Kubernetes half, and the PEM import above completes
+the pair. The canonical identifiers (GSA `kubeagents-github-minter-gsa`, KSA
+`kubeagents-github-minter`, namespace `kubeagents-system`) also appear in
+`k8s-operator/scripts/common.sh` for the dev tooling, and the module's defaults mirror
+them.
 
 ## Usage
 
