@@ -88,6 +88,30 @@ been destroyed and re-applied even once, use `make tf-apply` instead — it
 adopts the Cloud KMS resources GCP refuses to delete, which a bare
 `terraform apply` fails on. See [Teardown and re-apply](#teardown-and-re-apply).
 
+### Remote state
+
+The composition ships no backend block, so a hand-driven apply uses local
+state in this directory. For an install whose state must outlive the checkout
+— anything driven by `install.sh`, whose companion `uninstall.sh` and
+`upgrade.sh` run from fresh clones — set `KUBE_AGENTS_STATE_BUCKET` before any
+`lifecycle.sh` subcommand:
+
+```bash
+KUBE_AGENTS_STATE_BUCKET=auto ./lifecycle.sh apply
+```
+
+`auto` derives the bucket name `<project_id>-kube-agents-tfstate`; any other
+value is used verbatim. The bucket is created on first use — versioned, with
+uniform bucket-level access, in the cluster's region — and a gitignored
+`backend_override.tf` points Terraform at
+`gs://<bucket>/<prefix>`, where the prefix defaults to
+`kube-agents/<cluster_name>` (override with `KUBE_AGENTS_STATE_PREFIX`) so two
+installs in one project keep separate state. Versioning is the recovery story:
+a corrupted or mistakenly-overwritten state file can be restored from a prior
+generation with `gcloud storage restore`. If the state is gone entirely,
+re-run `lifecycle.sh apply` against the same tfvars — KMS adoption is
+automatic, and `terraform import` covers the rest.
+
 ### The `image_tag` rule
 
 `image_tag` (default `latest`) overrides both the operator and platform-agent

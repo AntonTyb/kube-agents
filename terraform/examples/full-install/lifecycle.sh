@@ -28,6 +28,12 @@
 #   ./lifecycle.sh destroy  [extra terraform args...]
 #   ./lifecycle.sh adopt-kms
 #
+# Remote state (opt-in): set KUBE_AGENTS_STATE_BUCKET to a GCS bucket name, or
+# to "auto" for <project_id>-kube-agents-tfstate. The bucket is created if
+# missing (versioned, uniform access) and a gitignored backend_override.tf
+# points Terraform at gs://<bucket>/<KUBE_AGENTS_STATE_PREFIX, default
+# kube-agents/<cluster_name>>. Unset, state stays local as before.
+#
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -35,10 +41,69 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m warn\033[0m %s\n' "$*" >&2; }
 
+# Remote state, opt-in. The composition ships no backend block — a hand-driven
+# example works fine on local state — but an installer-driven one cannot:
+# install.sh may run from a disposable clone, and uninstall.sh and upgrade.sh
+# clone fresh temporary directories, so state left on disk is state lost. With
+# KUBE_AGENTS_STATE_BUCKET set, this writes a gitignored backend override
+# (backend_override.tf) pointing at a GCS bucket and creates the bucket if it
+# does not exist — versioned, uniform bucket-level access, in the install's
+# region. "auto" derives the bucket name as <project_id>-kube-agents-tfstate;
+# the prefix defaults to kube-agents/<cluster_name> so two installs in one
+# project do not collide. Without the variable nothing here runs and local
+# state behaves exactly as before.
+BACKEND_OVERRIDE_FILE="backend_override.tf"
+
+ensure_backend() {
+  [[ -n "${KUBE_AGENTS_STATE_BUCKET:-}" ]] || return 0
+
+  # project/cluster/location come from tfvars, which terraform console only
+  # serves from an initialized directory — so init once without a backend
+  # before the backend can be described.
+  terraform init -backend=false -input=false >/dev/null || {
+    warn "terraform init -backend=false failed; run it by hand to see why"
+    exit 1
+  }
+
+  local project bucket prefix region
+  project=$(tfvar project_id)
+  bucket="$KUBE_AGENTS_STATE_BUCKET"
+  [[ "$bucket" == "auto" ]] && bucket="${project}-kube-agents-tfstate"
+  prefix="${KUBE_AGENTS_STATE_PREFIX:-kube-agents/$(tfvar cluster_name)}"
+  # The bucket lives where the cluster does; strip a zone suffix to its region.
+  region=$(sed -E 's/-[a-z]$//' <<<"$(tfvar location)")
+
+  if ! gcloud storage buckets describe "gs://$bucket" --project "$project" >/dev/null 2>&1; then
+    log "creating Terraform state bucket gs://$bucket in $region (versioned, uniform access)"
+    gcloud storage buckets create "gs://$bucket" --project "$project" \
+      --location "$region" --uniform-bucket-level-access >/dev/null
+    # Versioning is what makes a corrupted or mistakenly-overwritten state
+    # recoverable; a state bucket without it is a single point of failure.
+    gcloud storage buckets update "gs://$bucket" --versioning >/dev/null
+  fi
+
+  local desired
+  desired=$(printf 'terraform {\n  backend "gcs" {\n    bucket = "%s"\n    prefix = "%s"\n  }\n}\n' \
+    "$bucket" "$prefix")
+  if [[ ! -f "$BACKEND_OVERRIDE_FILE" ]] || [[ "$(cat "$BACKEND_OVERRIDE_FILE")" != "$desired" ]]; then
+    printf '%s' "$desired" >"$BACKEND_OVERRIDE_FILE"
+    log "state backend: gs://$bucket/$prefix"
+    # -reconfigure, not -migrate-state: the installer path never has local
+    # state worth carrying (script-era installs kept none), and migrating
+    # whatever happens to sit in a reused checkout into the bucket is how an
+    # unrelated experiment overwrites a real install's state.
+    terraform init -input=false -reconfigure >/dev/null || {
+      warn "terraform init -reconfigure against gs://$bucket failed"
+      exit 1
+    }
+  fi
+}
+
 # Runs before anything reads the configuration. init is idempotent and cheap
 # when nothing changed, and skipping it is how a routine `git pull` that adds a
 # module turns every subcommand below into a failure.
 ensure_init() {
+  ensure_backend
   terraform init -input=false >/dev/null || {
     warn "terraform init failed; run it by hand to see why"
     exit 1
@@ -366,7 +431,7 @@ case "${1:-}" in
     log "delete them. The next 'lifecycle.sh apply' adopts them automatically."
     ;;
   *)
-    sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac
