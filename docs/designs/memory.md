@@ -453,8 +453,14 @@ It adds exactly two workloads to `kubeagents-system`.
   lives in `images.json` at the repository root and the manifest takes it as a
   variable, so a mirrored install can point it at an approved registry.
 - Serves HTTP on **8888** behind a ClusterIP `Service` of the same name;
-  `/health` backs both probes. Liveness waits 30s because model loading dominates
-  cold start.
+  `/health` backs all three probes. Model loading dominates cold start, so the
+  budget for it sits in a **`startupProbe`**, and liveness and readiness do not
+  run until that first succeeds. Before
+  [#712](https://github.com/gke-labs/kube-agents/issues/712) a 30s liveness delay
+  carried that budget instead, which put the third failure at t=50s and killed
+  cold containers mid-load. The timings and the reasoning behind each are in
+  `api.yaml`'s probe comment, which is canonical for them; step 13's rollout gate
+  is sized to cover a pull plus that budget.
 - `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`. The embedding and reranking
   models are baked into the image, so the pod needs **no Hugging Face egress** —
   and both flags must stay set, or the libraries reach out on every cold start and
