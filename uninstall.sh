@@ -266,11 +266,29 @@ main() {
   # this uninstaller cannot take it apart, but the release that installed it
   # can, which is exactly what --source-ref pins.
   local compose_dir="${repo_dir}/terraform/examples/full-install"
-  export KUBE_AGENTS_STATE_BUCKET="${KUBE_AGENTS_STATE_BUCKET:-auto}"
   export KUBE_AGENTS_STATE_PREFIX
   KUBE_AGENTS_STATE_PREFIX="$(tf_state_prefix)"
-  if ! gcloud storage cat "gs://$(tf_state_bucket)/$(tf_state_prefix)/default.tfstate" >/dev/null 2>&1 \
-    && [ ! -f "${compose_dir}/terraform.tfstate" ]; then
+  # Decide WHERE the state lives before pinning the backend. Exporting
+  # KUBE_AGENTS_STATE_BUCKET first would make lifecycle.sh's ensure_backend
+  # `terraform init -reconfigure` onto the (possibly empty) remote prefix —
+  # abandoning a hand-driven install's local state, so the destroy plans
+  # nothing and reports success with the CR and backups already gone and
+  # every GCP resource still live.
+  if gcloud storage cat "gs://$(tf_state_bucket)/$(tf_state_prefix)/default.tfstate" >/dev/null 2>&1; then
+    # Remote state where the installer keeps it (or where the caller pointed
+    # us): pin the backend for lifecycle.sh.
+    export KUBE_AGENTS_STATE_BUCKET="${KUBE_AGENTS_STATE_BUCKET:-auto}"
+  elif [ -n "${KUBE_AGENTS_STATE_BUCKET:-}" ]; then
+    # The caller named a bucket and it holds no state for this cluster:
+    # error out rather than fall back to guessing.
+    print_error "No Terraform state at gs://$(tf_state_bucket)/$(tf_state_prefix) (KUBE_AGENTS_STATE_BUCKET was set explicitly)."
+    exit 1
+  elif [ -f "${compose_dir}/terraform.tfstate" ] || [ -f "${compose_dir}/backend_override.tf" ]; then
+    # A hand-driven install: local state, or an existing backend override
+    # pointing wherever its author keeps state. Leave the backend variable
+    # unset so lifecycle.sh touches neither.
+    print_info "Using the composition's own state (local terraform.tfstate or existing backend_override.tf)."
+  else
     print_error "No Terraform state found for '${target_cluster}' (gs://$(tf_state_bucket)/$(tf_state_prefix)) and none locally."
     print_info "If this install was made by a release with the script pipeline (pre-Terraform engine), re-run with --source-ref=<that release> so its own teardown runs."
     exit 1

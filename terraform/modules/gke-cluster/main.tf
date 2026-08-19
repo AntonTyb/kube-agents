@@ -271,6 +271,18 @@ data "google_container_cluster" "existing" {
       condition     = try(self.workload_identity_config[0].workload_pool, "") == "${var.project_id}.svc.id.goog"
       error_message = "Cluster '${var.cluster_name}' has no Workload Identity pool, which kube-agents requires. Enable it first — gcloud container clusters update ${var.cluster_name} --location ${var.location} --project ${var.project_id} --workload-pool=${var.project_id}.svc.id.goog — and migrate any node pool still on the legacy metadata server to GKE_METADATA, then re-run."
     }
+
+    # Same reasoning for NetworkPolicy enforcement: every NetworkPolicy the
+    # install ships is accepted and silently inert on a cluster with neither
+    # Dataplane V2 nor the legacy Calico addon — GKE Standard's default —
+    # and the isolation the security reference documents would be absent
+    # while the install reports success. install.sh enables the legacy addon
+    # on adopted clusters (ensure_existing_cluster_network_policy); a bare
+    # Terraform run refuses instead.
+    postcondition {
+      condition     = try(self.datapath_provider, "") == "ADVANCED_DATAPATH" || try(self.network_policy[0].enabled, false) == true
+      error_message = "Cluster '${var.cluster_name}' enforces no NetworkPolicy (neither Dataplane V2 nor the legacy addon), so every NetworkPolicy kube-agents installs would be inert. Enable enforcement first — gcloud container clusters update ${var.cluster_name} --location ${var.location} --project ${var.project_id} --enable-network-policy — then re-run."
+    }
   }
 }
 

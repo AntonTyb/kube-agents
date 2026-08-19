@@ -462,9 +462,11 @@ write_tfvars_from_state() {
   # cannot pass readiness until the key is imported, and the composition's
   # helm release waits on every Deployment — enabling the minter with no
   # ENABLED key version would stall the apply and fail it with the cluster
-  # already built. install.sh imports the PEM before generating (so a fresh
-  # install with a PEM sails through); with no key and no import, defer the
-  # minter loudly rather than wedge the apply.
+  # already built. A readable PEM counts too: install.sh imports it after
+  # the operator confirms and refuses the apply if that import fails, so a
+  # fresh install with a PEM deploys the minter in one pass without the
+  # import mutating anything before the confirmation (or on a dry run).
+  # With no key and no PEM, defer the minter loudly rather than wedge.
   local enable_github_minter="false"
   if [ -n "${GITHUB_ORG:-}" ] && [ -n "${GITHUB_REPO:-}" ] && [ -n "${GITHUB_APP_ID:-}" ]; then
     local minter_key_version=""
@@ -474,11 +476,11 @@ write_tfvars_from_state() {
       --location "$(derive_kms_location "${REGION}")" \
       --project "${PROJECT_ID}" --filter='state=ENABLED' \
       --format='value(name)' 2>/dev/null || true; } | head -1)"
-    if [ -n "$minter_key_version" ]; then
+    if [ -n "$minter_key_version" ] || [ -f "${GITHUB_PEM_PATH:-}" ]; then
       enable_github_minter="true"
     else
-      print_warning "GitHub minter deferred: its KMS signing key has no ENABLED version, and a minter deployed without one never passes readiness."
-      print_info "Import the App private key (set GITHUB_PEM_PATH and re-run install.sh, or follow k8s-operator/config/integrations/github/README.md) — the next run adds the minter to the existing install."
+      print_warning "GitHub minter deferred: its KMS signing key has no ENABLED version, no App private key PEM is at hand (GITHUB_PEM_PATH), and a minter deployed without the key never passes readiness."
+      print_info "Provide the PEM (or import the key: k8s-operator/config/integrations/github/README.md) and re-run — the next run adds the minter to the existing install."
     fi
   fi
 

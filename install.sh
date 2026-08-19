@@ -914,6 +914,47 @@ ensure_existing_cluster_workload_identity() {
     | awk -F',' '$2 != "GKE_METADATA" {print $1}')
 }
 
+# NetworkPolicy enforcement on a pre-existing cluster is the third such
+# behaviour (retired provision_03 step 1c): every NetworkPolicy this install
+# ships — LiteLLM's, the minter's, Hindsight's, and the ones the operator
+# generates around the agent — is accepted and silently inert on a cluster
+# with neither Dataplane V2 nor the legacy Calico addon, which is GKE
+# Standard's default shape. Terraform-created clusters always have Dataplane
+# V2; adopted ones get the legacy addon enabled here, exactly as the retired
+# step did. The gke-cluster module's postcondition backstops bare-Terraform
+# installs.
+ensure_existing_cluster_network_policy() {
+  local project_id="$1" cluster_name="$2" region="$3"
+  local dp_provider
+  dp_provider=$(gcloud container clusters describe "$cluster_name" \
+    --location="$region" --project="$project_id" \
+    --format="value(networkConfig.datapathProvider)" 2>/dev/null) || return 0
+  if [ "$dp_provider" = "ADVANCED_DATAPATH" ]; then
+    print_success "Existing cluster '$cluster_name' runs Dataplane V2; NetworkPolicy enforcement is built in."
+    return 0
+  fi
+  local legacy_np
+  legacy_np=$(gcloud container clusters describe "$cluster_name" \
+    --location="$region" --project="$project_id" \
+    --format="value(networkPolicy.enabled)" 2>/dev/null || echo "")
+  if [ "$legacy_np" = "True" ] || [ "$legacy_np" = "true" ]; then
+    print_success "Existing cluster '$cluster_name' already enforces NetworkPolicy (legacy Calico addon)."
+    return 0
+  fi
+  print_info "Enabling NetworkPolicy enforcement on existing cluster '$cluster_name' (node pools may be recreated; this can take several minutes)..."
+  gcloud container clusters update "$cluster_name" --location "$region" \
+    --enable-network-policy --project "$project_id" --quiet
+  local active_op
+  active_op=$(gcloud container operations list --location="$region" --project="$project_id" \
+    --filter="targetLink:$cluster_name AND status=RUNNING" --format="value(name)" 2>/dev/null | head -n1)
+  if [ -n "$active_op" ]; then
+    print_info "Waiting for operation $active_op to complete..."
+    gcloud container operations wait "$active_op" --location="$region" --project="$project_id" ||
+      print_warning "Operation wait returned non-zero (it may have finished between list and wait); proceeding..."
+  fi
+  print_warning "Legacy Network Policy enabled. FQDN-based NetworkPolicies stay unsupported without Dataplane V2."
+}
+
 # provision_01 passed --managed-otel-scope on create; neither google provider
 # has a field for it, so it is set out-of-band after the apply. Best-effort by
 # design: on a gcloud where the update surface lacks the flag, the install is
@@ -1886,20 +1927,6 @@ main() {
   # shellcheck disable=SC1090
   source "$vars_file"
 
-  # The App key import runs BEFORE the generation: the generator only enables
-  # the minter when its KMS key holds an ENABLED version (a minter without
-  # one never passes readiness and the apply waits on it), so the import is
-  # what makes a fresh install with a PEM deploy the minter in one pass.
-  # Never on a dry run — the import enables the KMS API, creates permanent
-  # key rings, and uploads the key, none of which "creates nothing".
-  if [ "$PARAM_DRY_RUN" = "true" ]; then
-    if [ -n "${GITHUB_APP_ID:-}" ]; then
-      print_info "Dry-run: skipping the GitHub App key import (it creates real KMS objects). Without an ENABLED key version the preview below may defer the minter; the real run imports first and enables it."
-    fi
-  else
-    import_github_pem "$project_id" "$region"
-  fi
-
   local tfvars_file
   tfvars_file="$(tf_compose_dir "$repo_dir")/terraform.tfvars"
   write_tfvars_from_state "$tfvars_file" "$image_tag"
@@ -1981,11 +2008,32 @@ main() {
   # SKIP_GITHUB_ORG_CHECK=true bypasses it.
   check_github_org_is_organization "${GITHUB_ORG:-}"
 
-  # The two script behaviours a data source cannot express: CMEK and the
-  # Workload Identity pool on a cluster that already exists. Both are no-ops
-  # when the cluster does not exist yet or is already configured.
+  # The three script behaviours a data source cannot express: CMEK, the
+  # Workload Identity pool, and NetworkPolicy enforcement on a cluster that
+  # already exists. All are no-ops when the cluster does not exist yet or is
+  # already configured.
   ensure_existing_cluster_cmek "$project_id" "$cluster_name" "$region"
   ensure_existing_cluster_workload_identity "$project_id" "$cluster_name" "$region"
+  ensure_existing_cluster_network_policy "$project_id" "$cluster_name" "$region"
+
+  # The App key import sits here — after the dry-run exit and the operator's
+  # confirmation (it enables the KMS API, creates permanent key rings, and
+  # uploads the key, none of which a preview or a declined run may do), and
+  # before the apply, whose helm release waits on a minter that can only
+  # pass readiness once the key is imported. The generator enabled the
+  # minter on the promise of this import, so a failed one stops the run
+  # here rather than wedging the apply.
+  import_github_pem "$project_id" "$region"
+  local minter_enabled_version=""
+  minter_enabled_version="$({ gcloud kms keys versions list --key "${KMS_KEY:-github-token-minter-key}" \
+    --keyring "${KMS_KEYRING:-github-token-minter-keyring}" \
+    --location "$(derive_kms_location "$region")" --project "$project_id" \
+    --filter='state=ENABLED' --format='value(name)' 2>/dev/null || true; } | head -1)"
+  if grep -q '^enable_github_minter = true$' "$tfvars_file" 2>/dev/null && [ -z "$minter_enabled_version" ]; then
+    print_error "The GitHub minter is enabled in the generated configuration, but its KMS signing key still has no ENABLED version — the apply would wait on a minter that can never become ready."
+    print_info "Fix the App key import (see the messages above) and re-run, or unset GITHUB_APP_ID to install without the minter."
+    exit 1
+  fi
 
   local provisioning_log
   provisioning_log="/tmp/kube-agents-provision-$(date -u +%Y%m%dT%H%M%SZ).log"
