@@ -259,6 +259,7 @@ if [ -r "$_min_versions" ]; then
   source "$_min_versions"
 else
   require_min_gcloud_version() { return 0; }
+  require_min_terraform_version() { return 0; }
 fi
 unset _min_versions
 
@@ -326,6 +327,20 @@ write_state_var() {
   local var_name="$2"
   local var_value="$3"
   printf 'export %s=%q\n' "$var_name" "$var_value" >> "$destination"
+}
+
+# Credentials follow PERSIST_SECRETS_ON_DISK, the contract the retired
+# provision_07 honoured: false keeps them out of vars.sh. Exported for this
+# run either way, so the tfvars generator still sees them; later runs recover
+# them from the live Secret (see write_tfvars_from_state).
+write_secret_state_var() {
+  local destination="$1"
+  local var_name="$2"
+  local var_value="$3"
+  export "${var_name}=${var_value}"
+  if is_truthy "${PERSIST_SECRETS_ON_DISK:-true}"; then
+    write_state_var "$destination" "$var_name" "$var_value"
+  fi
 }
 
 verify_local_source_ref() {
@@ -734,6 +749,7 @@ auto_install_tool() {
         type -p curl >/dev/null || sudo apt-get install curl -y
         type -p gpg >/dev/null || sudo apt-get install gnupg -y
         curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        # shellcheck disable=SC1091  # /etc/os-release exists on every apt host; shellcheck cannot follow it
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(. /etc/os-release && echo "$VERSION_CODENAME") main" | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
         sudo apt-get update >/dev/null 2>&1 || true
         sudo apt-get install terraform -y || true
@@ -857,6 +873,45 @@ ensure_existing_cluster_cmek() {
   print_info "Updating the live cluster control plane; this can take several minutes..."
   gcloud container clusters update "$cluster_name" --location "$region" \
     --database-encryption-key="$key_resource" --project "$project_id" --quiet
+}
+
+# Workload Identity on a pre-existing cluster is the other such behaviour:
+# kube-agents requires the pool (every KSA→GSA binding rides it — without it
+# the pods silently run as the node's service account), the retired
+# provision_04 enabled it and migrated legacy node pools, and the module's
+# data source can only read it. No-op when the cluster does not exist yet:
+# Terraform creates those with the pool on. The gke-cluster module's
+# postcondition backstops installs driven through bare Terraform.
+ensure_existing_cluster_workload_identity() {
+  local project_id="$1" cluster_name="$2" region="$3"
+  local pool
+  pool=$(gcloud container clusters describe "$cluster_name" \
+    --location="$region" --project="$project_id" \
+    --format="value(workloadIdentityConfig.workloadPool)" 2>/dev/null) || return 0
+  if [ "$pool" = "${project_id}.svc.id.goog" ]; then
+    print_success "Existing cluster '$cluster_name' already has Workload Identity ($pool)."
+  else
+    print_info "Enabling the Workload Identity pool on existing cluster '$cluster_name'..."
+    print_info "Updating the live cluster control plane; this can take several minutes..."
+    gcloud container clusters update "$cluster_name" --location "$region" \
+      --project "$project_id" --workload-pool="${project_id}.svc.id.goog" --quiet
+  fi
+
+  # Enabling the pool does not migrate node pools off the legacy GCE metadata
+  # server, and pods on such pools still get the node's service account.
+  # Standard-cluster concern, exactly as provision_04's twin step was:
+  # Autopilot pools are managed onto GKE_METADATA already.
+  local legacy_pool
+  while IFS= read -r legacy_pool; do
+    [ -n "$legacy_pool" ] || continue
+    print_warning "Node pool '${legacy_pool}' uses the legacy GCE metadata server; migrating to GKE_METADATA (this recreates the pool's nodes)..."
+    gcloud container node-pools update "$legacy_pool" \
+      --cluster="$cluster_name" --location="$region" --project="$project_id" \
+      --workload-metadata=GKE_METADATA --quiet
+  done < <(gcloud container node-pools list --cluster="$cluster_name" \
+      --location="$region" --project="$project_id" \
+      --format="csv[no-heading](name,config.workloadMetadataConfig.mode)" 2>/dev/null \
+    | awk -F',' '$2 != "GKE_METADATA" {print $1}')
 }
 
 # provision_01 passed --managed-otel-scope on create; neither google provider
@@ -1209,6 +1264,7 @@ main() {
     fi
   done
   require_min_gcloud_version || exit 1
+  require_min_terraform_version || exit 1
 
   # 3. Provisioning Sources & Shared Defaults
   print_step "2. Setting up Workspace Repository"
@@ -1737,21 +1793,21 @@ main() {
   write_state_var "$vars_file" MODEL_DEFAULT_NAME "$model_default_name"
   write_state_var "$vars_file" VERTEX_PROJECT_ID "$vertex_project_id"
   write_state_var "$vars_file" VERTEX_LOCATION "$vertex_location"
-  write_state_var "$vars_file" GEMINI_API_KEY "$gemini_api_key"
-  write_state_var "$vars_file" OPENAI_API_KEY "$openai_api_key"
-  write_state_var "$vars_file" ANTHROPIC_API_KEY "$anthropic_api_key"
+  write_secret_state_var "$vars_file" GEMINI_API_KEY "$gemini_api_key"
+  write_secret_state_var "$vars_file" OPENAI_API_KEY "$openai_api_key"
+  write_secret_state_var "$vars_file" ANTHROPIC_API_KEY "$anthropic_api_key"
   write_state_var "$vars_file" ALLOWED_USERS "$allowed_users"
   write_state_var "$vars_file" CHAT_TOPIC_NAME "$chat_topic_name"
   write_state_var "$vars_file" CHAT_SUB_NAME "$chat_sub_name"
   write_state_var "$vars_file" GOOGLE_CHAT_ENABLED "$google_chat_enabled"
   write_state_var "$vars_file" GOOGLE_CHAT_MODE "$google_chat_mode"
   write_state_var "$vars_file" SLACK_ENABLED "$slack_enabled"
-  write_state_var "$vars_file" SLACK_BOT_TOKEN "$slack_bot_token"
-  write_state_var "$vars_file" SLACK_APP_TOKEN "$slack_app_token"
+  write_secret_state_var "$vars_file" SLACK_BOT_TOKEN "$slack_bot_token"
+  write_secret_state_var "$vars_file" SLACK_APP_TOKEN "$slack_app_token"
   write_state_var "$vars_file" SLACK_ALLOWED_USERS "$slack_allowed_users"
   write_state_var "$vars_file" SLACK_HOME_CHANNEL "$slack_home_channel"
   write_state_var "$vars_file" SLACK_HOME_CHANNEL_NAME "$slack_home_channel_name"
-  write_state_var "$vars_file" API_SERVER_KEY "$api_server_key"
+  write_secret_state_var "$vars_file" API_SERVER_KEY "$api_server_key"
   write_state_var "$vars_file" PLATFORM_AGENT_PERMISSION_SET "$permission_set"
   if [ "$permission_set" = "custom" ]; then
     write_state_var "$vars_file" PLATFORM_AGENT_CUSTOM_ROLES "$custom_roles"
@@ -1879,10 +1935,11 @@ main() {
   # SKIP_GITHUB_ORG_CHECK=true bypasses it.
   check_github_org_is_organization "${GITHUB_ORG:-}"
 
-  # The one provision_01 behaviour a data source cannot express: CMEK on a
-  # cluster that already exists. No-op when the cluster does not exist yet or
-  # is already encrypted.
+  # The two script behaviours a data source cannot express: CMEK and the
+  # Workload Identity pool on a cluster that already exists. Both are no-ops
+  # when the cluster does not exist yet or is already configured.
   ensure_existing_cluster_cmek "$project_id" "$cluster_name" "$region"
+  ensure_existing_cluster_workload_identity "$project_id" "$cluster_name" "$region"
 
   local provisioning_log
   provisioning_log="/tmp/kube-agents-provision-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -1891,8 +1948,14 @@ main() {
 
   # Post-apply steps Terraform cannot carry: the managed-OTel scope (no
   # provider field) and the GitHub App key import (the PEM must not enter
-  # state).
-  apply_managed_otel_scope "$project_id" "$cluster_name" "$region"
+  # state). The OTel scope is set only on a cluster this install created —
+  # provision_01 passed it on create only, and silently changing the
+  # telemetry scope of a cluster somebody else made is not an install's call.
+  if [ "${TFVARS_CREATE_CLUSTER:-true}" = "true" ]; then
+    apply_managed_otel_scope "$project_id" "$cluster_name" "$region"
+  else
+    print_info "Existing cluster: leaving its managed-OTel scope untouched. Set it yourself if you want managed OTel collection: gcloud container clusters update $cluster_name --location $region --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS"
+  fi
   import_github_pem "$project_id" "$region"
 
   # 12. Workload & Pod Health Verification Checkpoint

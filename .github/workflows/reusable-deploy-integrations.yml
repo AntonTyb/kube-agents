@@ -271,8 +271,17 @@ jobs:
 
   deploy-github:
     name: Redeploy GitHub Token Minter Integration
-    needs: [detect-changes, provision-secrets, check-github-config]
-    if: ${{ needs.detect-changes.outputs.github == 'true' && needs.check-github-config.outputs.configured == 'true' }}
+    # deploy-litellm is a serializer, not a dependency: both jobs run
+    # `helm upgrade --reuse-values` on the same release, and concurrent
+    # upgrades either collide on the release lock or silently drop whichever
+    # --set committed first. The filters overlap (values.yaml, images.json),
+    # so an ordinary chart bump would start both at once without this edge.
+    # !cancelled() + explicit result checks keep this job running when
+    # deploy-litellm is skipped by its filter, or failed — a finished failed
+    # upgrade is sequential, which is all this ordering exists to guarantee.
+    needs:
+      [detect-changes, provision-secrets, check-github-config, deploy-litellm]
+    if: ${{ !cancelled() && needs.provision-secrets.result == 'success' && needs.detect-changes.outputs.github == 'true' && needs.check-github-config.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -340,7 +349,7 @@ jobs:
           # The App private key import stays outside Helm and Terraform (the
           # PEM must not enter state or values). One-shot: skipped whenever an
           # ENABLED key version already exists.
-          KMS_LOCATION=$(echo "${{ vars.GCP_REGION }}" | sed -E 's/-[a-z]$//')
+          KMS_LOCATION=$(echo "$REGION" | sed -E 's/-[a-z]$//')
           enabled=$(gcloud kms keys versions list --key github-token-minter-key \
             --keyring github-token-minter-keyring --location "$KMS_LOCATION" \
             --project "$PROJECT_ID" --filter='state=ENABLED' --format='value(name)' 2>/dev/null | head -1 || true)

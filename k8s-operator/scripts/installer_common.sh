@@ -279,10 +279,12 @@ hcl_bool() {
   if is_truthy "${1:-}"; then printf 'true'; else printf 'false'; fi
 }
 
-# Comma-separated string → HCL list of strings, dropping empty items.
+# Comma- or space-separated string → HCL list of strings, dropping empty
+# items. Both separators, because --custom-roles documents "space- or
+# comma-separated" and the retired provision_04 honoured both.
 hcl_csv_list() {
   local csv="${1:-}" out="[" first=true item
-  local IFS=','
+  local IFS=$', \t\n'
   for item in $csv; do
     item="${item#"${item%%[![:space:]]*}"}"
     item="${item%"${item##*[![:space:]]}"}"
@@ -338,6 +340,33 @@ write_tfvars_from_state() {
   local dest="$1"
   local image_tag="${2:-${IMAGE_TAG:-latest}}"
 
+  # vars.sh does not always carry the credentials: PERSIST_SECRETS_ON_DISK=false
+  # keeps them out of it, on script-era installs as well as new ones. Their
+  # home is the live Secret, so recover any missing key from it the way the
+  # retired provision_07 did — best-effort, since on a fresh install there is
+  # no cluster to ask yet and the keys are still in the environment.
+  local secret_key secret_val
+  if command -v kubectl >/dev/null 2>&1; then
+    for secret_key in API_SERVER_KEY GEMINI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+      [ -z "${!secret_key:-}" ] || continue
+      secret_val=$(kubectl get secret platform-agent-secrets -n "${NAMESPACE:-kubeagents-system}" \
+        -o jsonpath="{.data.${secret_key}}" 2>/dev/null | base64 --decode 2>/dev/null) || secret_val=""
+      if [ -n "$secret_val" ]; then
+        export "${secret_key}=${secret_val}"
+        print_info "Recovered ${secret_key} from the live 'platform-agent-secrets' Secret (vars.sh does not persist it)."
+      fi
+    done
+  fi
+
+  # The composition requires api_server_key non-empty, so fail here with the
+  # recovery path spelled out rather than aborting the caller on an opaque
+  # unbound-variable error under set -u.
+  if [ -z "${API_SERVER_KEY:-}" ]; then
+    print_error "API_SERVER_KEY is not set, vars.sh does not carry it (PERSIST_SECRETS_ON_DISK=false keeps it out), and it could not be recovered from the live Secret."
+    print_info "Recover it and re-run: export API_SERVER_KEY=\"\$(kubectl get secret platform-agent-secrets -n kubeagents-system -o jsonpath='{.data.API_SERVER_KEY}' | base64 --decode)\""
+    return 1
+  fi
+
   local create_cluster="true"
   if gcloud container clusters describe "${CLUSTER_NAME}" --location "${REGION}" \
       --project "${PROJECT_ID}" >/dev/null 2>&1; then
@@ -349,11 +378,23 @@ write_tfvars_from_state() {
     fi
   fi
 
+  # The generator's create/adopt decision, exported for the callers that need
+  # it after the apply: install.sh sets the managed-OTel scope only on a
+  # cluster this install created, the way provision_01 set it on create only.
+  TFVARS_CREATE_CLUSTER="$create_cluster"
+  export TFVARS_CREATE_CLUSTER
+
   # A pre-existing cert-manager makes the composition's own cert-manager
   # release fail on the existing CRDs, so probe for one on the existing-cluster
   # path. Best-effort: an unreachable cluster leaves the default in place.
+  # SKIP_CERT_MANAGER=true is the explicit opt-out the retired path had — for
+  # the cluster whose cert-manager comes from somewhere else, or the air-gapped
+  # runner that cannot fetch the Jetstack chart from charts.jetstack.io.
   local enable_cert_manager="true"
-  if [ "$create_cluster" = "false" ] && command -v kubectl >/dev/null 2>&1; then
+  if is_truthy "${SKIP_CERT_MANAGER:-false}"; then
+    enable_cert_manager="false"
+    print_info "SKIP_CERT_MANAGER=true: the composition will not install cert-manager. The operator webhooks need one serving before the apply."
+  elif [ "$create_cluster" = "false" ] && command -v kubectl >/dev/null 2>&1; then
     if gcloud container clusters get-credentials "${CLUSTER_NAME}" --location "${REGION}" \
         --project "${PROJECT_ID}" >/dev/null 2>&1 &&
       kubectl get deployment cert-manager -n cert-manager >/dev/null 2>&1; then
@@ -403,7 +444,7 @@ write_tfvars_from_state() {
     echo "vertex_project_id  = $(hcl_str "${VERTEX_PROJECT_ID:-}")"
     echo "vertex_location    = $(hcl_str "${VERTEX_LOCATION:-}")"
     echo ""
-    echo "api_server_key    = $(hcl_str "${API_SERVER_KEY}")"
+    echo "api_server_key    = $(hcl_str "${API_SERVER_KEY:-}")"
     echo "gemini_api_key    = $(hcl_str "${GEMINI_API_KEY:-}")"
     echo "openai_api_key    = $(hcl_str "${OPENAI_API_KEY:-}")"
     echo "anthropic_api_key = $(hcl_str "${ANTHROPIC_API_KEY:-}")"

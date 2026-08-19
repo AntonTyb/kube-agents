@@ -119,6 +119,30 @@ locals {
       memory = "128Mi"
     }
   }
+
+  # The registry third-party images are pulled from on a mirrored install:
+  # third_party_image_registry, falling back to image_registry, the same
+  # precedence the chart's kube-agents.thirdPartyImageRegistry helper applies.
+  # Empty means the upstream registries.
+  third_party_registry = trimsuffix(
+    var.third_party_image_registry != "" ? var.third_party_image_registry : var.image_registry,
+  "/")
+
+  # Mirrored image overrides for helm_release.cert_manager below. Destination
+  # names follow images.json (<prefix>/<name>:<tag>) — the contract
+  # `make mirror-images` writes and the retired apply_cert_manager_manifest
+  # rewrite honoured. The tag stays the chart's own appVersion, which is what
+  # images.json pins for the cert-manager entries. Empty when not mirroring,
+  # so a default install's release values are byte-identical.
+  cert_manager_mirror_values = local.third_party_registry == "" ? [] : [yamlencode({
+    image      = { repository = "${local.third_party_registry}/cert-manager-controller" }
+    webhook    = { image = { repository = "${local.third_party_registry}/cert-manager-webhook" } }
+    cainjector = { image = { repository = "${local.third_party_registry}/cert-manager-cainjector" } }
+    acmesolver = { image = { repository = "${local.third_party_registry}/cert-manager-acmesolver" } }
+    startupapicheck = {
+      image = { repository = "${local.third_party_registry}/cert-manager-startupapicheck" }
+    }
+  })]
 }
 
 # A warning rather than a precondition: an install that enables Slack before
@@ -299,7 +323,10 @@ resource "helm_release" "cert_manager" {
   wait    = true
   timeout = 600
 
-  values = [yamlencode({
+  # Helm deep-merges the docs in order, so the mirror overrides (second doc,
+  # present only on a mirrored install) reach the image repositories without
+  # disturbing the resource patches here.
+  values = concat([yamlencode({
     # cert-manager 1.15+'s spelling; 1.14 and earlier called it installCRDs.
     # Dropping cert_manager_version below 1.15.x means changing this key too.
     crds = {
@@ -322,7 +349,7 @@ resource "helm_release" "cert_manager" {
     webhook = {
       resources = local.cert_manager_resources
     }
-  })]
+  })], local.cert_manager_mirror_values)
 
   depends_on = [module.gke_cluster]
 }
@@ -340,10 +367,10 @@ resource "helm_release" "kube_agents" {
     # "Installing from a mirrored registry".
     #
     # It does NOT reach helm_release.cert_manager above: that is a separate
-    # release of an upstream chart, and these values are not passed to it. An
-    # approved-registry cluster needs enable_cert_manager = false and
-    # cert-manager installed by hand from the mirror. The composition's README
-    # says so under "Installing from a mirrored registry".
+    # release of an upstream chart, and these values are not passed to it.
+    # local.cert_manager_mirror_values carries the same registry to that
+    # release's image repositories, so a mirrored install pulls every image —
+    # cert-manager's included — from the mirror.
     global = {
       imageRegistry           = var.image_registry
       thirdPartyImageRegistry = var.third_party_image_registry

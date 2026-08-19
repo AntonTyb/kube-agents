@@ -206,6 +206,54 @@ jobs:
             exit 1
           fi
 
+          # The GitHub token minter: absent by default; enabled with an appId
+          # it renders all six objects, deriving the regional KMS location
+          # from a zonal cluster location; without an appId the
+          # github-app-credentials Secret is the one object that must not
+          # render (it is expected to pre-exist).
+          if helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
+            | grep -qF "github-token-minter"; then
+            echo "github-token-minter rendered in the default install" >&2
+            exit 1
+          fi
+          MINTER_FLAGS=(
+            --set githubMinter.enabled=true
+            --set githubMinter.org=test-org
+            --set githubMinter.repo=test-repo
+            --set platformAgent.harness.location=us-central1-a
+          )
+          minter=$(helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
+            "${MINTER_FLAGS[@]}" --set githubMinter.appId=12345 \
+            --show-only templates/github-minter.yaml)
+          for expected in \
+            "kind: Secret" \
+            "name: github-app-credentials" \
+            "kind: ServiceAccount" \
+            "kind: ConfigMap" \
+            "kind: Deployment" \
+            "kind: Service" \
+            "kind: NetworkPolicy" \
+            "name: github-token-minter" \
+            "locations/us-central1/keyRings/github-token-minter-keyring"; do
+            if ! grep -qF "$expected" <<<"$minter"; then
+              echo "minter render is missing '$expected' with githubMinter enabled" >&2
+              exit 1
+            fi
+          done
+          minter_no_app=$(helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
+            "${MINTER_FLAGS[@]}" --show-only templates/github-minter.yaml)
+          # The Deployment still names the Secret (it must pre-exist), so key
+          # on the object kind: the file renders exactly one Secret, and only
+          # when appId is set.
+          if grep -qF "kind: Secret" <<<"$minter_no_app"; then
+            echo "github-app-credentials Secret rendered without githubMinter.appId" >&2
+            exit 1
+          fi
+          if ! grep -qF "name: github-token-minter" <<<"$minter_no_app"; then
+            echo "minter workload missing when appId is empty (Secret should be the only omission)" >&2
+            exit 1
+          fi
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:

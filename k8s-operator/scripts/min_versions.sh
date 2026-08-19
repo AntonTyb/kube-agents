@@ -40,6 +40,41 @@ gcloud_core_version() {
   gcloud version 2>/dev/null | sed -n 's/^Google Cloud SDK \([0-9][0-9.]*\).*/\1/p' | head -n1
 }
 
+# The Terraform configurations pin `required_version = "~> 1.5"`, which
+# `terraform init` enforces before anything is created. This front-door twin
+# exists so the failure lands in the prerequisite step with the other tool
+# checks rather than at the init inside step 12. Keep the two in step:
+# terraform/examples/full-install/providers.tf owns the authoritative pin.
+MIN_TERRAFORM_VERSION="1.5.0"
+
+# Echo the Terraform core version, e.g. "1.15.8", from the first line of
+# `terraform version` ("Terraform v1.15.8").
+terraform_core_version() {
+  terraform version 2>/dev/null | sed -n 's/^Terraform v\([0-9][0-9.]*\).*/\1/p' | head -n1
+}
+
+# Fail unless the installed terraform is at least MIN_TERRAFORM_VERSION.
+# An unreadable version warns rather than errors, for the same reason the
+# gcloud check below does: required_version still backstops it at init.
+require_min_terraform_version() {
+  local found
+  found="$(terraform_core_version)"
+
+  if [ -z "$found" ]; then
+    print_warning "Could not determine the Terraform version; skipping the >= ${MIN_TERRAFORM_VERSION} check (terraform init enforces it anyway)."
+    return 0
+  fi
+
+  if version_lt "$found" "$MIN_TERRAFORM_VERSION"; then
+    print_error "Terraform ${found} is too old; ${MIN_TERRAFORM_VERSION} or newer is required (the configurations pin ~> 1.5)."
+    print_info "Upgrade terraform (brew upgrade hashicorp/tap/terraform, or apt-get install terraform from HashiCorp's repository)."
+    return 1
+  fi
+
+  print_success "Terraform ${found} meets the minimum of ${MIN_TERRAFORM_VERSION}."
+  return 0
+}
+
 # Fail unless the installed gcloud is at least MIN_GCLOUD_VERSION.
 #
 # An unreadable version is a warning, not an error: gcloud has changed the

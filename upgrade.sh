@@ -445,13 +445,20 @@ main() {
       --set "${set_key}=${PARAM_IMAGE_TAG}" --wait --timeout 10m
   }
 
-  write_tfvars_from_state "${repo_dir}/terraform/examples/full-install/terraform.tfvars" "$PARAM_IMAGE_TAG"
-
+  # The release guard runs before the tfvars generation on purpose: a
+  # pre-Terraform install deserves this message, not whatever the generator
+  # trips over first (its vars.sh may lack the credentials the generator
+  # recovers from the live Secret).
   if ! helm status kube-agents -n "$target_namespace" >/dev/null 2>&1; then
     print_error "No Helm release 'kube-agents' in namespace '$target_namespace'."
     print_info "This install predates the Terraform + Helm engine. Upgrade it with the release that installed it (curl the matching versioned upgrade.sh), or re-install with install.sh to adopt the new engine."
     exit 1
   fi
+
+  # NAMESPACE steers the generator's Secret-recovery reads (vars.sh omits
+  # credentials when PERSIST_SECRETS_ON_DISK=false; the live Secret has them).
+  NAMESPACE="$target_namespace" \
+    write_tfvars_from_state "${repo_dir}/terraform/examples/full-install/terraform.tfvars" "$PARAM_IMAGE_TAG"
 
   case "$PARAM_UPGRADE_MODE" in
     operator)

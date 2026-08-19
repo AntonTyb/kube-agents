@@ -122,6 +122,14 @@
       "description": "Solver pod cert-manager runs for ACME HTTP-01 challenges."
     },
     {
+      "name": "cert-manager-startupapicheck",
+      "origin": "third-party",
+      "repository": "quay.io/jetstack/cert-manager-startupapicheck",
+      "tag": "v1.21.1",
+      "pulledBy": "cert-manager, installed by the full-install composition unless enable_cert_manager is false. Runs once per install as a post-install hook Job.",
+      "description": "One-shot check that the cert-manager API is actually serving before the install is declared done."
+    },
+    {
       "name": "hermes-agent",
       "origin": "build-time",
       "repository": "docker.io/nousresearch/hermes-agent",

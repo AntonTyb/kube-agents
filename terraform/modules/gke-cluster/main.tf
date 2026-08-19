@@ -258,6 +258,20 @@ data "google_container_cluster" "existing" {
   name     = var.cluster_name
   location = var.location
   project  = var.project_id
+
+  lifecycle {
+    # kube-agents requires Workload Identity: every KSA→GSA binding the
+    # composition creates rides the pool, and against a cluster without one
+    # those bindings apply cleanly while the pods silently run as the node's
+    # service account. A data source cannot enable it (install.sh does, via
+    # ensure_existing_cluster_workload_identity), so refuse the plan instead
+    # of installing something that reports success and authenticates as the
+    # wrong identity.
+    postcondition {
+      condition     = try(self.workload_identity_config[0].workload_pool, "") == "${var.project_id}.svc.id.goog"
+      error_message = "Cluster '${var.cluster_name}' has no Workload Identity pool, which kube-agents requires. Enable it first — gcloud container clusters update ${var.cluster_name} --location ${var.location} --project ${var.project_id} --workload-pool=${var.project_id}.svc.id.goog — and migrate any node pool still on the legacy metadata server to GKE_METADATA, then re-run."
+    }
+  }
 }
 
 # The dedicated GKE Sandbox (gVisor) node pool provision_02_gvisor_nodepool.sh
@@ -289,8 +303,13 @@ resource "google_container_node_pool" "gvisor" {
 
   lifecycle {
     precondition {
-      condition     = var.cluster_mode == "standard"
-      error_message = "enable_gvisor_node_pool requires cluster_mode = \"standard\": Autopilot provides the gvisor RuntimeClass natively, with no node pool to manage."
+      # The second clause covers create_cluster = false, where cluster_mode
+      # only describes what would have been created: the pre-existing cluster
+      # can still be Autopilot, and asking it for a node pool must fail at
+      # plan time, not mid-apply at the API. try() keeps the expression legal
+      # when the data source has count 0 (create_cluster = true).
+      condition     = var.cluster_mode == "standard" && try(data.google_container_cluster.existing[0].enable_autopilot, false) != true
+      error_message = "enable_gvisor_node_pool requires a Standard cluster: Autopilot provides the gvisor RuntimeClass natively, with no node pool to manage. (cluster_mode must be \"standard\", and an adopted pre-existing cluster must not be Autopilot.)"
     }
   }
 }
