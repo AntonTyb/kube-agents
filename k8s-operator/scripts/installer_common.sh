@@ -340,44 +340,6 @@ write_tfvars_from_state() {
   local dest="$1"
   local image_tag="${2:-${IMAGE_TAG:-latest}}"
 
-  # vars.sh does not always carry the credentials: PERSIST_SECRETS_ON_DISK=false
-  # keeps them out of it, on script-era installs as well as new ones. Their
-  # home is the live Secret, so recover any missing key from it the way the
-  # retired provision_07 did — best-effort, since on a fresh install there is
-  # no cluster to ask yet and the keys are still in the environment.
-  #
-  # Only when kubectl's CURRENT context is this install's cluster (the name
-  # get-credentials writes, which uninstall.sh and upgrade.sh have set by the
-  # time they generate). A stale context pointing at some other install would
-  # otherwise silently donate that environment's credentials to this one.
-  local secret_key secret_val
-  local expected_ctx="gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}"
-  if command -v kubectl >/dev/null 2>&1 &&
-    [ "$(kubectl config current-context 2>/dev/null || true)" = "$expected_ctx" ]; then
-    for secret_key in API_SERVER_KEY GEMINI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
-      [ -z "${!secret_key:-}" ] || continue
-      # Every stage exits 0 on its own (|| true inside the substitution):
-      # install.sh runs an inherited ERR trap (set -E), and a failing kubectl
-      # here — no cluster yet, stale context — must be a silent no-op, not a
-      # trap-and-abort the outer || can never see.
-      secret_val="$({ kubectl get secret platform-agent-secrets -n "${NAMESPACE:-kubeagents-system}" \
-        -o jsonpath="{.data.${secret_key}}" 2>/dev/null || true; } | base64 --decode 2>/dev/null || true)"
-      if [ -n "$secret_val" ]; then
-        export "${secret_key}=${secret_val}"
-        print_info "Recovered ${secret_key} from the live 'platform-agent-secrets' Secret (vars.sh does not persist it)."
-      fi
-    done
-  fi
-
-  # The composition requires api_server_key non-empty, so fail here with the
-  # recovery path spelled out rather than aborting the caller on an opaque
-  # unbound-variable error under set -u.
-  if [ -z "${API_SERVER_KEY:-}" ]; then
-    print_error "API_SERVER_KEY is not set, vars.sh does not carry it (PERSIST_SECRETS_ON_DISK=false keeps it out), and it could not be recovered from the live Secret."
-    print_info "Recover it and re-run: export API_SERVER_KEY=\"\$(kubectl get secret platform-agent-secrets -n kubeagents-system -o jsonpath='{.data.API_SERVER_KEY}' | base64 --decode)\""
-    return 1
-  fi
-
   # cluster_mode follows the LIVE cluster when there is one. Hardcoding
   # "standard" here planned the destruction of every existing Autopilot
   # install the moment a front door regenerated tfvars against it — the
@@ -406,6 +368,57 @@ write_tfvars_from_state() {
   TFVARS_CREATE_CLUSTER="$create_cluster"
   export TFVARS_CREATE_CLUSTER
 
+  # Installing onto an existing cluster: fetch its credentials now, before the
+  # recovery loop below — adoption is exactly the case where the credentials
+  # live only in that cluster's Secret (a fresh clone has no vars.sh values),
+  # and recovery is gated on the kubectl context actually being this cluster.
+  if [ "$create_cluster" = "false" ] && command -v kubectl >/dev/null 2>&1; then
+    gcloud container clusters get-credentials "${CLUSTER_NAME}" --location "${REGION}" \
+      --project "${PROJECT_ID}" >/dev/null 2>&1 || true
+  fi
+
+  # vars.sh does not always carry the credentials: PERSIST_SECRETS_ON_DISK=false
+  # keeps them out of it, on script-era installs as well as new ones. Their
+  # home is the live Secret, so recover any missing key from it the way the
+  # retired provision_07 did — best-effort, since on a fresh install there is
+  # no cluster to ask yet and the keys are still in the environment.
+  # SESSION_KV_API_KEY and SESSION_KV_SALT are in the list because an adoption
+  # re-install must keep the live salt: regenerating it re-anonymises every
+  # chat user, severing their past sessions from their future ones.
+  #
+  # Only when kubectl's CURRENT context is this install's cluster (the name
+  # get-credentials writes — set just above for adoption, and by upgrade.sh
+  # and uninstall.sh before they generate). A stale context pointing at some
+  # other install would otherwise silently donate that environment's
+  # credentials to this one.
+  local secret_key secret_val
+  local expected_ctx="gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}"
+  if command -v kubectl >/dev/null 2>&1 &&
+    [ "$(kubectl config current-context 2>/dev/null || true)" = "$expected_ctx" ]; then
+    for secret_key in API_SERVER_KEY GEMINI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY SLACK_BOT_TOKEN SLACK_APP_TOKEN SESSION_KV_API_KEY SESSION_KV_SALT; do
+      [ -z "${!secret_key:-}" ] || continue
+      # Every stage exits 0 on its own (|| true inside the substitution):
+      # install.sh runs an inherited ERR trap (set -E), and a failing kubectl
+      # here — no cluster yet, stale context — must be a silent no-op, not a
+      # trap-and-abort the outer || can never see.
+      secret_val="$({ kubectl get secret platform-agent-secrets -n "${NAMESPACE:-kubeagents-system}" \
+        -o jsonpath="{.data.${secret_key}}" 2>/dev/null || true; } | base64 --decode 2>/dev/null || true)"
+      if [ -n "$secret_val" ]; then
+        export "${secret_key}=${secret_val}"
+        print_info "Recovered ${secret_key} from the live 'platform-agent-secrets' Secret (vars.sh does not persist it)."
+      fi
+    done
+  fi
+
+  # The composition requires api_server_key non-empty, so fail here with the
+  # recovery path spelled out rather than aborting the caller on an opaque
+  # unbound-variable error under set -u.
+  if [ -z "${API_SERVER_KEY:-}" ]; then
+    print_error "API_SERVER_KEY is not set, vars.sh does not carry it (PERSIST_SECRETS_ON_DISK=false keeps it out), and it could not be recovered from the live Secret."
+    print_info "Recover it and re-run: export API_SERVER_KEY=\"\$(kubectl get secret platform-agent-secrets -n kubeagents-system -o jsonpath='{.data.API_SERVER_KEY}' | base64 --decode)\""
+    return 1
+  fi
+
   # A pre-existing cert-manager makes the composition's own cert-manager
   # release fail on the existing CRDs, so probe for one on the existing-cluster
   # path. Best-effort: an unreachable cluster leaves the default in place.
@@ -417,9 +430,8 @@ write_tfvars_from_state() {
     enable_cert_manager="false"
     print_info "SKIP_CERT_MANAGER=true: the composition will not install cert-manager. The operator webhooks need one serving before the apply."
   elif [ "$create_cluster" = "false" ] && command -v kubectl >/dev/null 2>&1; then
-    if gcloud container clusters get-credentials "${CLUSTER_NAME}" --location "${REGION}" \
-        --project "${PROJECT_ID}" >/dev/null 2>&1 &&
-      kubectl get deployment cert-manager -n cert-manager >/dev/null 2>&1; then
+    # Credentials were fetched above, on the same adoption branch.
+    if kubectl get deployment cert-manager -n cert-manager >/dev/null 2>&1; then
       enable_cert_manager="false"
       print_info "cert-manager already runs on '${CLUSTER_NAME}'; the composition will not install its own."
     fi
@@ -432,9 +444,28 @@ write_tfvars_from_state() {
     image_registry="${REGISTRY_PREFIX%/}"
   fi
 
+  # The minter also needs its App key in KMS: the chart's minter Deployment
+  # cannot pass readiness until the key is imported, and the composition's
+  # helm release waits on every Deployment — enabling the minter with no
+  # ENABLED key version would stall the apply and fail it with the cluster
+  # already built. install.sh imports the PEM before generating (so a fresh
+  # install with a PEM sails through); with no key and no import, defer the
+  # minter loudly rather than wedge the apply.
   local enable_github_minter="false"
   if [ -n "${GITHUB_ORG:-}" ] && [ -n "${GITHUB_REPO:-}" ] && [ -n "${GITHUB_APP_ID:-}" ]; then
-    enable_github_minter="true"
+    local minter_key_version=""
+    minter_key_version="$({ gcloud kms keys versions list \
+      --key "${KMS_KEY:-github-token-minter-key}" \
+      --keyring "${KMS_KEYRING:-github-token-minter-keyring}" \
+      --location "$(derive_kms_location "${REGION}")" \
+      --project "${PROJECT_ID}" --filter='state=ENABLED' \
+      --format='value(name)' 2>/dev/null || true; } | head -1)"
+    if [ -n "$minter_key_version" ]; then
+      enable_github_minter="true"
+    else
+      print_warning "GitHub minter deferred: its KMS signing key has no ENABLED version, and a minter deployed without one never passes readiness."
+      print_info "Import the App private key (set GITHUB_PEM_PATH and re-run install.sh, or follow k8s-operator/config/integrations/github/README.md) — the next run adds the minter to the existing install."
+    fi
   fi
 
   local old_umask
@@ -467,10 +498,22 @@ write_tfvars_from_state() {
     echo "vertex_project_id  = $(hcl_str "${VERTEX_PROJECT_ID:-}")"
     echo "vertex_location    = $(hcl_str "${VERTEX_LOCATION:-}")"
     echo ""
-    echo "api_server_key    = $(hcl_str "${API_SERVER_KEY:-}")"
-    echo "gemini_api_key    = $(hcl_str "${GEMINI_API_KEY:-}")"
-    echo "openai_api_key    = $(hcl_str "${OPENAI_API_KEY:-}")"
-    echo "anthropic_api_key = $(hcl_str "${ANTHROPIC_API_KEY:-}")"
+    if is_truthy "${PERSIST_SECRETS_ON_DISK:-true}"; then
+      echo "api_server_key    = $(hcl_str "${API_SERVER_KEY:-}")"
+      echo "gemini_api_key    = $(hcl_str "${GEMINI_API_KEY:-}")"
+      echo "openai_api_key    = $(hcl_str "${OPENAI_API_KEY:-}")"
+      echo "anthropic_api_key = $(hcl_str "${ANTHROPIC_API_KEY:-}")"
+      if [ -n "${SESSION_KV_API_KEY:-}" ] || [ -n "${SESSION_KV_SALT:-}" ]; then
+        echo "# Recovered from the live Secret: an adoption re-install must keep the"
+        echo "# salt, or every chat identity re-pseudonymises."
+        echo "session_kv_api_key = $(hcl_str "${SESSION_KV_API_KEY:-}")"
+        echo "session_kv_salt    = $(hcl_str "${SESSION_KV_SALT:-}")"
+      fi
+    else
+      echo "# Credentials omitted: PERSIST_SECRETS_ON_DISK=false keeps them out of"
+      echo "# every file the installer writes. The front doors hand them to"
+      echo "# terraform as TF_VAR_* environment variables instead."
+    fi
     echo ""
     echo "permission_set = $(hcl_str "${PLATFORM_AGENT_PERMISSION_SET:-read-only}")"
     if [ "${PLATFORM_AGENT_PERMISSION_SET:-}" = "custom" ]; then
@@ -484,8 +527,10 @@ write_tfvars_from_state() {
     echo "google_chat_mode          = $(hcl_str "${GOOGLE_CHAT_MODE:-default}")"
     echo ""
     echo "enable_slack            = $(hcl_bool "${SLACK_ENABLED:-false}")"
-    echo "slack_bot_token         = $(hcl_str "${SLACK_BOT_TOKEN:-}")"
-    echo "slack_app_token         = $(hcl_str "${SLACK_APP_TOKEN:-}")"
+    if is_truthy "${PERSIST_SECRETS_ON_DISK:-true}"; then
+      echo "slack_bot_token         = $(hcl_str "${SLACK_BOT_TOKEN:-}")"
+      echo "slack_app_token         = $(hcl_str "${SLACK_APP_TOKEN:-}")"
+    fi
     echo "slack_allowed_users     = $(hcl_csv_list "${SLACK_ALLOWED_USERS:-}")"
     echo "slack_home_channel      = $(hcl_str "${SLACK_HOME_CHANNEL:-}")"
     echo "slack_home_channel_name = $(hcl_str "${SLACK_HOME_CHANNEL_NAME:-}")"
@@ -514,4 +559,18 @@ write_tfvars_from_state() {
   chmod 600 "${dest}.tmp"
   mv -f -- "${dest}.tmp" "$dest"
   umask "$old_umask"
+
+  # Terraform reads TF_VAR_* only where terraform.tfvars is silent, so with
+  # PERSIST_SECRETS_ON_DISK=true (the default) the file above wins and these
+  # are inert; with it false they are the only channel the credentials travel.
+  # Exported here, at the one place every front door already passes through,
+  # so no terraform invocation downstream can miss them.
+  export TF_VAR_api_server_key="${API_SERVER_KEY:-}"
+  export TF_VAR_gemini_api_key="${GEMINI_API_KEY:-}"
+  export TF_VAR_openai_api_key="${OPENAI_API_KEY:-}"
+  export TF_VAR_anthropic_api_key="${ANTHROPIC_API_KEY:-}"
+  export TF_VAR_slack_bot_token="${SLACK_BOT_TOKEN:-}"
+  export TF_VAR_slack_app_token="${SLACK_APP_TOKEN:-}"
+  export TF_VAR_session_kv_api_key="${SESSION_KV_API_KEY:-}"
+  export TF_VAR_session_kv_salt="${SESSION_KV_SALT:-}"
 }

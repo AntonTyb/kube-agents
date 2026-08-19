@@ -48,6 +48,7 @@ class InstallerCommonTest(unittest.TestCase):
         env=None,
         kubectl_script=None,
         describe_stub="exit 1",
+        kms_versions="",
     ):
         """Source installer_common.sh with print stubs and run `script`.
 
@@ -67,6 +68,7 @@ class InstallerCommonTest(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 'case "$*" in\n'
                 f"  *\"clusters describe\"*) {describe_stub} ;;\n"
+                f"  *\"keys versions list\"*) printf '%s' '{kms_versions}'; exit 0 ;;\n"
                 "esac\n"
                 f"[ -f '{state_file}' ] && cat '{state_file}'\n"
                 f"exit {gcloud_exit}\n"
@@ -227,7 +229,50 @@ class InstallerCommonTest(unittest.TestCase):
                 kubectl_script=kubectl_stub,
             )
             self.assertIn("rc=0", proc.stdout, proc.stderr)
-            self.assertIn('api_server_key    = "recovered-key"', dest.read_text())
+            content = dest.read_text()
+            self.assertIn('api_server_key    = "recovered-key"', content)
+            # SESSION_KV_* recover too: an adoption re-install must keep the
+            # live salt or every chat identity re-pseudonymises.
+            self.assertIn('session_kv_salt    = "recovered-key"', content)
+
+    def test_tfvars_omits_credentials_when_persist_secrets_off(self):
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$? tfvar=$TF_VAR_api_server_key"',
+                env={
+                    "PERSIST_SECRETS_ON_DISK": "false",
+                    "API_SERVER_KEY": "k1",
+                    "GEMINI_API_KEY": "g1",
+                    "SLACK_ENABLED": "true",
+                    "SLACK_BOT_TOKEN": "xoxb-1",
+                },
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            content = dest.read_text()
+            for leaked in ("k1", "g1", "xoxb-1", "api_server_key", "slack_bot_token"):
+                self.assertNotIn(leaked, content)
+            self.assertIn("Credentials omitted", content)
+            # The TF_VAR_* channel carries them instead.
+            self.assertIn("tfvar=k1", proc.stdout)
+
+    def test_minter_deferred_without_an_enabled_key_version(self):
+        # A minter whose KMS key holds no ENABLED version never passes
+        # readiness, and the apply waits on it — the generator defers.
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            env = {
+                "API_SERVER_KEY": "k",
+                "GITHUB_ORG": "org",
+                "GITHUB_REPO": "repo",
+                "GITHUB_APP_ID": "42",
+            }
+            proc = self._run(f'write_tfvars_from_state "{dest}"', env=env, kms_versions="")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("enable_github_minter = false", dest.read_text())
+            proc = self._run(f'write_tfvars_from_state "{dest}"', env=env, kms_versions="1")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("enable_github_minter = true", dest.read_text())
 
     def test_tfvars_recovery_refuses_a_foreign_kube_context(self):
         # A stale context pointing at some other install must not donate that

@@ -80,9 +80,13 @@ locals {
       # rather than left to the chart's own generation so that `terraform apply`
       # is idempotent without needing a cluster read — rotating the salt would
       # re-anonymise every user, breaking the link between their past sessions
-      # and their future ones.
-      SESSION_KV_API_KEY = random_password.session_kv_api_key.result
-      SESSION_KV_SALT    = random_password.session_kv_salt.result
+      # and their future ones. The variables outrank the generation for the
+      # one case state cannot cover: adopting a cluster whose Secret already
+      # holds live values (the installer recovers them from it). With empty
+      # state and empty variables, a fresh salt here would sever every user's
+      # session history.
+      SESSION_KV_API_KEY = var.session_kv_api_key != "" ? var.session_kv_api_key : random_password.session_kv_api_key.result
+      SESSION_KV_SALT    = var.session_kv_salt != "" ? var.session_kv_salt : random_password.session_kv_salt.result
       ANTHROPIC_API_KEY  = var.anthropic_api_key
       GEMINI_API_KEY     = var.gemini_api_key
       OPENAI_API_KEY     = var.openai_api_key

@@ -231,6 +231,20 @@ variable "slack_app_token" {
   default     = ""
 }
 
+variable "session_kv_api_key" {
+  description = "Existing SESSION_KV_API_KEY to keep, for adopting a cluster whose Secret already holds one. Empty generates a fresh value (the right choice for a new install)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "session_kv_salt" {
+  description = "Existing SESSION_KV_SALT to keep, for adopting a cluster whose Secret already holds one. Rotating the salt re-anonymises every chat user, so an adoption must pass the live value; empty generates a fresh one."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "slack_allowed_users" {
   description = "Slack users allowed to talk to the agent (empty list = all users allowed). Only used when enable_slack is true."
   type        = list(string)

@@ -968,6 +968,20 @@ import_github_pem() {
     print_info "Without Go, the gcloud-only import recipe is in k8s-operator/config/integrations/github/README.md."
     return 0
   fi
+  # The ring and key normally come from Terraform, but this import runs
+  # BEFORE the apply — the minter Deployment cannot pass readiness without an
+  # imported key, and the composition's helm release waits on every
+  # Deployment, so importing after the apply would wedge it. Ensure they
+  # exist first, matching terraform/modules/github-minter exactly; adopt-kms
+  # imports them into state at apply time, the same way it re-adopts them
+  # after a destroy.
+  print_info "Ensuring the minter's KMS keyring and import-only signing key exist..."
+  gcloud services enable cloudkms.googleapis.com --project="$project_id"
+  gcloud kms keyrings create "$keyring" --location="$kms_location" --project="$project_id" 2>/dev/null || true
+  gcloud kms keys create "$key" --keyring="$keyring" --location="$kms_location" \
+    --purpose=asymmetric-signing --default-algorithm=rsa-sign-pkcs1-2048-sha256 \
+    --import-only --protection-level=software --project="$project_id" 2>/dev/null || true
+
   print_info "Importing the GitHub App private key into KMS via the Minty CLI..."
   local minty_dir pem_abs
   minty_dir="$(mktemp -d "${TMPDIR:-/tmp}/minty-XXXXXX")"
@@ -1871,6 +1885,13 @@ main() {
   # environment write_tfvars_from_state reads.
   # shellcheck disable=SC1090
   source "$vars_file"
+
+  # The App key import runs BEFORE the generation: the generator only enables
+  # the minter when its KMS key holds an ENABLED version (a minter without
+  # one never passes readiness and the apply waits on it), so the import is
+  # what makes a fresh install with a PEM deploy the minter in one pass.
+  import_github_pem "$project_id" "$region"
+
   local tfvars_file
   tfvars_file="$(tf_compose_dir "$repo_dir")/terraform.tfvars"
   write_tfvars_from_state "$tfvars_file" "$image_tag"
@@ -1963,9 +1984,10 @@ main() {
   print_info "Provisioning output is also being saved to: ${C_BOLD}${provisioning_log}${C_RESET}"
   run_lifecycle_apply "$repo_dir" "$provisioning_log"
 
-  # Post-apply steps Terraform cannot carry: the managed-OTel scope (no
-  # provider field) and the GitHub App key import (the PEM must not enter
-  # state). The OTel scope is set only on a cluster this install created —
+  # The one post-apply step Terraform cannot carry: the managed-OTel scope
+  # (no provider field; the GitHub App key import moved BEFORE the apply,
+  # since the minter's readiness depends on it and the apply waits on the
+  # minter). The OTel scope is set only on a cluster this install created —
   # provision_01 passed it on create only, and silently changing the
   # telemetry scope of a cluster somebody else made is not an install's call.
   if [ "${TFVARS_CREATE_CLUSTER:-true}" = "true" ]; then
@@ -1973,7 +1995,6 @@ main() {
   else
     print_info "Existing cluster: leaving its managed-OTel scope untouched. Set it yourself if you want managed OTel collection: gcloud container clusters update $cluster_name --location $region --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS"
   fi
-  import_github_pem "$project_id" "$region"
 
   # 12. Workload & Pod Health Verification Checkpoint
   print_step "13. Verifying Workload & Pod Health"

@@ -35,10 +35,12 @@ Change a default here and every front door follows. Do **not** restate these val
 `install.sh` and read by the Day-2 menu, `uninstall.sh`, `upgrade.sh`, the admin console,
 and the e2e tests. The `terraform.tfvars` the engine consumes is generated from it on
 every run, so the two cannot disagree. Set `PERSIST_SECRETS_ON_DISK=false` to keep
-credentials out of it — the generator recovers them from the live
-`platform-agent-secrets` Secret on later runs. `SKIP_CERT_MANAGER=true` makes the
-generator emit `enable_cert_manager = false`, for a cluster whose cert-manager comes
-from somewhere else.
+credentials out of both files: the generator omits them from `terraform.tfvars` and
+exports them as `TF_VAR_*` for the apply instead, and later runs recover them from the
+live `platform-agent-secrets` Secret (only when kubectl's current context is this
+install's cluster). `SKIP_CERT_MANAGER=true` makes the generator emit
+`enable_cert_manager = false`, for a cluster whose cert-manager comes from somewhere
+else.
 
 ## File directory
 
