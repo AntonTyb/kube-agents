@@ -29,6 +29,16 @@ api_server_key = "REPLACE_WITH_A_STRONG_RANDOM_KEY"
 # defaults to image_registry.
 # third_party_image_registry = "us-east4-docker.pkg.dev/my-project/mirror"
 
+# Cluster topology. "autopilot" (default) or "standard" — standard reproduces
+# the cluster the retired provisioning scripts built, and is the only mode
+# that can carry the gVisor node pool. Set create_cluster = false to install
+# onto an existing cluster (it must already have Workload Identity; CMEK on it
+# stays a gcloud step outside Terraform).
+# cluster_mode            = "standard"
+# create_cluster          = false
+# enable_gvisor_node_pool = true
+# gvisor_pool_name        = "gvisor-pool"
+
 # Cluster tuning
 # deletion_protection = true
 # release_channel     = "REGULAR"

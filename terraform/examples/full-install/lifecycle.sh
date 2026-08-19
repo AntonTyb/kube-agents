@@ -132,7 +132,10 @@ adopt_kms() {
   # address <TAB> gcloud-kind <TAB> resource id
   local -a targets=()
 
-  if [[ "$(tfvar enable_database_encryption)" != "false" ]]; then
+  # With create_cluster = false the module manages no KMS resources — CMEK on
+  # an existing cluster is the caller's gcloud step — so there is nothing to
+  # adopt for the cluster half.
+  if [[ "$(tfvar create_cluster)" != "false" && "$(tfvar enable_database_encryption)" != "false" ]]; then
     keyring=$(tfvar kms_keyring_name)
     key=$(tfvar kms_key_name)
     targets+=(
@@ -190,7 +193,7 @@ delete_agent_cr() {
   location=$(tfvar location)
   project=$(tfvar project_id)
 
-  if ! gcloud container clusters get-credentials "$cluster" --region "$location" \
+  if ! gcloud container clusters get-credentials "$cluster" --location "$location" \
         --project "$project" >/dev/null 2>&1; then
     log "cluster unreachable; nothing to delete in-cluster"
     return 0
@@ -256,9 +259,23 @@ purge_backups() {
 }
 
 disable_deletion_protection() {
-  local address="module.gke_cluster.google_container_cluster.autopilot"
+  # The cluster's state address depends on cluster_mode, and on whether the
+  # state predates the mode switch (the autopilot resource used to carry no
+  # index; the moved block renames it on the first plan, but this script can
+  # run against a state that has not planned yet). create_cluster = false has
+  # no cluster in state at all and falls through to return 0.
+  local address="" candidate
   load_state
-  in_state "$address" || return 0
+  for candidate in \
+    "module.gke_cluster.google_container_cluster.autopilot[0]" \
+    "module.gke_cluster.google_container_cluster.standard[0]" \
+    "module.gke_cluster.google_container_cluster.autopilot"; do
+    if in_state "$candidate"; then
+      address="$candidate"
+      break
+    fi
+  done
+  [[ -n "$address" ]] || return 0
 
   # Read what STATE records, not what the variable is configured to: state is
   # what the provider enforces on delete. The two disagree exactly when it

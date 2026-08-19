@@ -151,6 +151,8 @@ module "gke_cluster" {
 
   project_id                 = var.project_id
   cluster_name               = var.cluster_name
+  cluster_mode               = var.cluster_mode
+  create_cluster             = var.create_cluster
   location                   = var.location
   deletion_protection        = var.deletion_protection
   release_channel            = var.release_channel
@@ -159,6 +161,8 @@ module "gke_cluster" {
   kms_key_name               = var.kms_key_name
   allow_external_dns_traffic = var.allow_external_dns_traffic
   enable_backup_agent        = var.enable_backup_agent
+  enable_gvisor_node_pool    = var.enable_gvisor_node_pool
+  gvisor_pool_name           = var.gvisor_pool_name
 
   resource_labels = {
     "kube-agents-host" = "true"

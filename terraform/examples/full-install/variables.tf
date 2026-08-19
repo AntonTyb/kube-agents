@@ -4,13 +4,42 @@ variable "project_id" {
 }
 
 variable "cluster_name" {
-  description = "Name of the GKE Autopilot cluster to create"
+  description = "Name of the GKE cluster to create (or, with create_cluster = false, the existing cluster to install onto)"
   type        = string
 }
 
-variable "location" {
-  description = "GCP region for the cluster (and the KMS key ring when the GitHub minter is enabled). Autopilot clusters are regional, so a zone is rejected by the gke-cluster module."
+variable "cluster_mode" {
+  description = "Cluster shape: \"autopilot\" (default) or \"standard\". Standard reproduces the cluster the retired provisioning scripts built — e2-standard-4 default pool, Dataplane V2 with FQDN NetworkPolicy, Filestore CSI and BackupRestore addons — and is the only mode that can carry a gVisor node pool."
   type        = string
+  default     = "autopilot"
+
+  validation {
+    condition     = contains(["autopilot", "standard"], var.cluster_mode)
+    error_message = "cluster_mode must be \"autopilot\" or \"standard\"."
+  }
+}
+
+variable "create_cluster" {
+  description = "Whether to create the cluster. Set false to install onto an existing cluster: the gke-cluster module then only reads it, creates no KMS resources, and enabling CMEK on it stays a gcloud step outside Terraform. The existing cluster must already have Workload Identity enabled."
+  type        = bool
+  default     = true
+}
+
+variable "location" {
+  description = "GCP location for the cluster (and the KMS key ring when the GitHub minter is enabled): a region, or a zone for a zonal Standard or pre-existing cluster. Autopilot clusters are regional, so a zone is rejected by the gke-cluster module in autopilot mode."
+  type        = string
+}
+
+variable "enable_gvisor_node_pool" {
+  description = "Whether to add the dedicated GKE Sandbox (gVisor) node pool. Standard mode only; fails the plan on Autopilot, which provides the gvisor RuntimeClass natively."
+  type        = bool
+  default     = false
+}
+
+variable "gvisor_pool_name" {
+  description = "Name of the gVisor node pool."
+  type        = string
+  default     = "gvisor-pool"
 }
 
 variable "deletion_protection" {

@@ -4,17 +4,56 @@ variable "project_id" {
 }
 
 variable "cluster_name" {
-  description = "GKE Autopilot cluster name"
+  description = "GKE cluster name"
   type        = string
 }
 
+variable "cluster_mode" {
+  description = <<-EOT
+    Which kind of cluster to manage. "autopilot" (the default, and what this
+    module always built before the mode existed) creates a GKE Autopilot
+    cluster. "standard" creates the GKE Standard cluster
+    k8s-operator/scripts/provision_01_gcp_cluster.sh used to create: a
+    default node pool of e2-standard-4 machines, Dataplane V2 with FQDN
+    NetworkPolicy, the Filestore CSI and BackupRestore addons, Workload
+    Identity, and (by default) CMEK database encryption.
+
+    One provision_01 flag has no Terraform field on either google provider:
+    `--managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS`. Callers
+    that need the managed OpenTelemetry scope set it once after create with
+    `gcloud container clusters update`; the provider does not know the field,
+    so Terraform never sees or reverts it.
+  EOT
+  type        = string
+  default     = "autopilot"
+
+  validation {
+    condition     = contains(["autopilot", "standard"], var.cluster_mode)
+    error_message = "cluster_mode must be \"autopilot\" or \"standard\"."
+  }
+}
+
+variable "create_cluster" {
+  description = <<-EOT
+    Whether the module creates the cluster. Set false to install onto a
+    cluster somebody else made: the module then only reads the named cluster
+    through a data source and creates no cluster or KMS resources. The
+    existing cluster must already have Workload Identity enabled, and
+    enabling CMEK database encryption on it stays a
+    `gcloud container clusters update --database-encryption-key` step outside
+    Terraform — a data source cannot mutate the cluster.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "location" {
-  description = "GCP region for the cluster. Autopilot clusters are regional, so a zone (e.g. us-central1-a) is rejected."
+  description = "GCP location for the cluster: a region (e.g. us-central1), or a zone (e.g. us-central1-a) for a zonal Standard or pre-existing cluster. Autopilot clusters are regional, so a zone is rejected at plan time in autopilot mode."
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z]+-[a-z]+[0-9]+$", var.location))
-    error_message = "location must be a region (e.g. us-central1); GKE Autopilot does not support zonal clusters."
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]+(-[a-z])?$", var.location))
+    error_message = "location must be a region (e.g. us-central1) or a zone (e.g. us-central1-a)."
   }
 }
 
@@ -25,13 +64,13 @@ variable "deletion_protection" {
 }
 
 variable "allow_external_dns_traffic" {
-  description = "Whether the DNS-based control plane endpoint serves traffic from outside the VPC. The Platform Agent's endpoint detection reads this field, and without it a cluster the agent cannot route to over its IP endpoint is unreachable. Defaults to false — GKE's own default, and the value every cluster this module already manages is at — so that upgrading the module does not publish an endpoint on an existing cluster; set it true for a cluster the agent must reach from outside the VPC."
+  description = "Whether the DNS-based control plane endpoint serves traffic from outside the VPC. The Platform Agent's endpoint detection reads this field, and without it a cluster the agent cannot route to over its IP endpoint is unreachable. Defaults to false — GKE's own default, and the value every cluster this module already manages is at — so that upgrading the module does not publish an endpoint on an existing cluster; set it true for a cluster the agent must reach from outside the VPC. provision_01_gcp_cluster.sh passed --enable-dns-access on create, so installs that mirror the script path set this true."
   type        = bool
   default     = false
 }
 
 variable "resource_labels" {
-  description = "GCP resource labels to apply to the cluster. Set kube-agents-host=true when the cluster hosts kube-agents."
+  description = "GCP resource labels to apply to the cluster. Set kube-agents-host=true when the cluster hosts kube-agents. Ignored when create_cluster = false."
   type        = map(string)
   default     = {}
 }
@@ -50,7 +89,7 @@ variable "release_channel" {
 }
 
 variable "enable_database_encryption" {
-  description = "Whether to enable Cloud KMS database encryption for GKE etcd secrets (CMEK)."
+  description = "Whether to enable Cloud KMS database encryption for GKE etcd secrets (CMEK). Ignored when create_cluster = false: encrypting an existing cluster is a gcloud update outside Terraform."
   type        = bool
   default     = true
 }
@@ -90,4 +129,36 @@ variable "enable_backup_agent" {
   EOT
   type        = bool
   default     = true
+}
+
+variable "standard_machine_type" {
+  description = "Machine type for the Standard cluster's default node pool. The default matches provision_01_gcp_cluster.sh's --machine-type. Only used when cluster_mode = \"standard\"."
+  type        = string
+  default     = "e2-standard-4"
+}
+
+variable "standard_node_count" {
+  description = "Node count per zone for the Standard cluster's default node pool, matching provision_01_gcp_cluster.sh's --num-nodes. Only used when cluster_mode = \"standard\"."
+  type        = number
+  default     = 1
+}
+
+variable "enable_gvisor_node_pool" {
+  description = <<-EOT
+    Whether to add the dedicated GKE Sandbox (gVisor) node pool that
+    k8s-operator/scripts/provision_02_gvisor_nodepool.sh used to create.
+    Standard mode only: on Autopilot the gvisor RuntimeClass is available
+    without a node pool, so requesting the pool there fails at plan time
+    rather than silently doing nothing. Works with create_cluster = false —
+    the pool attaches to the named existing Standard cluster, which is how
+    the script supported migration onto a running cluster.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gvisor_pool_name" {
+  description = "Name of the gVisor node pool, matching provision_02_gvisor_nodepool.sh's GVISOR_POOL_NAME."
+  type        = string
+  default     = "gvisor-pool"
 }
