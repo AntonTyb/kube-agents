@@ -170,9 +170,7 @@ HINDSIGHT_VARS = $$HINDSIGHT_API_IMAGE $$HINDSIGHT_POSTGRES_IMAGE
 .PHONY: deploy-litellm
 deploy-litellm: kustomize ## Deploy LiteLLM integration.
 	$(call require-var,LITELLM_IMAGE,scripts/provision_09_deploy_litellm.sh,images.json)
-	@if [ "$$MODEL_PROVIDER" = "chatgpt" ]; then \
-		$(KUSTOMIZE) build config/integrations/litellm/overlays/chatgpt | envsubst '$(LITELLM_VARS)' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -; \
-	elif [ "$$MODEL_PROVIDER" = "vertex_ai" ]; then \
+	@if [ "$$MODEL_PROVIDER" = "vertex_ai" ]; then \
 		$(KUSTOMIZE) build config/integrations/litellm/overlays/vertex_ai | envsubst '$(LITELLM_VERTEX_VARS)' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -; \
 	else \
 		$(KUSTOMIZE) build config/integrations/litellm/base | envsubst '$(LITELLM_VARS)' | kubectl apply -n $${NAMESPACE:-kubeagents-system} -f -; \
@@ -180,9 +178,7 @@ deploy-litellm: kustomize ## Deploy LiteLLM integration.
 
 .PHONY: undeploy-litellm
 undeploy-litellm: kustomize ## Undeploy LiteLLM integration.
-	@if [ "$$MODEL_PROVIDER" = "chatgpt" ]; then \
-		$(KUSTOMIZE) build config/integrations/litellm/overlays/chatgpt | envsubst '$(LITELLM_VARS)' | kubectl delete --ignore-not-found=$(ignore-not-found) -n $${NAMESPACE:-kubeagents-system} -f -; \
-	elif [ "$$MODEL_PROVIDER" = "vertex_ai" ]; then \
+	@if [ "$$MODEL_PROVIDER" = "vertex_ai" ]; then \
 		$(KUSTOMIZE) build config/integrations/litellm/overlays/vertex_ai | envsubst '$(LITELLM_VERTEX_VARS)' | kubectl delete --ignore-not-found=$(ignore-not-found) -n $${NAMESPACE:-kubeagents-system} -f -; \
 	else \
 		$(KUSTOMIZE) build config/integrations/litellm/base | envsubst '$(LITELLM_VARS)' | kubectl delete --ignore-not-found=$(ignore-not-found) -n $${NAMESPACE:-kubeagents-system} -f -; \

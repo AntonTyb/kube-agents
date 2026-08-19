@@ -273,15 +273,7 @@ kubectl get pods -n kubeagents-system
 kubectl get platformagents --all-namespaces
 ```
 
-#### Step 4: ChatGPT OAuth Authentication (If Applicable)
-
-If you chose `chatgpt` as your `MODEL_PROVIDER`, follow the printed OAuth Device Flow instructions or check the LiteLLM gateway logs:
-
-```bash
-kubectl logs -n kubeagents-system deployment/litellm -f
-```
-
-#### Step 5: Enable Google Chat & Slack Integrations (Manual Required Steps)
+#### Step 4: Enable Google Chat & Slack Integrations (Manual Required Steps)
 
 If you enabled Google Chat (`GOOGLE_CHAT_ENABLED=true`) or Slack (`SLACK_ENABLED=true`) during provisioning, perform the following required manual steps after `make gcp-provision` completes:
 

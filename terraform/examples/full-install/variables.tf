@@ -120,7 +120,7 @@ variable "third_party_image_registry" {
 }
 
 variable "model_provider" {
-  description = "Model provider the LiteLLM gateway routes model-default to (gemini, anthropic, openai, or vertex_ai — chatgpt needs the kustomize overlay and is rejected by the chart). Set the matching *_api_key variable; vertex_ai takes no key and authenticates with Workload Identity instead."
+  description = "Model provider the LiteLLM gateway routes model-default to (gemini, anthropic, openai, or vertex_ai). Set the matching *_api_key variable; vertex_ai takes no key and authenticates with Workload Identity instead."
   type        = string
   default     = "gemini"
 

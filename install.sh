@@ -101,7 +101,7 @@ Flags for AI Agents & Automation:
                                 DEFAULT_REGION, currently us-central1)
   --cluster-name=NAME           GKE Cluster Name (default: DEFAULT_CLUSTER_NAME,
                                 currently platform-agent-host)
-  --model-provider=PROVIDER     Model provider: gemini | vertex_ai | anthropic | chatgpt | openai
+  --model-provider=PROVIDER     Model provider: gemini | vertex_ai | anthropic | openai
                                 (default: gemini)
   --model-default-name=NAME     Default model name for the provider
   --vertex-project-id=ID        GCP project serving Vertex AI models (default: --project-id)
@@ -1278,7 +1278,7 @@ main() {
   print_step "7. AI Model Provider Credentials"
   local model_provider="$PARAM_MODEL_PROVIDER"
   if ! is_valid_model_provider "$model_provider"; then
-    print_error "Unsupported model provider '$model_provider'. Use gemini, vertex_ai, anthropic, chatgpt, or openai."
+    print_error "Unsupported model provider '$model_provider'. Use gemini, vertex_ai, anthropic, or openai."
     exit 1
   fi
   local model_default_name="${PARAM_MODEL_DEFAULT_NAME:-${MODEL_DEFAULT_NAME:-}}"
@@ -1345,7 +1345,7 @@ main() {
       print_info "Vertex AI needs no API key: LiteLLM authenticates as ${LITELLM_GSA_NAME:-kubeagents-litellm-gsa}@${project_id}.iam.gserviceaccount.com via Workload Identity."
       print_info "Serving ${model_default_name} from projects/${vertex_project_id}/locations/${vertex_location}."
       ;;
-    chatgpt | openai)
+    openai)
       [ -n "$openai_api_key" ] || print_warning "No OpenAI API key was provided; the agent will require a credential update before model calls can succeed."
       ;;
     anthropic)

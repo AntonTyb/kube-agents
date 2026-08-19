@@ -143,7 +143,7 @@ The exposed ports:
 - `config/webhook/` — admission webhook config (validating + mutating). The Service targets port `10250` on the manager pod for the GKE firewall reason in [Admission webhooks](/kube-agents/operator/#admission-webhooks).
 - `config/manager/` — Deployment for the controller manager.
 - `config/integrations/github/` — Minty deployment.
-- `config/integrations/litellm/` — LiteLLM Deployment + Service (plus `NetworkPolicy`, `PodMonitoring`, and `chatgpt` and `vertex_ai` overlays).
+- `config/integrations/litellm/` — LiteLLM Deployment + Service (plus `NetworkPolicy`, `PodMonitoring`, and a `vertex_ai` overlay).
 - `config/integrations/inference-replay/` — replay proxy Deployment, Service, and PVC.
 - `config/integrations/hindsight/` — the Planning Agent's memory store: API Deployment, Postgres/pgvector StatefulSet, and their Service, `NetworkPolicy`, and `PodMonitoring`.
 

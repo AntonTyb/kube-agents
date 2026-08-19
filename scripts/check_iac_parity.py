@@ -37,42 +37,36 @@ surfaces that have drifted, which is worse than no check at all.
   Certificate and the PlatformAgent CR, so ``Fail`` deadlocks a fresh install of
   a release that creates the CR. See the chart's ``values.yaml``.
 * ``provision_01_gcp_cluster.sh`` passes
-  ``--addons=GcpFilestoreCsiDriver,BackupRestore``. The ``gke-cluster`` module
-  mirrors the ``BackupRestore`` half and not the ``GcpFilestoreCsiDriver`` half:
-  nothing in the harness mounts a Filestore volume, so the module does not turn
-  on a driver no workload here asks for. This sits under the Autopilot/Standard
-  divergence above — ``gcloud container clusters create-auto`` has no
-  ``--addons`` flag at all, so the script's own Autopilot path could not pass
-  either half.
-* The chart rejects ``modelProvider: chatgpt``; that provider needs the
-  kustomize overlay's OAuth-token PVC.
-* The ``gke-cluster`` module builds an **Autopilot** cluster where
-  ``provision_01_gcp_cluster.sh`` builds a Standard one, so node-level settings
-  (machine type, gVisor node pool, managed-OTel scope) have no Terraform
-  counterpart.
+  ``--addons=GcpFilestoreCsiDriver,BackupRestore``. The ``gke-cluster``
+  module's default (Autopilot) mode mirrors the ``BackupRestore`` half only —
+  nothing in the harness mounts a Filestore volume, and ``create-auto`` has no
+  ``--addons`` flag — while its ``cluster_mode = "standard"`` mirrors both
+  halves, like the script.
+* ``provision_01``'s ``--managed-otel-scope`` has no field on either google
+  provider, so the ``gke-cluster`` module cannot express it in any mode; it
+  stays a gcloud step (see the module README).
 * LiteLLM's OTel callback is unconditional in the kustomize base and gated on
   ``litellm.otel`` in the chart, because a chart install may target a cluster
   with no managed collector.
 * ``harness.hermes.dashboardEnabled`` defaults to ``true`` in the CRD and
   ``false`` on the script path. A real inconsistency, tracked in the chart
   README rather than papered over here.
-* **The GitHub minter's Kubernetes surface is script-only**: the ``github-minter``
-  module creates IAM and KMS only, while the minter Deployment/KSA/NetworkPolicy
-  (``k8s-operator/config/integrations/github/``), the ``github-app-credentials``
-  Secret (``provision_07``), and the App PEM import (``provision_10``) have no
-  Terraform or chart counterpart.
+* **The GitHub App PEM import is script/manual only**: the ``github-minter``
+  module creates IAM and an import-only KMS key, the chart's ``githubMinter.*``
+  values render the minter's Kubernetes surface, but importing the App private
+  key into the KMS key stays a one-shot Minty CLI step (``provision_10``, or
+  the command in the module README) — the PEM must not enter Terraform state.
 * **cert-manager is installed differently by design**: the script patches
   Autopilot deployments to ``--leader-elect=false`` and skips an existing
   install; the composition moves the leader-election lease into the
   cert-manager namespace instead, and fails on a pre-existing install
   (``enable_cert_manager = false`` is the escape). See the comments in
   ``terraform/examples/full-install/main.tf``.
-* **The Hindsight memory store (``provision_13``) is script-only.**
-  Hindsight-backed memory providers need
-  ``k8s-operator/config/integrations/hindsight/``, which neither the chart nor
-  Terraform deploys; the chart's values comment warns that selecting such a
-  provider on those paths points the agent at a Service that does not exist.
-  The default ``multiuser_memory`` needs none of it.
+* **The Hindsight manifests exist twice by design**:
+  ``k8s-operator/config/integrations/hindsight/`` (applied by ``provision_13``)
+  and the chart's ``templates/hindsight.yaml`` express the same store, and the
+  chart renders it whenever a hindsight-backed memory provider is selected.
+  Keep the two in step when either changes.
 * **``full-install`` enables a superset of APIs** (``iam``, ``monitoring``,
   ``logging``): Terraform must enable what its own resources call, where
   gcloud enables APIs implicitly.
@@ -438,7 +432,6 @@ def check_model_defaults(f: Failures) -> None:
     pairs = re.findall(r'"([^"]+)"', chart_line.group(1))
     chart = dict(zip(pairs[::2], pairs[1::2]))
 
-    # chatgpt is chart-rejected by design, so compare only shared providers.
     for provider, model in sorted(chart.items()):
         if known and provider not in known:
             f.add("model-defaults", f"chart knows provider {provider!r}, common.sh does not")

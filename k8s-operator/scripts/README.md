@@ -32,7 +32,7 @@ keeping its own copies:
 | `DEFAULT_MODEL_PROVIDER`                | Model provider (`gemini`)                                            |
 | `DEFAULT_REGISTRY_PREFIX`               | Container registry prefix                                            |
 | `default_model_for_provider <provider>` | The default model for a provider                                     |
-| `is_valid_model_provider <provider>`    | Accepted providers: `gemini`, `anthropic`, `chatgpt`, `openai`       |
+| `is_valid_model_provider <provider>`    | Accepted providers: `gemini`, `vertex_ai`, `anthropic`, `openai`     |
 | `is_valid_permission_set <set>`         | Accepted GCP IAM permission sets: `read-only`, `gke-admin`, `custom` |
 | `derive_kms_location <region>`          | Region for Cloud KMS (strips a zone suffix)                          |
 

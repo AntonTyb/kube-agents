@@ -126,9 +126,9 @@ litellm:
   # the managed collector exists; the NetworkPolicy already allows the egress.
   otel: false
   # model-default routes to <modelProvider>/<modelDefaultName>. Providers:
-  # gemini, anthropic, openai, vertex_ai (chatgpt needs the kustomize overlay and
-  # is rejected). The provider's API key must exist in the credentials Secret —
-  # except vertex_ai, which authenticates with Workload Identity instead.
+  # gemini, anthropic, openai, vertex_ai. The provider's API key must exist in
+  # the credentials Secret — except vertex_ai, which authenticates with
+  # Workload Identity instead.
   modelProvider: gemini
   # Empty selects the per-provider default (mirrors common.sh).
   modelDefaultName: ""
@@ -322,9 +322,9 @@ platformAgent:
       # Number of agent pods. `null` omits the field; the operator defaults to 1.
       replicas: null
       # RuntimeClass for the agent pod. Set to "gvisor" for GKE Sandbox kernel
-      # isolation — that needs the sandbox node pool
-      # k8s-operator/scripts/provision_02_gvisor_nodepool.sh creates, which has
-      # no Terraform equivalent. Empty omits the field.
+      # isolation — on a Standard cluster that needs the sandbox node pool the
+      # gke-cluster module's enable_gvisor_node_pool creates; Autopilot ships
+      # the RuntimeClass natively. Empty omits the field.
       runtimeClassName: ""
     # Extra environment for the agent container, applied after the operator's own
     # values so it overrides them. The case this exists for is telemetry: the

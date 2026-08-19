@@ -217,14 +217,14 @@ DEFAULT_MODEL_PROVIDER="gemini"
 # Model provider → the model the pipeline defaults to for that provider.
 default_model_for_provider() {
   case "${1:-}" in
-    chatgpt | openai) echo "gpt-5.4" ;;
+    openai) echo "gpt-5.4" ;;
     anthropic) echo "claude-opus-5" ;;
     *) echo "gemini-3.5-flash" ;;
   esac
 }
 
 is_valid_model_provider() {
-  [[ "${1:-}" =~ ^(gemini|vertex_ai|anthropic|chatgpt|openai)$ ]]
+  [[ "${1:-}" =~ ^(gemini|vertex_ai|anthropic|openai)$ ]]
 }
 
 # The GCP IAM role bundles provision_04_gcp_iam.sh knows how to grant. Kubernetes
@@ -468,11 +468,11 @@ init_var_kms_location() {
 }
 
 init_var_model_provider() {
-  init_var "MODEL_PROVIDER" "$DEFAULT_MODEL_PROVIDER" "Enter Model Provider (gemini, vertex_ai, anthropic, chatgpt, openai)"
+  init_var "MODEL_PROVIDER" "$DEFAULT_MODEL_PROVIDER" "Enter Model Provider (gemini, vertex_ai, anthropic, openai)"
 
   MODEL_PROVIDER=$(echo "$MODEL_PROVIDER" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
   if ! is_valid_model_provider "$MODEL_PROVIDER"; then
-    print_error "Invalid Model Provider '$MODEL_PROVIDER'. Must be one of: gemini, vertex_ai, anthropic, chatgpt, openai."
+    print_error "Invalid Model Provider '$MODEL_PROVIDER'. Must be one of: gemini, vertex_ai, anthropic, openai."
     exit 1
   fi
 
@@ -1018,27 +1018,4 @@ confirm_action() {
       echo -e "  ${C_YELLOW}ℹ Aborted.${C_RESET}"
       exit 0
   fi
-}
-
-get_chatgpt_auth_info() {
-  if [ "${DRY_RUN:-0}" -eq 1 ]; then
-    return 0
-  fi
-
-  # Wait for the deployment to be rolled out first
-  kubectl rollout status deployment/litellm -n "${NAMESPACE:-kubeagents-system}" --timeout=60s >/dev/null 2>&1 || true
-
-  # Retry a few times to allow LiteLLM to initialize and print the device code
-  _check_litellm_logs() {
-    local auth_info
-    auth_info=$(kubectl logs deployment/litellm -n "${NAMESPACE:-kubeagents-system}" 2>/dev/null | awk '/Visit https:/ {u=$NF} /Enter code:/ {c=$NF} END {print u, c}') || true
-    read -r CHATGPT_URL CHATGPT_CODE <<< "$auth_info"
-    if [ -n "$CHATGPT_URL" ] && [ -n "$CHATGPT_CODE" ]; then
-      export CHATGPT_URL CHATGPT_CODE
-      return 0
-    fi
-    return 1
-  }
-
-  retry 15 1 _check_litellm_logs >/dev/null 2>&1 || true
 }

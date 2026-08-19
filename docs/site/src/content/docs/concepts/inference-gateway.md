@@ -49,7 +49,6 @@ The two substituted values come from provisioning (`MODEL_PROVIDER` and `MODEL_D
 | `gemini` (default) | `gemini-3.5-flash`           | Uses `GEMINI_API_KEY`.                     |
 | `anthropic`        | `claude-opus-5`              | Uses `ANTHROPIC_API_KEY`.                  |
 | `openai`           | `gpt-5.4`                    | Uses `OPENAI_API_KEY`.                     |
-| `chatgpt`          | `gpt-5.4`                    | Personal ChatGPT subscription (OAuth).     |
 | `vertex_ai`        | `gemini-3.5-flash`           | No API key — Workload Identity. See below. |
 
 Any model string the chosen provider accepts is valid — there is no allow-list in the harness. For example, [`examples/litellm-gemini/`](https://github.com/gke-labs/kube-agents/tree/main/examples/litellm-gemini) pins `gemini-3.1-flash-lite`.
