@@ -103,7 +103,7 @@ Each job in `jobs.json` follows this schema:
   "prompt": "Run the daily fleet security and RBAC posture audit. Read the SOP at 'governance/compliance_audit_sop.md' in your profile home — all 406 lines of it, before you run anything. Its eleven checks are section 2, lines 102-314, so a read that stops early skips almost the entire audit and reports a clean fleet it never looked at. Then execute it exactly, using the fleet-audit skill to open and close the audit run.",
   "skills": ["fleet-audit"],
   "enabled": true,
-  "deliver": "all"
+  "deliver": "chat"
 }
 ```
 
@@ -113,7 +113,7 @@ Each job in `jobs.json` follows this schema:
 - **`skills`** — the skills the work needs. The scheduler prepends each one's content to the prompt, force-loading it ahead of the first turn rather than leaving the load to the model's discretion. The seven audits use `fleet-audit`.
 - **`no_agent`** and **`script`** — a subprocess instead of an LLM turn, used by the four plumbing jobs on the Planning Agent's roster and by `github-repo-watcher` on the Platform Agent's (`script` resolves in that profile's `scripts/`). The governance watchdogs omit both: they are model runs.
 - **`enabled`** — set to `false` to disable a job without deleting its entry.
-- **`deliver`** — where the run's outcome goes: `"all"` sends it to the configured target, `"local"` resolves to no target at all and drops it. Every enabled job on the Platform Agent's roster uses `"all"`, so a watchdog that has stopped working is visible rather than indistinguishable from a quiet fleet.
+- **`deliver`** — where the run's outcome goes: `"all"` sends it to every configured target, `"chat"` hands it to the Chat Agent to post (see [the relay design](https://github.com/gke-labs/kube-agents/blob/main/docs/designs/cron-report-relay.md)), and `"local"` resolves to no target at all and drops it. `"chat"` is one target among them, not an override, so `"all"` reaches it too. No governance job uses `"local"`, so a watchdog that has stopped working is visible rather than indistinguishable from a quiet fleet; which value each one carries is in [`agents/platform/cron/jobs.json`](https://github.com/gke-labs/kube-agents/blob/main/agents/platform/cron/jobs.json).
 
 ## Disabling a watchdog
 
