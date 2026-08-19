@@ -178,6 +178,38 @@ jobs:
             exit 1
           fi
 
+          # The Hindsight memory store: absent by default, rendered complete
+          # when the memory provider needs it (the null-follows-provider
+          # tri-state), and forced off by an explicit enabled=false even with
+          # a hindsight provider selected.
+          if helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
+            | grep -qF "hindsight"; then
+            echo "hindsight rendered in the default install" >&2
+            exit 1
+          fi
+          hindsight=$(helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
+            --set platformAgent.harness.memory.provider=kube_agents_memory \
+            --show-only templates/hindsight.yaml)
+          for expected in \
+            "kind: Deployment" \
+            "kind: StatefulSet" \
+            "kind: NetworkPolicy" \
+            "kind: PodMonitoring" \
+            "name: hindsight-api" \
+            "name: hindsight-postgresql"; do
+            if ! grep -qF "$expected" <<<"$hindsight"; then
+              echo "hindsight render is missing '$expected' with a hindsight memory provider" >&2
+              exit 1
+            fi
+          done
+          if helm template test-release charts/kube-agents "${SET_FLAGS[@]}" \
+            --set platformAgent.harness.memory.provider=hindsight \
+            --set hindsight.enabled=false \
+            | grep -qF "name: hindsight-api"; then
+            echo "hindsight rendered despite hindsight.enabled=false" >&2
+            exit 1
+          fi
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
