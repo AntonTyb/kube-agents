@@ -920,7 +920,29 @@ RUN /opt/hermes/.venv/bin/python3 /tmp/kanban-guardrail-exit/apply_kanban_guardr
 # to at-most-once if it ever grows a write.
 # See the module docstring in deploy/docker/patches/kanban_notify_delivery.py.
 #
-# All four patches ship in ONE COPY + ONE RUN on purpose. `credential-proxy`
+# Hotfix: an event-triage card's subscription was addressed nowhere. A
+# Kubernetes event reaches the agent over the REST API, and api_server.py's
+# session-context chokepoint binds platform="api_server" with the session id as
+# chat_id -- deliberately, as the structural guard against #10760. One layer
+# down, `_maybe_auto_subscribe` copies those values into kanban_notify_subs and
+# writes a well-formed row naming a platform no notifier can deliver to, so the
+# card completes and the root-cause analysis reaches nobody (#630). On the
+# install this was diagnosed against, 14 subscription rows were sitting in that
+# state. The REST bridge already recorded the alert's real chat route under the
+# session id, in session_kv.db's session_metadata, and the
+# session id is the value sitting in the row's chat_id -- so the three
+# destination values are rewritten as the row is written and everything
+# downstream is untouched. Confirmed before the code was written by hand-editing
+# one undelivered card's row to a real address and rewinding its cursor: the
+# report was delivered, and with thread_id set it threaded under the alert it
+# answered. Fails open everywhere -- kanban_tools also runs in CLI workers with
+# no routing database, and a missing, unreadable or malformed one leaves today's
+# behaviour exactly as it is. verify_kanban_event_routing.py drives the real
+# patched create handler with an event session's context and checks every
+# fall-through.
+# See the module docstring in deploy/docker/patches/kanban_event_routing.py.
+#
+# All five patches ship in ONE COPY + ONE RUN on purpose. `credential-proxy`
 # builds FROM `platform`, and the block-per-patch layout these would normally get
 # pushed that stage past Docker's layer-depth ceiling ("max depth exceeded" on
 # build f9f1747c, 2026-08-07). The guarantees are unchanged — same appliers,
@@ -937,12 +959,16 @@ COPY deploy/docker/patches/kanban_wake_nudge.py \
      deploy/docker/patches/kanban_notify_delivery.py \
      deploy/docker/patches/apply_kanban_notify_delivery.py \
      deploy/docker/patches/verify_kanban_notify_delivery.py \
+     deploy/docker/patches/kanban_event_routing.py \
+     deploy/docker/patches/apply_kanban_event_routing.py \
+     deploy/docker/patches/verify_kanban_event_routing.py \
      deploy/docker/patches/patchlib.py \
      /tmp/latency-patches/
 RUN cp /tmp/latency-patches/kanban_wake_nudge.py /opt/hermes/hermes_cli/kanban_wake_nudge.py && \
     cp /tmp/latency-patches/kanban_auto_subscribe.py /opt/hermes/tools/kanban_auto_subscribe.py && \
     cp /tmp/latency-patches/kanban_comment_status.py /opt/hermes/tools/kanban_comment_status.py && \
     cp /tmp/latency-patches/kanban_notify_delivery.py /opt/hermes/gateway/kanban_notify_delivery.py && \
+    cp /tmp/latency-patches/kanban_event_routing.py /opt/hermes/tools/kanban_event_routing.py && \
     /opt/hermes/.venv/bin/python3 /tmp/latency-patches/apply_kanban_wake_nudge.py /opt/hermes && \
     test "$(grep -c '_kanban_record_wake(conn)' /opt/hermes/hermes_cli/kanban_db.py)" = "3" && \
     test "$(grep -c '_wake_monitor = _KanbanWakeMonitor(_kb.kanban_db_path)' /opt/hermes/gateway/kanban_watchers.py)" = "2" && \
@@ -960,11 +986,15 @@ RUN cp /tmp/latency-patches/kanban_wake_nudge.py /opt/hermes/hermes_cli/kanban_w
     /opt/hermes/.venv/bin/python3 /tmp/latency-patches/apply_kanban_comment_status.py /opt/hermes && \
     grep -qF '**_comment_delivery_fields(kb, conn, tid)' /opt/hermes/tools/kanban_tools.py && \
     grep -q "from tools.kanban_comment_status import" /opt/hermes/tools/kanban_tools.py && \
+    /opt/hermes/.venv/bin/python3 /tmp/latency-patches/apply_kanban_event_routing.py /opt/hermes && \
+    grep -qF 'platform, chat_id, thread_id = _kanban_event_route(' /opt/hermes/tools/kanban_tools.py && \
+    grep -q "from tools.kanban_event_routing import" /opt/hermes/tools/kanban_tools.py && \
     cd /opt/hermes && \
     /opt/hermes/.venv/bin/python3 /tmp/latency-patches/verify_kanban_wake_nudge.py && \
     /opt/hermes/.venv/bin/python3 /tmp/latency-patches/verify_kanban_auto_subscribe.py && \
     /opt/hermes/.venv/bin/python3 /tmp/latency-patches/verify_kanban_comment_status.py && \
     /opt/hermes/.venv/bin/python3 /tmp/latency-patches/verify_kanban_notify_delivery.py && \
+    /opt/hermes/.venv/bin/python3 /tmp/latency-patches/verify_kanban_event_routing.py && \
     rm -rf /tmp/latency-patches
 
 
