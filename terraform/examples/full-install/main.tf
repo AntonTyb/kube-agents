@@ -429,8 +429,11 @@ resource "helm_release" "kube_agents" {
         }
         availability = {
           # The gVisor pool only exists to run the agent sandboxed, so the two
-          # move together, the way ENABLE_GVISOR did on the script path.
-          runtimeClassName = var.enable_gvisor_node_pool ? "gvisor" : ""
+          # move together, the way ENABLE_GVISOR did on the script path. That
+          # derivation covers Standard only: Autopilot has the gvisor
+          # RuntimeClass and no pool, so enable_gvisor_node_pool is false there
+          # by force and agent_runtime_class is what asks for the sandbox.
+          runtimeClassName = var.agent_runtime_class != "" ? var.agent_runtime_class : (var.enable_gvisor_node_pool ? "gvisor" : "")
         }
       }
       security = {

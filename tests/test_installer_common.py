@@ -208,6 +208,50 @@ class InstallerCommonTest(unittest.TestCase):
             self.assertIn('cluster_mode               = "standard"', content)
             self.assertIn("create_cluster             = true", content)
 
+    # ── ENABLE_GVISOR splits into a pool and a RuntimeClass by cluster shape ──
+
+    def test_tfvars_gvisor_on_standard_asks_for_pool_and_runtime_class(self):
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$?"',
+                env={"API_SERVER_KEY": "k", "ENABLE_GVISOR": "true"},
+                describe_stub="printf '\\n'; exit 0",
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            content = dest.read_text()
+            self.assertIn("enable_gvisor_node_pool    = true", content)
+            self.assertIn('agent_runtime_class        = "gvisor"', content)
+
+    def test_tfvars_gvisor_on_autopilot_asks_for_runtime_class_only(self):
+        # enable_gvisor_node_pool fails the plan on Autopilot, which ships the
+        # gvisor RuntimeClass natively. Passing ENABLE_GVISOR straight through
+        # made --gvisor=true unusable there rather than sandboxing the agent.
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$?"',
+                env={"API_SERVER_KEY": "k", "ENABLE_GVISOR": "true"},
+                describe_stub="printf 'True\\n'; exit 0",
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            content = dest.read_text()
+            self.assertIn("enable_gvisor_node_pool    = false", content)
+            self.assertIn('agent_runtime_class        = "gvisor"', content)
+
+    def test_tfvars_without_gvisor_sets_neither(self):
+        with tempfile.TemporaryDirectory() as out_dir:
+            dest = pathlib.Path(out_dir) / "terraform.tfvars"
+            proc = self._run(
+                f'write_tfvars_from_state "{dest}"; echo "rc=$?"',
+                env={"API_SERVER_KEY": "k"},
+                describe_stub="printf '\\n'; exit 0",
+            )
+            self.assertIn("rc=0", proc.stdout, proc.stderr)
+            content = dest.read_text()
+            self.assertIn("enable_gvisor_node_pool    = false", content)
+            self.assertIn('agent_runtime_class        = ""', content)
+
     def test_tfvars_refuses_to_guess_on_a_transient_describe_failure(self):
         # Anything other than NOT_FOUND must abort: reading an auth expiry or
         # network blip as "cluster absent" regenerates standard/create=true

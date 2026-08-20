@@ -484,6 +484,22 @@ write_tfvars_from_state() {
     fi
   fi
 
+  # ENABLE_GVISOR is one intent — run the agent sandboxed — and the two things
+  # that satisfy it differ by cluster shape. Standard needs the sandbox node
+  # pool AND the RuntimeClass on the pod; Autopilot ships the gvisor
+  # RuntimeClass natively and has no pool to manage, so asking the gke-cluster
+  # module for one there fails the plan. Deriving both from the probed
+  # cluster_mode keeps --gvisor=true meaning the same thing on either shape.
+  local gvisor_node_pool="false" agent_runtime_class=""
+  if is_truthy "${ENABLE_GVISOR:-false}"; then
+    agent_runtime_class="gvisor"
+    if [ "$cluster_mode" = "standard" ]; then
+      gvisor_node_pool="true"
+    else
+      print_info "Cluster '${CLUSTER_NAME}' is Autopilot: using its built-in gvisor RuntimeClass, with no sandbox node pool to provision."
+    fi
+  fi
+
   local old_umask
   old_umask="$(umask)"
   umask 077
@@ -501,8 +517,9 @@ write_tfvars_from_state() {
     echo "create_cluster             = ${create_cluster}"
     echo "allow_external_dns_traffic = true"
     echo "deletion_protection        = false"
-    echo "enable_gvisor_node_pool    = $(hcl_bool "${ENABLE_GVISOR:-false}")"
+    echo "enable_gvisor_node_pool    = ${gvisor_node_pool}"
     echo "gvisor_pool_name           = $(hcl_str "${GVISOR_POOL_NAME:-gvisor-pool}")"
+    echo "agent_runtime_class        = $(hcl_str "${agent_runtime_class}")"
     echo "enable_cert_manager        = ${enable_cert_manager}"
     echo ""
     echo "image_tag                  = $(hcl_str "${image_tag}")"
