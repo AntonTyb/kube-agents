@@ -75,11 +75,10 @@ Both rosters use one schema. A governance watchdog:
 
 Adding or editing a job is a one-file change — see [Adding a watchdog](/kube-agents/concepts/autonomous-watchdogs/#adding-a-watchdog).
 
-Edit `jobs.json`, then redeploy the workspace:
+Edit `jobs.json`, then redeploy the agent image at the revision carrying the change:
 
 ```bash
-cd k8s-operator/scripts
-./provision_08_deploy_platform_agent.sh
+./upgrade.sh --upgrade-mode=harness --image-tag=<SEMVER_TAG_OR_FULL_COMMIT_SHA>
 ```
 
 Or during development:
