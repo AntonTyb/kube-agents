@@ -2350,6 +2350,20 @@ func mergeCredentialProxyEnv(managed, custom []corev1.EnvVar) []corev1.EnvVar {
 	}
 	for _, name := range []string{
 		"CREDENTIAL_PROXY_BOOTSTRAP_COMMAND",
+		// The read-only kill switch. Unreserved, a one-line
+		// `CREDENTIAL_PROXY_ENFORCE_READ_ONLY: "false"` under
+		// spec.deployment.env turns off every refusal the policy makes --
+		// for all commands, all agents and all clusters in the Pod, with no
+		// expiry and nothing in the CR that reads like a security change.
+		// A control that its own subject can switch off is not a control.
+		//
+		// Listed here as well as in SensitiveEnvVars, which this loop already
+		// folds in above, because the two do different jobs: the webhook's
+		// rejection is the explanation and this drop is the enforcement. The
+		// chart defaults failurePolicy to Ignore, so a webhook that cannot be
+		// reached admits the CR with validation skipped, and this line is
+		// what still holds when that happens.
+		"CREDENTIAL_PROXY_ENFORCE_READ_ONLY",
 		"CREDENTIAL_PROXY_MAX_OUTPUT_BYTES",
 		"CREDENTIAL_PROXY_MAX_REQUEST_BYTES",
 		"CREDENTIAL_PROXY_POLICY",
