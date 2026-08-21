@@ -2391,10 +2391,35 @@ func safeSandboxEnvOverrides(custom []corev1.EnvVar) []corev1.EnvVar {
 	// destinations qualify, and so do the alert ceilings — they bound how many
 	// notifications the session server posts in a day and nothing else. A
 	// path, a credential or an image reference would not.
+	//
+	// EOD_EXCLUDE_NAMESPACES is the end-of-day recap's only tunable. It
+	// narrows what its listing prints and reaches nothing the notifier does: no
+	// event stops being forwarded, no alert stops being posted, and a ceiling
+	// drop or a failed delivery in an excluded namespace is still counted and
+	// still withholds the recap's all-clear — `eod_report_generator.py` flags
+	// an excluded row rather than skipping it, so the loop keeps tallying it.
+	// That is the property this allowlist entry rests on: no value of
+	// EOD_EXCLUDE_NAMESPACES can tune the recap into hiding a withheld alert
+	// or a refused post.
+	//
+	// It buys less than that in one respect, and the difference is worth
+	// stating rather than rounding off. What an exclusion does reach is the
+	// informational tally, which is the point of it, and the exclusion count
+	// is deliberately not a veto term — so a day whose only informational
+	// churn sat in an excluded namespace still grades green, over a window the
+	// recap did not fully read. The scope caveat rides a qualifier line in the
+	// report body instead. The bound is that the overclaim is confined to
+	// informational churn; the two alert tallies above are what an operator
+	// setting this variable cannot touch.
+	//
+	// Any value parses: `excluded_namespaces` comma-splits the string and
+	// matches the parts literally, so an arbitrary one names namespaces that do
+	// not exist and excludes nothing. There is no validation to fail.
 	allowed := map[string]struct{}{
 		"ALERT_DAILY_LIMIT_CRITICAL":  {},
 		"ALERT_DAILY_LIMIT_INFO":      {},
 		"ALERT_DAILY_LIMIT_WARNING":   {},
+		"EOD_EXCLUDE_NAMESPACES":      {},
 		"OTEL_EXPORTER_OTLP_ENDPOINT": {},
 		"OTEL_EXPORTER_OTLP_PROTOCOL": {},
 		"OTEL_RESOURCE_ATTRIBUTES":    {},
@@ -2602,7 +2627,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 	// APPENDED LAST, and that position is the guard, not a style choice. It is not routed
 	// through mergeEnvVars because this is the operator's own declaration rather than a
 	// default a user may replace, and one caller can in fact try: `spec.deployment.env`
-	// cannot reach this container (safeSandboxEnvOverrides copies five OTEL_* names and
+	// cannot reach this container (safeSandboxEnvOverrides copies a fixed allowlist and
 	// drops the rest), but extractAgentPluginEnvVars copies an AgentPlugin's spec.env
 	// verbatim into envVars with no allowlist at all. A plugin naming this variable would
 	// otherwise turn the shared-state setup off for the whole agent, and the symptom —
