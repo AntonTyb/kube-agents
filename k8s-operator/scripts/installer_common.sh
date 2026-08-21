@@ -657,6 +657,16 @@ write_tfvars_from_state() {
   # RuntimeClass natively and has no pool to manage, so asking the gke-cluster
   # module for one there fails the plan. Deriving both from the probed
   # cluster_mode keeps --gvisor=true meaning the same thing on either shape.
+  #
+  # The fallback stays false even though a fresh install now defaults to the
+  # sandbox. install.sh owns that default and always writes the result to
+  # vars.sh before sourcing it and calling this function, so the fallback here
+  # never decides a new install — it only decides the callers that read an
+  # install that already exists. uninstall.sh is the one that matters: vars.sh
+  # is optional there, and the documented `curl … | bash` teardown runs from a
+  # fresh clone that has none. Defaulting on for that caller would let the
+  # Autopilot version-floor check below abort a destroy, leaving an install
+  # with no working way to remove itself.
   local gvisor_node_pool="false" agent_runtime_class=""
   if is_truthy "${ENABLE_GVISOR:-false}"; then
     agent_runtime_class="gvisor"
@@ -694,7 +704,7 @@ write_tfvars_from_state() {
         print_warning "Could not read the GKE version of Autopilot cluster '${CLUSTER_NAME}'; proceeding as though it supports GKE Sandbox. Below ${GVISOR_AUTOPILOT_MIN_VERSION} the agent Deployment is never created and this run fails at its final check."
       elif ! gke_version_at_least "$master_version" "$GVISOR_AUTOPILOT_MIN_VERSION"; then
         print_error "Autopilot cluster '${CLUSTER_NAME}' runs GKE ${master_version}, and its gvisor RuntimeClass needs ${GVISOR_AUTOPILOT_MIN_VERSION} or later."
-        print_info "Upgrade the cluster, or re-run with --gvisor=false. Continuing would apply every GCP and Helm resource and then fail on a missing agent Deployment."
+        print_info "Upgrade the cluster, or run the agent on the standard runtime: install.sh takes --gvisor=false, and upgrade.sh reads the choice from ENABLE_GVISOR in k8s-operator/scripts/vars.sh. Continuing would apply every GCP and Helm resource and then fail on a missing agent Deployment."
         return 1
       fi
       print_info "Cluster '${CLUSTER_NAME}' is Autopilot: using its built-in gvisor RuntimeClass, with no sandbox node pool to provision."
