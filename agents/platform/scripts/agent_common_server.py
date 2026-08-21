@@ -52,7 +52,34 @@ DOTENV_PATH = os.environ.get("PLATFORM_AGENT_DOTENV_PATH", "/opt/data/.env")
 # test_agent_common_server.py.
 
 def _run_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Build a subprocess env with HOME redirected to /tmp for GKE container compatibility."""
+    """Build a subprocess env with HOME redirected to /tmp for GKE container compatibility.
+
+    This hands the child *the caller's entire environment*. That is safe today,
+    but it is safe because of two facts outside this file rather than anything
+    this function does, and both are worth stating because the day either stops
+    holding, every call site here becomes a credential leak at once.
+
+    1. The sandbox container holds no credentials. The operator gives it exactly
+       two Secret-backed variables — SESSION_KV_API_KEY and SESSION_KV_SALT,
+       both pod-scoped and useless off this pod's loopback — and its
+       API_SERVER_KEY is the non-secret sentinel `cluster-internal-trusted`. The
+       real credentials live in the credential-proxy container. That allowlist
+       is enforced on the Go side by TestBuildDeployment in
+       platformagent_manifests_test.go, and mirrored here by
+       TestRunEnvInheritanceContract in test_agent_common_server.py so that a
+       change to it also goes loud next to the code that depends on it.
+
+    2. No call site crosses a privilege boundary. Callers are either an MCP
+       child, whose own environment Hermes has already narrowed to an allowlist
+       (`_build_safe_env` in hermes tools/mcp_tool.py, and the `env:` blocks in
+       agents/platform/config.yaml), or session_kv_server, which does hold the
+       whole container environment but spawns `hermes send` as the same UID in
+       the same container — a child that could read /proc/self/environ anyway.
+
+    A new caller that spawns across a UID or container boundary, or a fourth
+    variable added to the sandbox's Secret allowlist, invalidates this. Narrow
+    the environment explicitly at that call site rather than reaching for this.
+    """
     return {**os.environ, "HOME": "/tmp", **(extra or {})}
 
 
