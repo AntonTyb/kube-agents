@@ -56,7 +56,8 @@ kube-agents/
 │   ├── architecture/                              END-STATE spec set 01–08 + README
 │   ├── designs/                                   per-feature design documents
 │   ├── contributing.md, security-requirements.md,
-│   │   credential-isolation-design.md             standalone docs
+│   │   credential-isolation-design.md,
+│   │   pull-request-workflow.md                   standalone docs
 │   └── site/                                      Astro + Starlight site: README +
 │                                                  the published pages
 ├── examples/                                      gitops-repo template + inference/
@@ -113,6 +114,9 @@ CI enforcement: `make docs-check` runs the same checks as
   not inventory them and the check does not require them — the map and the
   check share one scope. A dot-directory nested inside a documented area
   (`examples/gitops-repo/.github/`) is example content and stays in scope.
+- `docs-check-context-budget` — `scripts/check_context_budget.py`; `AGENTS.md`
+  plus `CLAUDE.md` are loaded into every agent session before the first prompt,
+  and their combined size must stay inside the `BUDGET` that file sets.
 
 ### Identifier sources
 
@@ -157,6 +161,7 @@ identifier appears, add its source here.
 | Hindsight endpoint (`HINDSIGHT_API_URL`, derived from the namespace) | `k8s-operator/internal/controller/platformagent_manifests.go` |
 | Admission webhook server port (`--webhook-port` default) | `DefaultPort` in `k8s-operator/internal/webhook/platformagent_webhook.go` |
 | Live-test lease: ConfigMap name, TTL, `vars.sh` keys read, which commands count as mutations | `scripts/live_test_lease.py` |
+| Context budget for the always-loaded agent instruction files (`AGENTS.md`, `CLAUDE.md`) | `BUDGET` in `scripts/check_context_budget.py` |
 
 ## 3. Documentation eras and status
 
@@ -213,7 +218,7 @@ pull request:
 | --- | --- | --- | --- | --- |
 | `README.md` | Project overview | Front door for "The Kubernetes Agentic Harness": Planning Agent + Platform Agent managing GKE via GitOps PRs and ChatOps, with quick-start pointers and an architecture diagram. | Value proposition, components, governance/isolation summary, links to the docs site | Evaluators and adopters; also usable by an agent to start setup |
 | `INSTALL.md` | Install guide | Self-contained, executable installation guide: automated GCP/GKE provisioning, manual Kubernetes deployment, local dev, declarative Terraform+Helm install (pointer to its canonical guide), teardown, troubleshooting. Commands only; explanation lives on the site. | Prerequisites, provisioning stages, integrations, teardown | Written to be runnable end-to-end by a human or an AI agent |
-| `AGENTS.md` | Contributor rules | Workspace instructions: repo layout, branching from a freshly fetched `main`, the pre-task scan of open pull requests and issues, skills guidelines, the canonical-home documentation rules, generated-regions rule, PR hygiene, the live-validation requirement, and the automated pull-request review contract. | Doc ownership table, `make docs-check`, fresh base, duplicate-work scan, Conventional Commits, fork PRs, bot review | AI coding agents and human contributors; owns the doc RULES |
+| `AGENTS.md` | Contributor rules | Workspace instructions: repo layout, branching from a freshly fetched `main`, the pre-task scan of open pull requests and issues, skills guidelines, the canonical-home documentation rules, generated-regions rule, PR hygiene, the live-validation requirement, and the automated pull-request review contract. States the rules; the commands that carry them out live in `docs/pull-request-workflow.md`. | Doc ownership table, `make docs-check`, fresh base, duplicate-work scan, Conventional Commits, fork PRs, bot review | AI coding agents and human contributors; owns the doc RULES; loaded into every session, so `make docs-check-context-budget` caps its size |
 | `CLAUDE.md` | Contributor rules | Imports `AGENTS.md` and adds Claude-specific commit-authorship and PR-disclosure rules. | No co-author trailers; PRs mention Claude assistance | Claude Code sessions |
 | `admin_console/README.md` | Component README | Local setup and operating boundaries for the Kube Agents Console. | Connection, LLM gateway, chat, observability, validation | Console users and contributors |
 | `admin_console/CONNECTION_SECURITY.md` | Security reference | Security contract for the local console's persisted connection lease. | Stored metadata, filesystem controls, identity binding, revalidation, trust boundary | Console users and security reviewers |
@@ -280,6 +285,7 @@ pull request:
 | `docs/designs/semver-deployment-versioning.md` | Feature design | Design rationale for adopting SemVer 2.0.0 across container images, the Helm chart, Terraform modules, release docs, and governance playbooks — decisions, shipped mechanisms, and deliberate exceptions. | OCI Helm charts, Git ref TF modules, version-injection defaults | Implemented; exceptions declared inline |
 | `docs/contributing.md` | Contributor guide | Short entry point: Google CLA and community guidelines, deferring everything else to the site's contributing page and `AGENTS.md`. | CLA, pointers | Human contributors |
 | `docs/credential-isolation-design.md` | Feature design | Design keeping API keys, tokens, and SA credentials out of the agent sandbox container; credentialed operations proxied through an Envoy credential-proxy sidecar. | Pod anatomy, CLI forwarding, guarantee and stated limitation | Canonical design; site `reference/credential-isolation.md` defers here |
+| `docs/pull-request-workflow.md` | Contributor guide | The commands behind `AGENTS.md`'s pull-request rules: the duplicate-work scan, the branch-drift check against `upstream/main`, the local validation checks and the constraint each one exists for, and the `kube-agents-bot` review — how long it takes, how to poll for it, how to reply and resolve. | `gh` and GraphQL recipes, drift `comm` check, prettier/Docker/layer-budget detail, bot timing and failure modes | AI coding agents and human contributors; mechanics only, `AGENTS.md` owns the rules |
 | `docs/security-requirements.md` | Requirements | Provider-neutral security configuration model across three dimensions (permission, interaction, authorization), explicitly distinguishing current behavior from planned capabilities. | Permission sets, credential-isolation requirements, attribution requirements | Referenced by the site's security pages; current-vs-planned marked inline |
 | `docs/site/README.md` | Component README | How to develop the docs site: local preview/build, layout, adding a page, CI build/deploy workflows, publishing from a fork. | `npm run dev`, frontmatter, GitHub Pages base | Site contributors |
 
