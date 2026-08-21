@@ -458,6 +458,69 @@ class TestSessionRoutingRecordsThePlatform(unittest.TestCase):
         self.assertEqual(self._read()["origin"], "k8s-watcher")
 
 
+class TestActivePlatformFallback(unittest.TestCase):
+    """`get_active_platform` when config.yaml does not answer.
+
+    The healthy path reads `platforms.<p>.enabled` out of the rendered
+    config.yaml and never reaches the environment at all. These cover the
+    degraded one -- no config, an unparseable config, or a revision predating
+    the operator rendering `platforms` -- where getting it wrong sends the
+    alert to a platform the install does not have and loses it.
+    """
+
+    _KEYS = ("SLACK_RELAY_URL", "SLACK_BOT_TOKEN")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self._KEYS}
+        for key in self._KEYS:
+            os.environ.pop(key, None)
+        # A path that cannot parse, so every test here lands in the fallback.
+        self._config = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False)
+        self._config.write("platforms: [this is not a mapping\n")
+        self._config.close()
+        self._config_patch = patch.object(
+            session_kv_server, "CONFIG_PATH", self._config.name)
+        self._config_patch.start()
+
+    def tearDown(self):
+        self._config_patch.stop()
+        os.unlink(self._config.name)
+        for key, value in self._saved.items():
+            os.environ.pop(key, None)
+            if value is not None:
+                os.environ[key] = value
+
+    def test_the_relay_url_the_operator_sets_selects_slack(self):
+        # What a Slack-enabled sandbox container actually holds: the relay URL
+        # is emitted unconditionally alongside spec.integration.slack.enabled.
+        os.environ["SLACK_RELAY_URL"] = "http://127.0.0.1:8642"
+        self.assertEqual(session_kv_server.get_active_platform(), "slack")
+
+    def test_the_bot_token_still_selects_slack(self):
+        # Never present in the deployed sandbox -- it is a credential and lives
+        # in the credential-proxy container -- but it is the only signal a bare
+        # `docker run` off the image has, so it stays accepted.
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb-not-a-real-token"
+        self.assertEqual(session_kv_server.get_active_platform(), "slack")
+
+    def test_an_install_with_neither_falls_back_to_google_chat(self):
+        self.assertEqual(session_kv_server.get_active_platform(), "google_chat")
+
+    def test_the_config_decides_when_it_names_a_platform(self):
+        # The fallback must stay a fallback: a parseable config naming Slack
+        # wins even though no Slack variable is set in the environment.
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False) as handle:
+            handle.write("platforms:\n  slack:\n    enabled: true\n")
+            named = handle.name
+        try:
+            with patch.object(session_kv_server, "CONFIG_PATH", named):
+                self.assertEqual(session_kv_server.get_active_platform(), "slack")
+        finally:
+            os.unlink(named)
+
+
 class TestAlertDailyQuota(unittest.TestCase):
     """The per-severity daily ceiling enforced in /sessions/{id}/inject."""
 

@@ -428,7 +428,29 @@ def get_active_platform() -> str:
             return "google_chat"
     except Exception as exc:
         logger.error(f"Failed to parse config.yaml for active platform: {exc}")
-    if os.environ.get("SLACK_BOT_TOKEN"):
+    # Reached only when the block above found nothing: no config.yaml, an
+    # unparseable one, or a revision that predates the operator rendering
+    # `platforms` (renderConfigYAML in platformagent_manifests.go). On the
+    # healthy path the config answers and this line never runs.
+    #
+    # SLACK_RELAY_URL carries this, not SLACK_BOT_TOKEN. The token is a
+    # credential, so it lives in the credential-proxy container and never in
+    # this one — the sandbox's Secret-backed env is the two pod-scoped Session
+    # KV values and nothing else, pinned by TestBuildDeployment in
+    # platformagent_manifests_test.go. Asking for it here was asking a question
+    # whose answer in a deployed pod is always "no", so a Slack-only install
+    # that fell this far called itself google_chat and lost the alert to a
+    # `hermes send` against a platform that is not configured. SLACK_RELAY_URL
+    # is set on this container unconditionally, exactly when
+    # spec.integration.slack.enabled is true.
+    #
+    # The token is still accepted rather than replaced: it is the signal that
+    # works for a bare `docker run` off the image, where no operator has
+    # rendered anything and an exported token is all there is.
+    # platform_mcp_server.py's copy of this test pairs SLACK_BOT_TOKEN with
+    # SLACK_HOME_CHANNEL for the same reason; that one is optional on the CR,
+    # so the relay URL is the stronger of the two signals to add here.
+    if os.environ.get("SLACK_RELAY_URL") or os.environ.get("SLACK_BOT_TOKEN"):
         return "slack"
     return "google_chat"
 
