@@ -183,8 +183,10 @@ class TestRunEnvInheritanceContract(unittest.TestCase):
     substitute for either. It buys two narrower things:
 
     - `envFrom.secretRef` bulk-mounts an entire Secret and is invisible to that
-      loop, which only walks `env`. One line in the operator would put every
-      key of platform-agent-secrets into the sandbox with every Go test green.
+      loop, which only walks `env`. TestAgentsGolden does catch the render
+      diff -- but as a golden mismatch, which `go test ./internal/testing
+      -update` absorbs. Add one line to the operator, regenerate, and every key
+      of platform-agent-secrets is in the sandbox with the whole Go suite green.
       That is the hole checked below.
     - When someone does widen the allowlist deliberately -- change the
       operator, update the Go list, regenerate the golden with
