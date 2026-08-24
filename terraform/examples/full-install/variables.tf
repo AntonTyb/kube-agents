@@ -43,7 +43,7 @@ variable "gvisor_pool_name" {
 }
 
 variable "agent_runtime_class" {
-  description = "RuntimeClass for the agent pod, overriding what enable_gvisor_node_pool implies. Autopilot ships the gvisor RuntimeClass with no node pool to manage — and enable_gvisor_node_pool fails the plan there — so \"gvisor\" here is how an Autopilot install gets the sandbox. Empty derives the value from enable_gvisor_node_pool."
+  description = "RuntimeClass for the agent pod, overriding what enable_gvisor_node_pool implies. Autopilot ships the gvisor RuntimeClass with no node pool to manage — and enable_gvisor_node_pool fails the plan there — so \"gvisor\" here is how an Autopilot install asks for the sandbox without reaching for extra_helm_values. Empty derives the value from enable_gvisor_node_pool."
   type        = string
   default     = ""
 }
