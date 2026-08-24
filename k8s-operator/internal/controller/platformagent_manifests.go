@@ -2134,6 +2134,28 @@ func dropTmpScratchIfClaimed(defaults, userMounts []corev1.VolumeMount) []corev1
 	return kept
 }
 
+// hardenedSecurityContext is the container hardening every container the operator builds
+// carries: no privilege escalation, no capabilities, and a root filesystem the process
+// cannot write to.
+//
+// One helper rather than a literal per container, because the alternative has already
+// failed. The same three fields were written out five times, and three of the five had
+// silently drifted to two of them — the read-only root was on the credential sidecar and
+// the cleanup init container and on neither agent container nor the log shipper, which is
+// the gap this function was introduced to close (RUNTIME-007). Nothing failed while that
+// was true. A container added from here on gets the block by construction, and
+// TestEveryContainerHasAHardenedSecurityContext fails if one is built without it.
+//
+// Anything a container needs on top — a different user, a writable path — belongs on that
+// container, not here. This is the floor, not the whole context.
+func hardenedSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		ReadOnlyRootFilesystem:   ptr.To(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
 func buildSandboxCredentialCleanup(image string, pullPolicy corev1.PullPolicy) corev1.Container {
 	return corev1.Container{
 		Name:            "sandbox-credential-cleanup",
@@ -2154,12 +2176,8 @@ func buildSandboxCredentialCleanup(image string, pullPolicy corev1.PullPolicy) c
   /workspace/home/.netrc \
   /workspace/home/.npmrc \
   /workspace/home/.pypirc`},
-		VolumeMounts: []corev1.VolumeMount{{Name: "platform-agent-data-vol", MountPath: "/workspace"}},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
+		VolumeMounts:    []corev1.VolumeMount{{Name: "platform-agent-data-vol", MountPath: "/workspace"}},
+		SecurityContext: hardenedSecurityContext(),
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("200m"),
@@ -2276,9 +2294,7 @@ func buildCredentialProxySidecar(agent *agentv1alpha1.PlatformAgent, homeDir str
 			{Name: "event-watcher-ksa-token", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true},
 			{Name: "platform-agent-data-vol", MountPath: homeDir},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
+		SecurityContext: hardenedSecurityContext(),
 	}
 }
 
@@ -2765,15 +2781,9 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			// The bearer key is the non-secret loopback sentinel already in this
 			// container's env, and API_SERVER_ENABLED is unconditionally true above,
 			// so the probe is valid in every configuration.
-			StartupProbe:   agentAPIProbe(10, 60),
-			ReadinessProbe: agentAPIProbe(15, 3),
-			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: ptr.To(false),
-				ReadOnlyRootFilesystem:   ptr.To(true),
-				Capabilities: &corev1.Capabilities{
-					Drop: []corev1.Capability{"ALL"},
-				},
-			},
+			StartupProbe:    agentAPIProbe(10, 60),
+			ReadinessProbe:  agentAPIProbe(15, 3),
+			SecurityContext: hardenedSecurityContext(),
 		},
 	}
 
@@ -2950,13 +2960,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 				TimeoutSeconds:      5,
 				FailureThreshold:    3,
 			},
-			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: ptr.To(false),
-				ReadOnlyRootFilesystem:   ptr.To(true),
-				Capabilities: &corev1.Capabilities{
-					Drop: []corev1.Capability{"ALL"},
-				},
-			},
+			SecurityContext: hardenedSecurityContext(),
 		})
 	}
 
@@ -3002,18 +3006,12 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 				MountPath: "/fluent-bit/state",
 			},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			// No /tmp for this one, deliberately. The config above buffers in memory
-			// (Mem_Buf_Limit, no storage.path), keeps its tail DB on the
-			// fluent-bit-state volume and outputs to stdout, so it writes nothing to
-			// the root filesystem. Handing it the agent's tmp-scratch would only give
-			// an LLM-driven container a path into the log shipper.
-			ReadOnlyRootFilesystem: ptr.To(true),
-			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{"ALL"},
-			},
-		},
+		// Read-only root and no /tmp, the only container here with neither. The config
+		// above buffers in memory (Mem_Buf_Limit, no storage.path), keeps its tail DB on
+		// the fluent-bit-state volume and outputs to stdout, so it writes nothing to the
+		// root filesystem. Handing it the agent's tmp-scratch would only give an
+		// LLM-driven container a path into the log shipper.
+		SecurityContext: hardenedSecurityContext(),
 	})
 
 	// The k8s-event-watcher is not a container of its own. It runs inside

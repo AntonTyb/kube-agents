@@ -5027,3 +5027,116 @@ func TestUnrelatedExtraMountKeepsTmpScratch(t *testing.T) {
 	}
 	t.Errorf("expected the tmp-scratch mount at /tmp, got %v", c.VolumeMounts)
 }
+
+// operatorBuiltContainers is every container buildPodTemplateSpec constructs itself, as
+// opposed to the ones a CR hands it through spec.deployment.sidecars/initContainers. The
+// list is written out rather than derived so that adding a container to the Pod has to
+// touch this file: the test below fails on a name it does not know, and the fix is to add
+// it here and give it hardenedSecurityContext().
+var operatorBuiltContainers = []string{
+	"sandbox-credential-cleanup",
+	"envoy-credential-proxy",
+	"platform-agent",
+	"platform-agent-dashboard",
+	"fluent-bit",
+}
+
+// The invariant the read-only-root work exists to establish, asserted once over the whole
+// Pod instead of container by container.
+//
+// Three of the five containers went without a read-only root for as long as they existed
+// and every test stayed green, because the assertions named containers one at a time and
+// nobody wrote one for the containers that were missing it. The golden manifests did
+// capture the omission, but a golden is regenerated mechanically when a container is
+// added, so it records whatever was built rather than rejecting it.
+//
+// So this walks. The name check is the half that catches the next container: an addition
+// the author forgot to harden arrives as an unknown name, not as a silent pass.
+func TestEveryContainerHasAHardenedSecurityContext(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent *agentv1alpha1.PlatformAgent
+		// The dashboard is the one operator-built container a CR can switch off.
+		absent string
+	}{
+		{name: "default", agent: newTestPlatformAgent()},
+		{
+			name: "dashboard disabled",
+			agent: func() *agentv1alpha1.PlatformAgent {
+				a := newTestPlatformAgent()
+				a.Spec.Harness = &agentv1alpha1.HarnessSpec{
+					Hermes: &agentv1alpha1.HermesSpec{DashboardEnabled: ptr.To(false)},
+				}
+				return a
+			}(),
+			absent: "platform-agent-dashboard",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := buildPodTemplateSpec(tc.agent, "h", "h", "h", "h", nil, renderOptions{})
+
+			want := make(map[string]bool, len(operatorBuiltContainers))
+			for _, n := range operatorBuiltContainers {
+				if n != tc.absent {
+					want[n] = true
+				}
+			}
+
+			all := append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...)
+			for _, c := range all {
+				if !want[c.Name] {
+					t.Errorf("container %q is not in operatorBuiltContainers: if the operator "+
+						"grew a container, give it hardenedSecurityContext() and add it to that list",
+						c.Name)
+					continue
+				}
+				delete(want, c.Name)
+
+				sc := c.SecurityContext
+				if sc == nil {
+					t.Errorf("container %s: no SecurityContext; want hardenedSecurityContext()", c.Name)
+					continue
+				}
+				if sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+					t.Errorf("container %s: ReadOnlyRootFilesystem is not true", c.Name)
+				}
+				if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+					t.Errorf("container %s: AllowPrivilegeEscalation is not false", c.Name)
+				}
+				if sc.Capabilities == nil || !slices.Contains(sc.Capabilities.Drop, corev1.Capability("ALL")) {
+					t.Errorf("container %s: capabilities do not drop ALL, got %v", c.Name, sc.Capabilities)
+				}
+			}
+			// Without this the walk passes vacuously the day a container stops being
+			// built at all -- which is a change worth noticing, whatever its reason.
+			for n := range want {
+				t.Errorf("expected container %q in the Pod, not found", n)
+			}
+		})
+	}
+}
+
+// The other side of the same invariant: it covers what the operator builds and stops
+// there. A CR can still add a writable container to this Pod, which
+// docs/credential-isolation-design.md states as the limit of the guarantee -- pinned here
+// so that the doc and the code cannot drift apart silently.
+func TestCRSuppliedSidecarsAreNotHardenedByTheOperator(t *testing.T) {
+	agent := newTestPlatformAgent()
+	agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{
+		Sidecars:       []corev1.Container{{Name: "user-sidecar", Image: "example.com/side:v1"}},
+		InitContainers: []corev1.Container{{Name: "user-init", Image: "example.com/init:v1"}},
+	}
+
+	pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
+
+	for _, c := range append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...) {
+		if c.Name != "user-sidecar" && c.Name != "user-init" {
+			continue
+		}
+		if c.SecurityContext != nil {
+			t.Errorf("container %s: the operator rewrote a CR-supplied SecurityContext (%+v); "+
+				"if that is now intended, docs/credential-isolation-design.md says otherwise",
+				c.Name, c.SecurityContext)
+		}
+	}
+}
