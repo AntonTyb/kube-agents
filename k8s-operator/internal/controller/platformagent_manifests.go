@@ -60,7 +60,8 @@ const (
 	// (see the readiness probe in buildBaseContainers), so the container port, the
 	// Service port, and the NetworkPolicy rule below all describe a listener that
 	// only kubelet's port-forward can reach.
-	dashboardPort = 9119
+	dashboardPort        = 9119
+	tmpScratchVolumeName = "tmp-scratch"
 )
 
 // Shared-state ownership. Step 1.5 of deploy/shared/docker-entrypoint.sh reads this
@@ -2086,7 +2087,51 @@ func buildDefaultVolumeMounts(homeDir string) []corev1.VolumeMount {
 			MountPath: path.Dir(sessionKVDBPath),
 			SubPath:   "session",
 		},
+		{
+			// The one writable path outside the PVC, and the reason
+			// readOnlyRootFilesystem is survivable here: docker-entrypoint.sh runs
+			// four hermes invocations with HOME=/tmp before the agent starts, and
+			// the image is otherwise root-owned against a runtime UID of 10000.
+			Name:      tmpScratchVolumeName,
+			MountPath: "/tmp",
+		},
 	}
+}
+
+// dropTmpScratchIfClaimed removes the operator's /tmp mount when the CR already mounts
+// something there via storages or extraVolumeMounts.
+//
+// Those are appended to the defaults without deduplication, and the API server rejects a
+// Pod spec with two mounts on one mountPath. So without this the /tmp mount added above
+// would not merely be redundant on such a CR, it would make the Deployment unappliable and
+// stop reconciliation dead — on an upgrade, for a field the user set before /tmp was a
+// path the operator had any opinion about. Mounting scratch space at /tmp is exactly what
+// someone would have done while the root filesystem was still writable and there was no
+// other writable path outside the PVC, which is what makes this worth handling rather than
+// rejecting.
+//
+// The user's mount wins, deliberately: it is the one that predates this, and overriding it
+// would be a silent behaviour change on upgrade. If they mounted something read-only there
+// the agent will fail to start — but it would have failed the same way before this change,
+// since the entrypoint has always needed a writable /tmp.
+func dropTmpScratchIfClaimed(defaults, userMounts []corev1.VolumeMount) []corev1.VolumeMount {
+	claimed := false
+	for _, m := range userMounts {
+		if path.Clean(m.MountPath) == "/tmp" {
+			claimed = true
+			break
+		}
+	}
+	if !claimed {
+		return defaults
+	}
+	kept := make([]corev1.VolumeMount, 0, len(defaults))
+	for _, m := range defaults {
+		if m.Name != tmpScratchVolumeName {
+			kept = append(kept, m)
+		}
+	}
+	return kept
 }
 
 func buildSandboxCredentialCleanup(image string, pullPolicy corev1.PullPolicy) corev1.Container {
@@ -2599,13 +2644,14 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 
 	resources := resolveResources(agent.Spec.Deployment)
 
-	volumeMounts := buildDefaultVolumeMounts(homeDir)
+	var userVolumeMounts []corev1.VolumeMount
 	if len(storages) > 0 {
-		volumeMounts = append(volumeMounts, buildCustomStorageVolumeMounts(storages)...)
+		userVolumeMounts = append(userVolumeMounts, buildCustomStorageVolumeMounts(storages)...)
 	}
 	if len(extraVolumeMounts) > 0 {
-		volumeMounts = append(volumeMounts, extraVolumeMounts...)
+		userVolumeMounts = append(userVolumeMounts, extraVolumeMounts...)
 	}
+	volumeMounts := append(dropTmpScratchIfClaimed(buildDefaultVolumeMounts(homeDir), userVolumeMounts), userVolumeMounts...)
 
 	// Args, never Command. Command replaces the image ENTRYPOINT
 	// (/usr/local/bin/agent-entrypoint), and that script is what makes $HERMES_HOME
@@ -2723,6 +2769,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			ReadinessProbe: agentAPIProbe(15, 3),
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
+				ReadOnlyRootFilesystem:   ptr.To(true),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -2813,6 +2860,13 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 				MountPath: path.Dir(sessionKVDBPath),
 				SubPath:   "session",
 			},
+			{
+				// Same emptyDir the gateway gets. Sharing it is not a new channel:
+				// these two containers already run the same image against the same
+				// data PVC, so they are one trust domain either way.
+				Name:      tmpScratchVolumeName,
+				MountPath: "/tmp",
+			},
 		}
 
 		// What keeps this container out of the shared tree is AGENT_SHARED_STATE_SETUP
@@ -2841,7 +2895,9 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 					corev1.ResourceMemory: resource.MustParse("2Gi"),
 				},
 			},
-			VolumeMounts: append(dashboardVolumeMounts, extraVolumeMounts...),
+			// Through the same guard as the gateway's list above. extraVolumeMounts
+			// reaches both containers, so a CR claiming /tmp collides here too.
+			VolumeMounts: append(dropTmpScratchIfClaimed(dashboardVolumeMounts, extraVolumeMounts), extraVolumeMounts...),
 			// What this buys is not what a probe on a serving container buys. The
 			// Service's :9119 endpoint is unreachable over the pod network either
 			// way (see dashboardPort), so nothing is being kept out of rotation.
@@ -2896,6 +2952,7 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 			},
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
+				ReadOnlyRootFilesystem:   ptr.To(true),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -2947,6 +3004,12 @@ func buildBaseContainers(agent *agentv1alpha1.PlatformAgent, image string, envVa
 		},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
+			// No /tmp for this one, deliberately. The config above buffers in memory
+			// (Mem_Buf_Limit, no storage.path), keeps its tail DB on the
+			// fluent-bit-state volume and outputs to stdout, so it writes nothing to
+			// the root filesystem. Handing it the agent's tmp-scratch would only give
+			// an LLM-driven container a path into the log shipper.
+			ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -3040,6 +3103,23 @@ func buildDefaultVolumes(agent *agentv1alpha1.PlatformAgent) []corev1.Volume {
 						Name: agent.Name + "-settings",
 					},
 					DefaultMode: ptr.To(int32(0644)),
+				},
+			},
+		},
+		{
+			// Bounded, like every other scratch emptyDir here. Without a
+			// sizeLimit a runaway write fills the node's ephemeral storage and the
+			// kubelet evicts whoever it decides is the worst offender, which need
+			// not be this pod. With one, the eviction is this pod, for a stated
+			// reason, at a predictable threshold. Note that it is an eviction
+			// either way: enforcing the limit as an in-container ENOSPC needs the
+			// alpha LocalStorageCapacityIsolationFSQuotaMonitoring gate, which GKE
+			// does not enable. 2Gi matches credential-proxy-tmp, the closest
+			// analogue.
+			Name: tmpScratchVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					SizeLimit: ptr.To(resource.MustParse("2Gi")),
 				},
 			},
 		},
