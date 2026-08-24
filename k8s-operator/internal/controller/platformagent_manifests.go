@@ -2114,6 +2114,14 @@ func buildDefaultVolumeMounts(homeDir string) []corev1.VolumeMount {
 // would be a silent behaviour change on upgrade. If they mounted something read-only there
 // the agent will fail to start — but it would have failed the same way before this change,
 // since the entrypoint has always needed a writable /tmp.
+//
+// Narrow on purpose: it detects the collision by cleaned mountPath but removes the default
+// by volume name, and only ever for /tmp. The general form — drop every default whose
+// cleaned path a user mount claims — is the same amount of code and would cover the next
+// default the operator adds. It would also silently drop the data PVC mount if a CR set
+// homeDir to a path the defaults use, turning a Deployment the API server rejects outright
+// into an agent that comes up with no persistent home. A rejected Deployment is the better
+// failure of the two, so the generalisation waits for a second path that actually needs it.
 func dropTmpScratchIfClaimed(defaults, userMounts []corev1.VolumeMount) []corev1.VolumeMount {
 	claimed := false
 	for _, m := range userMounts {
@@ -3114,6 +3122,14 @@ func buildDefaultVolumes(agent *agentv1alpha1.PlatformAgent) []corev1.Volume {
 			// alpha LocalStorageCapacityIsolationFSQuotaMonitoring gate, which GKE
 			// does not enable. 2Gi matches credential-proxy-tmp, the closest
 			// analogue.
+			//
+			// Declared unconditionally, while dropTmpScratchIfClaimed can remove the
+			// mount from both containers -- so a CR that claims /tmp itself leaves
+			// this volume in the pod with nothing mounting it. That is legal and
+			// inert: the kubelet creates an empty directory and no container sees it.
+			// Making the declaration conditional would mean deciding it here from
+			// state that lives in the mount builders, which buys a tidier pod spec
+			// for a coupling that is easier to get wrong than this is to explain.
 			Name: tmpScratchVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{

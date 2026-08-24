@@ -104,11 +104,15 @@ jobs:
       # so "it only writes under $HERMES_HOME and /tmp" has to be tested rather than read
       # off the source. Cheap, because the image is already in the daemon from the load.
       #
-      # --tmpfs stands in for the two writable mounts the Deployment provides: the data
-      # PVC at $PLATFORM_AGENT_HOME, which the check already relocates under /tmp, and the
-      # tmp-scratch emptyDir. size=2g matches that volume's sizeLimit, so a case that
-      # outgrows the real volume fails here too; exec because the check's HA-handoff case
-      # runs a wrapper script from the scratch tree, and Docker's default tmpfs is noexec.
+      # One --tmpfs stands in for two writable mounts the Deployment provides separately:
+      # the data PVC at $PLATFORM_AGENT_HOME, which the check already relocates under /tmp,
+      # and the tmp-scratch emptyDir. Those have independent budgets in the pod -- a
+      # multi-Gi PVC and a 2Gi emptyDir -- so size=2g is a ceiling on the two combined and
+      # not a model of either. It is there to keep a runaway case from filling the runner,
+      # not to predict which volume a real pod would outgrow; read a failure here as "this
+      # case writes more than we expect", not as "tmp-scratch is too small". exec, because
+      # the check's HA-handoff case runs a wrapper script from the scratch tree and
+      # Docker's default tmpfs is noexec.
       - name: Verify entrypoint under a read-only root filesystem
         run: |
           docker run --rm \
