@@ -33,13 +33,16 @@ _SOURCE_INSTALLER_COMMON = f'source "{_INSTALLER_COMMON}"; '
 
 
 class InstallScriptValidationTest(unittest.TestCase):
-    def _run_install_func(self, func_call, env=None, cwd=None):
-        """Source install.sh in test mode and run the given function call."""
+    def _run_install_func(self, func_call, env=None, cwd=None, bin_dir=None):
+        """Source install.sh in test mode and run the given function call.
+
+        `bin_dir` is prepended to PATH, for the calls that shell out.
+        """
         setup = f"""
 KUBE_AGENTS_SOURCE_ONLY=true source "{_INSTALL_SH}"
 {func_call}
 """
-        full_env = get_isolated_test_env(overrides=env)
+        full_env = get_isolated_test_env(overrides=env, bin_dir=bin_dir)
         return subprocess.run(
             ["bash", "-c", setup],
             capture_output=True,
@@ -564,6 +567,68 @@ KUBE_AGENTS_SOURCE_ONLY=true source "{isolated_install_sh}"
         proc = self._run_install_func(cmd)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("CHOICE=1", proc.stdout)
+
+    def _run_with_kubectl_stub(self, func_call, kubectl_script, env=None):
+        """Run `func_call` with a stub `kubectl` on PATH.
+
+        `@COUNTER@` in either string becomes a scratch file private to this
+        run, for a stub that has to answer differently on each call.
+
+        The poll interval is flattened after sourcing rather than through the
+        environment: install.sh assigns it outright, the way it does every
+        other timing constant, so only a post-source assignment takes.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = pathlib.Path(tmp) / "bin"
+            bin_dir.mkdir()
+            counter = str(pathlib.Path(tmp) / "calls")
+            kubectl = bin_dir / "kubectl"
+            kubectl.write_text(
+                "#!/usr/bin/env bash\n" + kubectl_script.replace("@COUNTER@", counter) + "\n"
+            )
+            kubectl.chmod(kubectl.stat().st_mode | stat.S_IEXEC)
+            return self._run_install_func(
+                "DEPLOYMENT_POLL_INTERVAL_SECS=0\n" + func_call.replace("@COUNTER@", counter),
+                env=env,
+                bin_dir=str(bin_dir),
+            )
+
+    def test_wait_for_deployment_object_returns_once_it_exists(self):
+        proc = self._run_with_kubectl_stub(
+            'rc=0; wait_for_deployment_object dep ns 0 || rc=$?; echo "RC=$rc"',
+            "exit 0",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("RC=0", proc.stdout)
+
+    def test_wait_for_deployment_object_waits_for_a_late_deployment(self):
+        """The reason the health check waits rather than asking once.
+
+        The operator writes the agent Deployment after the apply returns, and
+        later still when it has a RuntimeClass to resolve first, so a single
+        unretried `kubectl get` reports a Deployment that is merely late as one
+        that was never created.
+        """
+        stub = (
+            'n=$(cat @COUNTER@ 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > @COUNTER@; '
+            '[ "$n" -ge 3 ] && exit 0; exit 1'
+        )
+        proc = self._run_with_kubectl_stub(
+            'rc=0; wait_for_deployment_object dep ns 30 || rc=$?; '
+            'echo "RC=$rc TRIES=$(cat @COUNTER@)"',
+            stub,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("RC=0 TRIES=3", proc.stdout)
+
+    def test_wait_for_deployment_object_gives_up_after_the_budget(self):
+        """A Deployment that is never coming still has to end the run."""
+        proc = self._run_with_kubectl_stub(
+            'rc=0; wait_for_deployment_object dep ns 0 || rc=$?; echo "RC=$rc"',
+            "exit 1",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("RC=1", proc.stdout)
 
 
 class EnsureExistingClusterNetworkPolicyTest(unittest.TestCase):

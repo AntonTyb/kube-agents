@@ -669,6 +669,27 @@ wait_for_rollout() {
   return "$rc"
 }
 
+# Wait for a Deployment object to exist, ahead of waiting for it to roll out.
+# `kubectl rollout status` on a Deployment that is not there yet fails
+# immediately rather than waiting, and the operator writes the agent's after the
+# apply returns — later still when it has a RuntimeClass to resolve first. This
+# is the difference between "the operator has not got to it" and "the operator
+# refuses to create it", which is worth the wait to tell apart.
+wait_for_deployment_object() {
+  local deployment="$1"
+  local namespace="$2"
+  local timeout_secs="$3"
+
+  local deadline=$((SECONDS + timeout_secs))
+  while ! kubectl get deployment "$deployment" -n "$namespace" >/dev/null 2>&1; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      return 1
+    fi
+    sleep "$DEPLOYMENT_POLL_INTERVAL_SECS"
+  done
+  return 0
+}
+
 has_controlling_tty() {
   [ -c /dev/tty ] && ( : </dev/tty ) 2>/dev/null
 }
@@ -762,6 +783,15 @@ prompt_menu() {
 
 # How long each deployment gets to report ready in the post-install health check.
 ROLLOUT_TIMEOUT_SECS=300
+
+# How long each deployment gets to exist at all before that check calls it
+# missing. The operator creates the agent Deployment asynchronously and, when a
+# RuntimeClass is asked for, only after that RuntimeClass resolves — retrying on
+# a 30s requeue (validateRuntimeClass in
+# k8s-operator/internal/controller/platformagent_controller.go). Three requeues
+# is the budget: below one, "not yet" and "never" are indistinguishable.
+DEPLOYMENT_APPEAR_TIMEOUT_SECS=90
+DEPLOYMENT_POLL_INTERVAL_SECS=5
 
 # Number of projects listed in the interactive project picker. Accounts with
 # more projects than this can still type an ID that the list does not show.
@@ -2449,8 +2479,17 @@ main() {
   # kube-agents-controller-manager, not kubeagents-: the chart prefixes the
   # operator Deployment with the release name.
   for deployment in kube-agents-controller-manager litellm platform-agent-gateway; do
-    if ! kubectl get deployment "$deployment" -n kubeagents-system >/dev/null 2>&1; then
-      print_error "Expected deployment '$deployment' was not created."
+    if ! wait_for_deployment_object "$deployment" kubeagents-system "$DEPLOYMENT_APPEAR_TIMEOUT_SECS"; then
+      print_error "Expected deployment '$deployment' was not created within ${DEPLOYMENT_APPEAR_TIMEOUT_SECS}s."
+      # platform-agent-gateway is the agent, and the sandbox is the one thing
+      # that stops the operator writing it while leaving everything else
+      # healthy: no gvisor RuntimeClass, no Deployment, and the reason is on the
+      # CR rather than in any of the logs an operator would reach for first.
+      if [ "$deployment" = "platform-agent-gateway" ] && [ "$enable_gvisor" = "true" ]; then
+        print_info "The agent asks for the ${C_BOLD}gvisor${C_RESET} RuntimeClass; the operator will not create its Deployment until that RuntimeClass exists."
+        print_info "Read the reason with: ${C_BOLD}kubectl get platformagent -n kubeagents-system -o jsonpath='{.items[*].status.conditions}'${C_RESET}"
+        print_info "Re-run with ${C_BOLD}--gvisor=false${C_RESET} to run the agent on the standard container runtime instead."
+      fi
       exit 1
     fi
     # The agent pulls a large image and waits on LiteLLM before it reports ready,

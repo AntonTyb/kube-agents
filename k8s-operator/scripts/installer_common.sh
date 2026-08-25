@@ -681,17 +681,18 @@ write_tfvars_from_state() {
       print_info "Creating Autopilot cluster '${CLUSTER_NAME}': using its built-in gvisor RuntimeClass, with no sandbox node pool to provision."
     else
       # Autopilot's gvisor RuntimeClass arrived in a specific GKE version, and
-      # asking an older cluster for it fails late and unrecognisably: the
-      # operator stops at its RuntimeClass check before writing the agent
-      # Deployment, the Helm release still reports success because that
-      # Deployment is operator-created rather than chart-rendered, and
-      # install.sh's post-apply gate exits 1 with "Expected deployment
-      # 'platform-agent-gateway' was not created" — after the cluster, IAM,
-      # KMS, cert-manager and the release have all been applied, naming
-      # nothing about a RuntimeClass. Refuse here instead, which is where the
-      # gke-cluster module's precondition refuses the equivalent Standard
-      # mistake. This branch is reached only when the describe above found a
-      # live Autopilot cluster, so there is always one to ask.
+      # asking an older cluster for it fails late: the operator stops at its
+      # RuntimeClass check before writing the agent Deployment, the Helm
+      # release still reports success because that Deployment is
+      # operator-created rather than chart-rendered, and install.sh's
+      # post-apply gate waits out its budget on a Deployment that is never
+      # coming and exits 1 — after the cluster, IAM, KMS, cert-manager and the
+      # release have all been applied. That gate does name the RuntimeClass,
+      # but it names it having already spent the apply. Refuse here instead,
+      # which is where the gke-cluster module's precondition refuses the
+      # equivalent Standard mistake. This branch is reached only when the
+      # describe above found a live Autopilot cluster, so there is always one
+      # to ask.
       #
       # `trap - ERR` as well as `|| true`, for the bash 3.2 reason the probe
       # above gives: a gcloud failure here is a best-effort miss, not an abort.
