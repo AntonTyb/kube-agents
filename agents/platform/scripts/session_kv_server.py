@@ -460,10 +460,15 @@ def get_active_platform() -> str:
     # The token is still accepted rather than replaced: it is the signal that
     # works for a bare `docker run` off the image, where no operator has
     # rendered anything and an exported token is all there is.
-    # platform_mcp_server.py:690 is the same test with the same wrong signal
-    # and is deliberately left alone here — open PR #735 fixes that copy, and
-    # it needs the MCP env allowlist widened to pass SLACK_RELAY_URL through,
-    # which is that PR's to do.
+    # platform_mcp_server.py:690 leans on the same absent SLACK_BOT_TOKEN, but
+    # it is not as badly off: it also accepts SLACK_HOME_CHANNEL, which the
+    # operator does render on this container when spec.integration.slack
+    # .homeChannel is set and which is allowlisted into that child
+    # (agents/platform/config.yaml). So it misroutes only on a Slack install
+    # with no home channel anywhere — an install whose sends have no
+    # destination in any case. It is deliberately left alone here — open PR
+    # #735 fixes that copy, and it needs the MCP env allowlist widened to pass
+    # SLACK_RELAY_URL through, which is that PR's to do.
     if os.environ.get("SLACK_RELAY_URL") or os.environ.get("SLACK_BOT_TOKEN"):
         return "slack"
     return "google_chat"
