@@ -1611,6 +1611,12 @@ type renderOptions struct {
 	// otlpEndpoint is the resolved OpenTelemetry collector base URL. Empty means the GKE
 	// managed collector, so the zero value is the historical behaviour.
 	otlpEndpoint string
+	// otlpDisabled reports that discovery established this cluster has no collector and
+	// nothing configured one (otlpSourceNone). The agent is then wired with
+	// OTEL_SDK_DISABLED=true and no endpoint. A separate field rather than an empty
+	// otlpEndpoint because empty already means the managed collector, and the two
+	// outcomes need opposite manifests.
+	otlpDisabled bool
 }
 
 // buildPodTemplateSpec generates the shared PodTemplateSpec for Deployment and StatefulSet
@@ -1723,7 +1729,7 @@ func buildPodTemplateSpec(agent *agentv1alpha1.PlatformAgent, configHash, fluent
 		},
 	)
 
-	envVars = append(envVars, otelTelemetryEnvVars("platform", agent.Name, agent.Namespace, opts.otlpEndpoint)...)
+	envVars = append(envVars, otelTelemetryEnvVars("platform", agent.Name, agent.Namespace, opts.otlpEndpoint, opts.otlpDisabled)...)
 	if agent.Spec.Deployment != nil {
 		envVars = mergeEnvVars(envVars, safeSandboxEnvOverrides(agent.Spec.Deployment.Env))
 	}
@@ -3806,7 +3812,10 @@ func formatCIDRPeers(raw []string, enforceMinPrefix bool) []networkingv1.Network
 
 // buildNetworkPolicy generates the restrictive NetworkPolicy manifest for PlatformAgent.
 // Note: This is the operator-generated version; Kustomize static deployments use deploy/kustomize/platform/.
-func buildNetworkPolicy(agent *agentv1alpha1.PlatformAgent, apiCIDRs []string, profile netpolProfile, fqdnEnabled bool, otlpEndpoint string) *networkingv1.NetworkPolicy {
+//
+// otlpDisabled carries the same meaning as renderOptions.otlpDisabled: discovery found no
+// collector, so there is no export to allow and the collector egress rule is left out.
+func buildNetworkPolicy(agent *agentv1alpha1.PlatformAgent, apiCIDRs []string, profile netpolProfile, fqdnEnabled bool, otlpEndpoint string, otlpDisabled bool) *networkingv1.NetworkPolicy {
 	udp := corev1.ProtocolUDP
 	tcp := corev1.ProtocolTCP
 
@@ -4006,8 +4015,13 @@ func buildNetworkPolicy(agent *agentv1alpha1.PlatformAgent, apiCIDRs []string, p
 		})
 	}
 
-	// 8. GKE Managed OpenTelemetry Collector (Trace Export)
-	if ns := otlpCollectorNamespace(otlpEndpoint); ns != "" {
+	// 8. GKE Managed OpenTelemetry Collector (Trace Export). Skipped when the agent is
+	// exporting nothing: there is no endpoint to reach, so the rule would grant egress
+	// for traffic that is never sent. Usually the collector's namespace does not exist
+	// either, though not always — a collector Service exposing only gRPC 4317 is rejected
+	// by otlpHTTPEndpointForService and also resolves to None, and there the namespace is
+	// real. The rule is dropped in both cases, because neither one exports.
+	if ns := otlpCollectorNamespace(otlpEndpoint); ns != "" && !otlpDisabled {
 		egressRules = append(egressRules, networkingv1.NetworkPolicyEgressRule{
 			Ports: []networkingv1.NetworkPolicyPort{
 				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(4317))},
