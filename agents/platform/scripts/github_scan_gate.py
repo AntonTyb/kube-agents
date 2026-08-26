@@ -256,7 +256,16 @@ def _issue_card(payload: dict, now: datetime | None = None) -> Card:
     """
     number = payload["issue_number"]
     repo = payload.get("repository", "")
-    title = payload.get("title", "") or f"issue #{number}"
+    # `title_plain`, not `title`: the resolver's `title` is the same text wrapped
+    # in `<untrusted_title>` boundary tags for the model's benefit, and putting
+    # that on a card leaves every board entry and card notification reading
+    # "Triage and resolve acme/toolkit#42: <untrusted_title>Pods crashlooping
+    # </untrusted_title>". The 35 characters of markup also come out of the
+    # 200-character budget below, so a long enough title loses its closing tag to
+    # the truncation and the card carries an *unclosed* boundary marker into the
+    # worker — the demarcation failure the tags were added to prevent. Falls back
+    # through `title` for a payload written before `title_plain` existed.
+    title = payload.get("title_plain") or payload.get("title") or f"issue #{number}"
     bucket = (now or datetime.now(timezone.utc)).strftime(CARD_BUCKET_FORMAT)
     return Card(
         title=f"Triage and resolve {repo}#{number}: {title}"[:200],

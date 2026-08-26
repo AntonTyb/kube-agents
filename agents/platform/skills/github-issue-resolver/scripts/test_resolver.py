@@ -87,6 +87,8 @@ def _gh_stub(
     write_rcs=None,
     write_stderr: str = "",
     list_stderr: str = "",
+    view_stdout: str = '{"comments": []}',
+    view_rc: int = 0,
 ):
     """A ``subprocess.run`` replacement that routes on the gh subcommand.
 
@@ -100,6 +102,12 @@ def _gh_stub(
     ``write_stderr``/``list_stderr`` exist because an exit code alone no longer
     decides whether run_gh retries: ``_looks_like_auth_failure`` reads stderr,
     so a failure's *text* is now part of the case being stubbed.
+
+    ``view_stdout``/``view_rc`` stub the second read `poll` makes: the list
+    query no longer asks for comments, so the winning issue's are fetched by
+    their own ``issue view``. Routed separately from the writes because a read
+    that fails is not a write that fails -- `_fetch_comments` swallows it and
+    still reports the issue.
     """
     next_auth = _sequence(auth_rcs if auth_rcs else [auth_rc])
     next_write = _sequence(write_rcs if write_rcs else [0])
@@ -112,6 +120,8 @@ def _gh_stub(
             return subprocess.CompletedProcess(argv, next_auth(), "", "")
         if sub[:2] == ["issue", "list"]:
             return subprocess.CompletedProcess(argv, list_rc, list_stdout, list_stderr)
+        if sub[:2] == ["issue", "view"]:
+            return subprocess.CompletedProcess(argv, view_rc, view_stdout, "")
         return subprocess.CompletedProcess(argv, next_write(), "[]", write_stderr)
 
     return run
@@ -527,22 +537,92 @@ class HandlePollRoutingTest(unittest.TestCase):
                         "number": 7,
                         "title": "first",
                         "body": "b",
-                        "comments": [
-                            {
-                                "author": {"login": "alice"},
-                                "body": "hi",
-                                "createdAt": "2026-07-30T00:00:00Z",
-                            }
-                        ],
                     },
                 ]
             ),
+            view_stdout=json.dumps(
+                {
+                    "comments": [
+                        {
+                            "author": {"login": "alice"},
+                            "body": "hi",
+                            "createdAt": "2026-07-30T00:00:00Z",
+                        }
+                    ]
+                }
+            ),
         )
         self.assertEqual(payload["status"], "FOUND")
-        # Lowest-numbered open issue wins, regardless of listing order.
+        # Neither issue is labelled, so both score 0 and the FIFO tie-breaker
+        # decides: lowest-numbered wins, regardless of listing order.
         self.assertEqual(payload["issue_number"], 7)
         self.assertEqual(payload["repository"], "acme/toolkit")
-        self.assertEqual(payload["comments"][0]["author"], "<untrusted_author>alice</untrusted_author>")
+        # A login is not untrusted text worth wrapping, and the tag used to be
+        # here purely because the body next to it needed one.
+        self.assertEqual(payload["comments"][0]["author"], "alice")
+        self.assertEqual(
+            payload["comments"][0]["body"], "<untrusted_comment>hi</untrusted_comment>"
+        )
+
+    def test_issue_sorting_order_and_tie_breaker(self):
+        """The ranking `poll` actually applies, driven through `poll`.
+
+        This test used to paste the sort expression out of `handle_poll` and
+        assert the copy ordered a list correctly, which it did whatever
+        `handle_poll` went on to do -- deleting the ranking from the resolver
+        left it green. It drives the real thing now.
+        """
+        issues = [
+            {"number": 10, "title": "p3", "body": "", "labels": [{"name": "priority:p3"}], "createdAt": "2026-08-01T10:00:00Z"},
+            {"number": 50, "title": "p0 late", "body": "", "labels": [{"name": "priority:p0"}], "createdAt": "2026-08-01T12:00:00Z"},
+            {"number": 5, "title": "none", "body": "", "labels": [], "createdAt": "2026-08-01T08:00:00Z"},
+            {"number": 40, "title": "p0 early", "body": "", "labels": [{"name": "priority:p0"}], "createdAt": "2026-08-01T11:00:00Z"},
+        ]
+        payload = self._poll(
+            "https://github.com/acme/toolkit", list_stdout=json.dumps(issues)
+        )
+        # P0 beats P3 beats unlabelled, and between the two P0s the earlier
+        # createdAt wins -- issue 40 at 11:00, not the lower-numbered 5 nor the
+        # later 50.
+        self.assertEqual(payload["issue_number"], 40)
+        self.assertEqual(payload["priority"], "P0")
+
+    def test_poll_ranks_over_a_window_wider_than_one_page(self):
+        """Ranking only means something if the query returns enough to rank.
+
+        `gh issue list --search` answers newest-first. At the old `--limit 10` a
+        P0 with ten newer tickets in front of it was never in the list the
+        ranking saw, so the priority sort re-ordered a page that had already
+        excluded the issue it existed to promote.
+        """
+        record = []
+        self._poll("https://github.com/acme/toolkit", record=record)
+        # `--search` picks the poll's own query. The stale sweep issues an
+        # `issue list` of its own, by `--label`, and matching on the subcommand
+        # alone finds that one first.
+        listing = next(
+            a for a in record if a[1:3] == ["issue", "list"] and "--search" in a
+        )
+        self.assertEqual(listing[listing.index("--limit") + 1], "100")
+        # ...and it stays affordable only while `comments` is off the
+        # projection: that field is one GraphQL round trip per issue.
+        projection = listing[listing.index("--json") + 1]
+        self.assertNotIn("comments", projection)
+        for field in ("number", "title", "body", "labels", "createdAt"):
+            self.assertIn(field, projection)
+
+    def test_poll_still_reports_when_the_comment_fetch_fails(self):
+        """Comments are context for the investigation, not the finding itself."""
+        issues = [{"number": 7, "title": "first", "body": "b", "labels": []}]
+        payload = self._poll(
+            "https://github.com/acme/toolkit",
+            list_stdout=json.dumps(issues),
+            view_rc=1,
+            view_stdout="",
+        )
+        self.assertEqual(payload["status"], "FOUND")
+        self.assertEqual(payload["issue_number"], 7)
+        self.assertEqual(payload["comments"], [])
 
     def test_no_routing_path_raises_systemexit(self):
         """poll's contract is JSON on stdout, never a bare non-zero exit."""
@@ -1053,21 +1133,6 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         names = resolver._label_names(issue)
         self.assertEqual(names, {"priority:p0", "bug"})
 
-    def test_issue_sorting_order_and_tie_breaker(self):
-        issues = [
-            {"number": 10, "labels": [{"name": "priority:p3"}], "createdAt": "2026-08-01T10:00:00Z"},
-            {"number": 50, "labels": [{"name": "priority:p0"}], "createdAt": "2026-08-01T12:00:00Z"},
-            {"number": 5, "labels": [], "createdAt": "2026-08-01T08:00:00Z"},
-            {"number": 40, "labels": [{"name": "priority:p0"}], "createdAt": "2026-08-01T11:00:00Z"},
-        ]
-        scored = []
-        for x in issues:
-            score, label = resolver.calculate_issue_priority(x)
-            scored.append((score, x.get("createdAt") or "", int(x["number"]), label, x))
-        scored.sort(key=lambda item: (-item[0], item[1], item[2]))
-        # P0 with earlier createdAt (40 at 11:00) beats P0 with later createdAt (50 at 12:00)
-        self.assertEqual([item[4]["number"] for item in scored], [40, 50, 10, 5])
-
     def test_handle_poll_sort_order_and_plain_title(self):
         issues = [
             {
@@ -1163,14 +1228,23 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         self.assertNotIn("<system", cleaned)
 
     def test_evaluate_risk_tier_diagnostic_log_with_keywords(self):
+        """A pasted log is evidence, not an instruction, and must not escalate.
+
+        Asserted as "not TIER_3" rather than "is TIER_1" on purpose. `kubectl
+        apply` is a mutating command, so grading this TIER_2 is honest; what
+        would be wrong is paging a human over a log excerpt nobody asked the
+        agent to act on. TIER_1 and TIER_2 take the same branch in SKILL.md, so
+        pinning which of the two this lands in would test the classifier's
+        bookkeeping instead of the property that matters.
+        """
         issue = {
             "title": "Error in pod logs during rollout",
             "body": "Log snippet:\n```\nkubectl apply -f manifest.yaml returned error for secret my-secret\n```",
             "comments": [],
             "labels": [],
         }
-        self.assertEqual(
-            resolver.evaluate_risk_tier(issue), "TIER_1_READ_ONLY"
+        self.assertNotEqual(
+            resolver.evaluate_risk_tier(issue), "TIER_3_MUTATING"
         )
 
     def test_evaluate_risk_tier_cleanup_request(self):
@@ -1232,6 +1306,197 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         }
         self.assertEqual(
             resolver.evaluate_risk_tier(issue), "TIER_3_MUTATING"
+        )
+
+
+class RiskTierCorpusTest(unittest.TestCase):
+    """Both halves of the classifier's job, on text that looks like real tickets.
+
+    A verb list can be made to score perfectly on either half alone -- match
+    nothing and every diagnostic is quiet; match every occurrence of "delete"
+    and every real request is caught. The pair is the requirement, and the
+    version this replaced failed both: it graded 2 of the 14 mutation phrasings
+    below as read-only while escalating "the PVC will not delete".
+    """
+
+    def _tier(self, title, body="", labels=(), comments=()):
+        return resolver.evaluate_risk_tier(
+            {
+                "title": title,
+                "body": body,
+                "labels": [{"name": n} for n in labels],
+                "comments": [{"body": b} for b in comments],
+            }
+        )
+
+    # Requests a human should see before an agent acts on them.
+    MUTATING = (
+        ("Please delete namespace prod", ""),
+        ("Please deleting namespace prod", ""),
+        ("Please deletion of namespace prod", ""),
+        ("Please rm -rf the namespace prod", ""),
+        ("Please tear down namespace prod", ""),
+        ("Please scale the deployment down to 0", ""),
+        ("Please evict all pods from node-1", ""),
+        ("Please rollback the release", ""),
+        ("Please restart the statefulset", ""),
+        ("Please revoke the service account key", ""),
+        ("Please rotate the cluster credentials", ""),
+        ("Please uninstall the helm release", ""),
+        ("Please deprovision the cluster", ""),
+        ("Please terminate the node", ""),
+        # No "please": a title that opens with a bare verb is still an order.
+        ("Delete stale namespace", "Remove the deployment from the test cluster"),
+        # A pasted destructive command is a request however the prose frames it.
+        ("The prod namespace is wedged, please run:", "```\nkubectl delete ns prod\n```"),
+        # Privileged asks are graded on the ask, not on a verb.
+        ("Grant me cluster-admin on the prod cluster", "I need it for debugging"),
+        # A bare verb opening a *body* line is an imperative too.
+        ("Sandbox tidy-up", "Remove the deployment from the test cluster"),
+        ("Cleanup", "Drop the old database table"),
+    )
+
+    #: Phrasings the classifier does not catch, recorded rather than asserted.
+    #: They are here so the gap is visible to whoever extends the verb list
+    #: next, and because the tier is documented as a hint that can miss --
+    #: a test asserting they are TIER_1 would freeze the miss as intended.
+    KNOWN_MISSES = (
+        # A trailing marker: "please" governs a verb that already went past.
+        ("Scale it down", "Set it to --replicas=0 please"),
+        # A marker separated from its verb by a subordinate clause.
+        ("Housekeeping", "Please, when you get a chance, delete namespace prod"),
+    )
+
+    # Diagnostics. Escalating one of these pages a human for an investigation
+    # the agent was capable of doing, which is the cost side of the trade.
+    DIAGNOSTIC = (
+        ("CrashLoopBackOff in payment-gateway", "Pod restarts every 30s. Logs show OOMKilled."),
+        # The verb is in the symptom, not in a request.
+        ("PVC stuck in Terminating", "The PVC will not delete. Finalizer is stuck."),
+        ("Cluster autoscaler keeps removing nodes with pods on them", "Nodes are drained too aggressively."),
+        ("Deleting pods repeatedly", "Something we cannot identify is deleting them."),
+        ("Timestamp format is wrong in fluent-bit output", ""),
+        ("Connections drop after 30 seconds", ""),
+        ("Node pool nodes NotReady after upgrade", "kubectl describe node shows DiskPressure."),
+        ("Investigate high memory on fluentd", "Memory grows until the container is killed by the kubelet."),
+        ("Deployment rollout stuck", "kubectl rollout status shows 0/3 updated."),
+        # A status update is not an order, however imperative the first word.
+        ("Removed nodes still show in the console", "Removed the deployment yesterday and it still lists."),
+        # Polite requests for a *diagnosis*. Every one of these carries a
+        # request marker and a mutating verb, and grading the pair as a
+        # request escalated the most ordinary ticket the resolver ever sees.
+        # The verb is in a subordinate clause: the thing being asked about,
+        # not the thing being asked for.
+        ("CrashLoopBackOff", "Please look at why the pod restarts every 30s."),
+        ("Certificate expiry", "Can you check when the certificate rotation last ran?"),
+        ("Node flapping", "Please investigate: kubelet keeps restarting."),
+        ("Metrics gap", "Could you tell us why the counter resets at midnight?"),
+        ("Disk pressure", "We need to understand why logs are removed early."),
+    )
+
+    def test_mutating_requests_are_escalated(self):
+        for title, body in self.MUTATING:
+            with self.subTest(title=title):
+                self.assertEqual(self._tier(title, body), "TIER_3_MUTATING")
+
+    def test_diagnostic_reports_are_not_escalated(self):
+        for title, body in self.DIAGNOSTIC:
+            with self.subTest(title=title):
+                self.assertNotEqual(self._tier(title, body), "TIER_3_MUTATING")
+
+    def test_a_commenter_cannot_escalate_someone_elses_issue(self):
+        """Comments are outside the classifier's input, deliberately.
+
+        Any GitHub user can comment on any issue. If a comment could set the
+        tier, a passer-by writing "we had to delete the pod" would park the
+        resolver on `status:escalation-needed` -- a denial of service handed to
+        the untrusted population this skill exists to be careful about, and one
+        that gets *more* effective the better the verb list gets.
+        """
+        title, body = "CrashLoopBackOff in payment-gateway", "Pod restarts every 30s."
+        self.assertEqual(self._tier(title, body), "TIER_1_READ_ONLY")
+        self.assertEqual(
+            self._tier(
+                title,
+                body,
+                comments=(
+                    "+1, we had to delete the pod manually",
+                    "please destroy the whole namespace",
+                ),
+            ),
+            "TIER_1_READ_ONLY",
+        )
+
+    def test_a_bare_security_label_is_a_topic_not_a_risk(self):
+        """`security` labels the subject area; it does not assert a privileged ask."""
+        self.assertNotEqual(
+            self._tier("Fix typo in the security docs", "s/teh/the/", labels=("security",)),
+            "TIER_3_MUTATING",
+        )
+        # Labels that do assert a risk are still taken at face value.
+        for label in ("security-risk", "privilege-escalation"):
+            with self.subTest(label=label):
+                self.assertEqual(
+                    self._tier("Something", "", labels=(label,)), "TIER_3_MUTATING"
+                )
+
+    def test_invisible_characters_cannot_split_a_verb(self):
+        """Tiering reads the sanitized text, which is what the model reads.
+
+        `de<U+034F>lete` renders as `delete` to a human and to the model, so a
+        classifier looking at the raw string sees a word that exists nowhere in
+        the conversation it is grading.
+        """
+        for sneaky in (
+            "Please de​lete namespace prod",
+            "Please de͏lete namespace prod",
+            "Please de\U000E0020lete namespace prod",
+        ):
+            with self.subTest(title=sneaky):
+                self.assertEqual(self._tier(sneaky), "TIER_3_MUTATING")
+
+
+class SanitizerMirrorDriftTest(unittest.TestCase):
+    def test_is_safe_char_matches_the_platform_mcp_server_copy(self):
+        """The two `_is_safe_char` definitions must stay one function.
+
+        `platform_mcp_server.py` holds the canonical copy; this script mirrors
+        it because importing that module means importing `mcp`,
+        `agent_common_server` and `gke_endpoint` and constructing a FastMCP
+        server as a side effect. A mirror nobody checks is how the two drift,
+        and a character class stripped on one path but not the other is a hole
+        in whichever side forgot -- the gap that let the Unicode tag block
+        through here in the first place.
+
+        Compared as parsed syntax rather than as text, so comments and
+        formatting may differ (they do) while the logic may not.
+        """
+        import ast
+
+        def _definition(path: Path) -> str:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == "_is_safe_char":
+                    # Strip the docstring: prose is allowed to differ.
+                    body = node.body
+                    if (
+                        body
+                        and isinstance(body[0], ast.Expr)
+                        and isinstance(body[0].value, ast.Constant)
+                        and isinstance(body[0].value.value, str)
+                    ):
+                        body = body[1:]
+                    return "\n".join(ast.dump(n) for n in body)
+            raise AssertionError(f"_is_safe_char not found in {path}")
+
+        here = Path(resolver.__file__).resolve()
+        canonical = here.parents[3] / "scripts" / "platform_mcp_server.py"
+        self.assertTrue(canonical.is_file(), f"expected canonical copy at {canonical}")
+        self.assertEqual(
+            _definition(here),
+            _definition(canonical),
+            "resolver.py's _is_safe_char has drifted from platform_mcp_server.py's; "
+            "update both or neither",
         )
 
 

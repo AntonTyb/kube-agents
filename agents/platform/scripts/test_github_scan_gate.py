@@ -266,6 +266,54 @@ class CardBucketTest(unittest.TestCase):
         self.assertTrue(card.idempotency_key.endswith(expected))
 
 
+class IssueCardTitleTest(unittest.TestCase):
+    """The card title is human-facing, so it takes the resolver's plain title.
+
+    ``resolver.handle_poll`` emits the issue title twice: ``title``, wrapped in
+    ``<untrusted_title>`` boundary tags for the model, and ``title_plain`` for
+    everywhere else. The payloads elsewhere in this file are hand-written with a
+    bare ``title``, which is why reading the wrong one of the two stayed green
+    here while every card the watcher filed carried raw markup.
+    """
+
+    #: Shaped as ``handle_poll`` actually prints it, not as a test finds
+    #: convenient — the mismatch between those two is the bug being pinned.
+    def _payload(self, plain):
+        return {
+            "status": "FOUND",
+            "repository": "gke-labs/kube-agents",
+            "issue_number": 42,
+            "title": f"<untrusted_title>{plain}</untrusted_title>",
+            "title_plain": plain,
+            "body": "<untrusted_body>b</untrusted_body>",
+        }
+
+    def test_the_card_title_carries_no_boundary_markup(self):
+        card = gate._issue_card(self._payload("Pods crashlooping"))
+        self.assertEqual(
+            card.title, "Triage and resolve gke-labs/kube-agents#42: Pods crashlooping"
+        )
+        self.assertNotIn("untrusted_title", card.title)
+
+    def test_a_long_title_cannot_leave_an_unclosed_boundary_tag(self):
+        """The 200-character cut is where reading ``title`` got dangerous.
+
+        The prefix plus an opening ``<untrusted_title>`` is about 62 characters,
+        so a title past roughly 120 had its closing tag sliced off and the card
+        reached the worker with an opening boundary marker and no close.
+        """
+        card = gate._issue_card(self._payload("Ingress 502s on payments " * 8))
+        self.assertLessEqual(len(card.title), 200)
+        self.assertNotIn("<untrusted", card.title)
+
+    def test_a_payload_without_title_plain_still_files_a_card(self):
+        """A card queued before the resolver grew ``title_plain``."""
+        card = gate._issue_card(
+            {"status": "FOUND", "repository": "o/r", "issue_number": 7, "title": "t"}
+        )
+        self.assertEqual(card.title, "Triage and resolve o/r#7: t")
+
+
 class PrCardKeyTest(unittest.TestCase):
     """The same expiry, for the sweep that needed it more.
 

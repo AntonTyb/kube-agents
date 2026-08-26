@@ -472,6 +472,15 @@ def sweep_stale_issues(repo: str):
 
 def _is_safe_char(ch: str) -> bool:
     """Check whether a character is safe from control/zero-width/bidi smuggling."""
+    # Kept byte-for-byte identical to `_is_safe_char` in
+    # agents/platform/scripts/platform_mcp_server.py, which is the canonical
+    # copy: both classify untrusted external text bound for the same model, and
+    # a class stripped in one place but not the other is a hole in whichever
+    # side forgot. Importing it is not an option — that module builds a FastMCP
+    # server at import time and pulls in `mcp`, `agent_common_server` and
+    # `gke_endpoint`, none of which this script has or needs. The mirror is held
+    # honest by test_resolver.py's source-equality drift test, which fails if
+    # either definition is edited without the other.
     code = ord(ch)
     # Preserve newline (\n, 10) and tab (\t, 9)
     if code in (9, 10):
@@ -607,62 +616,324 @@ def calculate_issue_priority(issue: dict) -> tuple[int, str]:
     return score, priority_label
 
 
+# ---------------------------------------------------------------------------
+# Risk tiering
+#
+# The tier is a TRIAGE SIGNAL, NOT A SECURITY BOUNDARY. Read what it can and
+# cannot do before extending it, because the distinction governs every choice
+# below.
+#
+# What actually stops this skill mutating a cluster is that it has no way to:
+# Step 3 of SKILL.md confines the agent to read-only diagnostics, and the only
+# writes the skill performs are `resolver.py claim` and `transition`, which post
+# a comment and move a label. What stops untrusted issue text steering the agent
+# is `sanitize_untrusted_text` plus the `<untrusted_*>` demarcation — enforced in
+# code, on every character, before the model sees anything.
+#
+# This function is neither of those. It is a keyword classifier over natural
+# language, so an attacker who controls the issue text also controls its input,
+# and can phrase a mutating request in a way no verb list anticipates. Grading
+# TIER_3 buys earlier human eyes on the issues most likely to want them; it does
+# not buy a guarantee, and nothing downstream may be relaxed on the strength of
+# a TIER_1.
+#
+# Two consequences that look like gaps and are not:
+#
+#   - Comments are deliberately NOT scanned. Any GitHub user can comment on any
+#     issue, so scanning them would let a passer-by park the resolver on
+#     `status:escalation-needed` by writing the word "delete" — a denial of
+#     service handed to exactly the untrusted population this skill defends
+#     against. The title and body are the reporter's own request, which is the
+#     thing being triaged.
+#   - A mutating verb only counts inside a request. "The PVC will not delete" is
+#     a symptom report and grading it TIER_3 means a human is paged for a
+#     diagnosis the agent could have done; "Please delete the PVC" is a request.
+#     The negation and directive tests below are what separate them.
+# ---------------------------------------------------------------------------
+
+TIER_1_READ_ONLY = "TIER_1_READ_ONLY"
+TIER_2_NON_DESTRUCTIVE = "TIER_2_NON_DESTRUCTIVE"
+TIER_3_MUTATING = "TIER_3_MUTATING"
+
+
+def _verb_forms(base: str) -> set[str]:
+    """Expand a base verb into the inflections issue prose actually uses.
+
+    A bare `\\b(delete)\\b` matches the one form nobody writing a ticket bothers
+    to use: `deleting`, `deletion` and `deletes` all walked past the previous
+    list, which is most of why it graded 2 of 14 real mutation phrasings as
+    read-only.
+    """
+    forms = {base, base + "s"}
+    if base.endswith("e"):
+        stem = base[:-1]
+        forms |= {base + "d", stem + "ing"}
+    elif base.endswith("y") and base[-2:-1] not in "aeiou":
+        stem = base[:-1]
+        forms |= {stem + "ies", stem + "ied", base + "ing"}
+    else:
+        forms |= {base + "ed", base + "ing"}
+    return forms
+
+
+# Verbs whose plain reading is "destroy, revoke, or otherwise take something
+# away". A request containing one of these is what TIER_3 is for.
+_TIER3_VERBS = (
+    "delete", "remove", "destroy", "drain", "evict", "cordon", "taint",
+    "purge", "wipe", "truncate", "overwrite", "uninstall", "deprovision",
+    "decommission", "terminate", "revoke", "rotate", "reset", "kill",
+    "disable", "downgrade", "prune", "detach", "unbind", "invalidate",
+    "recreate", "restart", "rollback", "undo", "expire", "quarantine",
+    "evacuate", "unmount", "unregister", "deregister", "scrub",
+)
+
+# Noun and particle forms the inflection expander cannot reach.
+_TIER3_EXTRA = (
+    r"clean(?:\s|-)?up", r"tear(?:\s|-)?down", r"roll(?:\s|-)?back",
+    r"deletion", r"removal", r"destruction", r"eviction", r"termination",
+    r"revocation", r"rotation", r"decommissioning", r"force(?:\s|-)delete",
+    r"rm\s+-[rf]{1,2}\w*",
+    r"scale\s+(?:\w+\s+){0,3}?(?:down\s+)?to\s+(?:0|zero)",
+    # No leading `--`: this sits inside a `\b(?:...)\b` alternation, and a `\b`
+    # in front of a hyphen never matches (both sides non-word), so the flag
+    # spelt in full is a pattern that can never fire.
+    r"replicas[= ]0\b",
+)
+
+# Privileged requests. These are TIER_3 regardless of framing: there is no
+# benign reading of "grant me cluster-admin" that an autonomous agent should act
+# on without a human, and unlike the verbs above they are rarely symptom prose.
+_PRIVILEGED = (
+    r"grant\s+(?:\w+\s+){0,2}?admin", r"cluster-admin", r"escalate\s+privilege",
+    r"privilege\s+escalation", r"dump\s+(?:the\s+)?secret", r"exfiltrat\w+",
+    r"export\s+(?:the\s+)?credential",
+    r"drop\s+(?:\w+\s+){0,3}?(?:database|table)\b",
+    r"format\s+(?:the\s+)?disk", r"chmod\s+777", r"impersonat\w+",
+    r"disable\s+(?:the\s+)?(?:audit|logging|rbac)",
+)
+
+# Command invocations that mutate. A pasted command is a request in a way prose
+# is not, so these skip the directive test — but only the destructive
+# subcommands. `kubectl apply` and `kubectl create` land in TIER_2 below.
+_MUTATING_COMMANDS = (
+    r"kubectl\s+(?:\w|-|=|\.|/)*\s*(?:delete|drain|evict|cordon|taint|uncordon)",
+    r"kubectl\s+rollout\s+undo",
+    r"kubectl\s+replace\s+.*--force",
+    r"gcloud\s+(?:\w|-|\s)*?(?:delete|remove)\b",
+    r"helm\s+(?:uninstall|delete|rollback)\b",
+    r"terraform\s+(?:destroy|state\s+rm)\b",
+    r"docker\s+(?:rm|rmi|system\s+prune)\b",
+)
+
+# Verbs that change state without taking anything away.
+_TIER2_VERBS = (
+    "create", "add", "generate", "update", "edit", "patch", "apply", "fix",
+    "resolve", "implement", "document", "bump", "upgrade", "enable",
+    "configure", "annotate", "rename", "migrate", "backfill", "provision",
+)
+_TIER2_EXTRA = (r"pull\s+request", r"\bpr\b", r"open\s+a\s+ticket", r"scale\s+up")
+
+
+def _verb_alternation(verbs: tuple, extra: tuple = ()) -> str:
+    forms = set()
+    for v in verbs:
+        forms |= _verb_forms(v)
+    # Longest-first so `deletion` is not shadowed by `delete` losing the suffix.
+    return "|".join(sorted((re.escape(f) for f in forms), key=len, reverse=True)
+                    + list(extra))
+
+
+_TIER3_RE = re.compile(
+    r"\b(?:" + _verb_alternation(_TIER3_VERBS, _TIER3_EXTRA) + r")\b",
+    re.IGNORECASE,
+)
+_PRIVILEGED_RE = re.compile(r"(?:" + "|".join(_PRIVILEGED) + r")", re.IGNORECASE)
+_COMMAND_RE = re.compile(r"(?:" + "|".join(_MUTATING_COMMANDS) + r")", re.IGNORECASE)
+_TIER2_RE = re.compile(
+    r"\b(?:" + _verb_alternation(_TIER2_VERBS, _TIER2_EXTRA) + r")\b",
+    re.IGNORECASE,
+)
+
+# "It will not delete" is the opposite of "please delete it". Checked against
+# the text immediately before the verb, within the clause, so a negation in the
+# previous sentence does not excuse a request in this one.
+_NEGATION_RE = re.compile(
+    r"(?:\bnot\b|n't\b|\bnever\b|\bcannot\b|\bunable\b|\bfail(?:s|ed|ing)?\b"
+    r"|\brefus(?:e|es|ed|ing)\b|\bstuck\b|\bhangs?\b|\bhung\b|\bwedged\b"
+    r"|\bno\s+longer\b|\bwithout\b|\bstopped\b|\bkeeps?\b|\bwon't\b)"
+    r"[^.;!?\n]{0,40}$",
+    re.IGNORECASE,
+)
+
+# Somebody asking for something to be done, as opposed to describing what
+# happened. Without one of these a mutating verb is read as narration.
+_REQUEST_RE = re.compile(
+    r"\b(?:please|kindly|can\s+(?:you|we)|could\s+(?:you|we)|would\s+you"
+    r"|we\s+need\s+to|needs?\s+to\s+be|should\s+(?:be|we|i)|must\s+be"
+    r"|request(?:ing)?\s+(?:to|that)|action\s+(?:required|needed)|to-?do"
+    r"|run\s+the\s+following|execute\s+the\s+following|asking\s+(?:you|us)"
+    r"|require[sd]?\s+(?:you|us|manual))\b",
+    re.IGNORECASE,
+)
+
+
+# Bare verbs a title may open with, separators removed. Only base forms belong
+# here — a gerund ("Deleting pods repeatedly") narrates, it does not order.
+_IMPERATIVE_OPENERS = set(_TIER3_VERBS) | {
+    "cleanup", "teardown", "rollback", "purge", "drop",
+}
+
+
+def _is_negated(text: str, start: int) -> bool:
+    """True when the verb at `start` is preceded by a negation in its clause."""
+    return bool(_NEGATION_RE.search(text[:start]))
+
+
+def _has_unnegated_match(pattern: "re.Pattern", text: str) -> bool:
+    return any(not _is_negated(text, m.start()) for m in pattern.finditer(text))
+
+
+# Words that turn what follows into a subordinate clause — the thing being
+# asked *about* rather than the thing being asked *for*. "Please look at why the
+# pod restarts" is a request for a diagnosis; "restarts" is the symptom it names.
+_SUBORDINATOR_RE = re.compile(
+    r"\b(?:why|when|whether|how|if|what|where|which|that|because|since|"
+    r"after|before|about|during|while)\b",
+    re.IGNORECASE,
+)
+
+#: How many words may sit between "please" and the verb it governs. Past this
+#: the marker is introducing a sentence, not the verb.
+_REQUEST_VERB_WINDOW = 5
+
+
+def _normalize_verb(text: str) -> str:
+    return re.sub(r"[\s-]+", "", text.strip().lower())
+
+
+def _starts_with_imperative(title: str) -> bool:
+    """True when a title opens with a bare destructive verb.
+
+    "Delete stale namespace" is a request with the "please" left off, which is
+    how half of all tickets are written. Only the bare form counts: "Deleting
+    pods repeatedly" is a symptom, and its gerund must not read as an order.
+    """
+    first = re.match(r"\s*([a-z-]+(?:\s+(?:up|down|back))?)", title, re.IGNORECASE)
+    if not first:
+        return False
+    # Compared with separators removed so "Clean up", "clean-up" and "Cleanup"
+    # are the one word a reader hears in all three.
+    return _normalize_verb(first.group(1)) in _IMPERATIVE_OPENERS
+
+
+def _is_directive_occurrence(text: str, match: "re.Match") -> bool:
+    """True when this particular verb is being asked for, not described.
+
+    A request marker anywhere in the issue is not enough. "Please look at why
+    the pod restarts every 30s" and "Can you check when the certificate rotation
+    last ran?" are both diagnostic questions that happen to contain a marker and
+    a verb, and treating the pair as a request escalates the most ordinary
+    ticket there is. Two readings count instead:
+
+    - the verb sits within a few words *after* a marker, in the same clause,
+      with no subordinator in between ("please delete the namespace"); or
+    - the verb opens its own line or sentence in bare form, which is an
+      imperative whether or not anybody said please ("Remove the deployment").
+      Only the bare form: "Removed the deployment yesterday" is a status update.
+    """
+    clause = re.split(r"[.;:!?\n]", text[: match.start()])[-1]
+
+    stripped = re.sub(r"^[\s>*+\-#\d.)\]]+", "", clause)
+    stripped = re.sub(r"^(?:please|kindly)[\s,]*", "", stripped, flags=re.IGNORECASE)
+    if not stripped.strip() and _normalize_verb(match.group(0)) in _IMPERATIVE_OPENERS:
+        return True
+
+    markers = list(_REQUEST_RE.finditer(clause))
+    if not markers:
+        return False
+    between = clause[markers[-1].end():]
+    if _SUBORDINATOR_RE.search(between):
+        return False
+    return len(between.split()) <= _REQUEST_VERB_WINDOW
+
+
 def evaluate_risk_tier(issue: dict) -> str:
-    """Evaluates the risk tier of an issue based on content keywords and labels.
-    Returns one of: TIER_1_READ_ONLY, TIER_2_NON_DESTRUCTIVE, TIER_3_MUTATING.
+    """Grade an issue TIER_1_READ_ONLY, TIER_2_NON_DESTRUCTIVE or TIER_3_MUTATING.
+
+    A triage signal for the skill's Step 1 branch, not an enforcement point —
+    see the section comment above for what that does and does not mean.
+
+    Grades the *sanitized* text: `de<U+034F>lete` reaches the model as `delete`,
+    so classifying the raw string would let an invisible character split a verb
+    the agent can still read.
     """
     label_names = _label_names(issue)
 
-    # Security labels -> Tier 3
-    if any(
-        l in label_names
-        for l in ["security", "security-risk", "privilege-escalation"]
+    # `security` alone is a topic label — a docs fix filed under it is not a
+    # privileged request, and escalating one wastes a human. Only labels that
+    # assert a risk are taken at face value.
+    if label_names & {"security-risk", "privilege-escalation"}:
+        return TIER_3_MUTATING
+
+    # The reporter's own words. Comments are excluded on purpose; see above.
+    title = sanitize_untrusted_text(issue.get("title") or "")
+    body = sanitize_untrusted_text(issue.get("body") or "")
+
+    # Backticks become spaces so a command inside an inline span or a fenced
+    # block is still scanned rather than erased from the evaluation.
+    title_text = title.replace("`", " ")
+    body_text = body.replace("`", " ")
+    full_text = f"{title_text}\n{body_text}"
+
+    if _has_unnegated_match(_PRIVILEGED_RE, full_text):
+        return TIER_3_MUTATING
+    if _has_unnegated_match(_COMMAND_RE, full_text):
+        return TIER_3_MUTATING
+
+    # A destructive verb counts only where the issue is asking for it. A title
+    # opening with a bare imperative asks for whatever its verb is; anywhere
+    # else the occurrence has to stand on its own (see _is_directive_occurrence).
+    if _starts_with_imperative(title_text) and _has_unnegated_match(
+        _TIER3_RE, title_text
     ):
-        return "TIER_3_MUTATING"
-
-    raw_title = issue.get("title") or ""
-    raw_body = issue.get("body") or ""
-    text_parts = [
-        sanitize_untrusted_text(raw_title),
-        sanitize_untrusted_text(raw_body),
-    ]
-    for c in issue.get("comments") or []:
-        c_body = c.get("body") or ""
-        text_parts.append(sanitize_untrusted_text(c_body))
-    sanitized_content = " ".join(str(p) for p in text_parts)
-
-    # Convert all backticks to whitespace so commands in both inline spans and fenced code
-    # blocks are scanned for destructive actions rather than being erased from risk evaluation.
-    prose_content = sanitized_content.replace("`", " ").lower()
-
-    # Explicit destructive / mutating action verbs or privileged request patterns
-    tier3_patterns = [
-        r"\b(delete|remove|destroy|kill|drain|truncate|overwrite|purge|wipe|cleanup|clean\s+up)\b",
-        r"\b(grant\s+admin|escalate\s+privilege|dump\s+secret|export\s+credential|drop\s+database|drop\s+table|format\s+disk)\b",
-    ]
-    if any(re.search(pat, prose_content) for pat in tier3_patterns):
-        return "TIER_3_MUTATING"
-
-    # Check for non-destructive mutations -> Tier 2
-    tier2_keywords = [
-        "create",
-        "add",
-        "generate",
-        "update",
-        "edit",
-        "pr",
-        "pull request",
-        "fix",
-        "resolve",
-    ]
+        return TIER_3_MUTATING
     if any(
-        re.search(r"\b" + re.escape(kw) + r"\b", prose_content)
-        for kw in tier2_keywords
+        not _is_negated(full_text, m.start())
+        and _is_directive_occurrence(full_text, m)
+        for m in _TIER3_RE.finditer(full_text)
     ):
-        return "TIER_2_NON_DESTRUCTIVE"
+        return TIER_3_MUTATING
 
-    # Default to read-only diagnostic -> Tier 1
-    return "TIER_1_READ_ONLY"
+    if _has_unnegated_match(_TIER2_RE, full_text):
+        return TIER_2_NON_DESTRUCTIVE
+
+    return TIER_1_READ_ONLY
+
+
+def _fetch_comments(repo: str, number) -> list:
+    """Fetch one issue's comments, after the ranking has picked a winner.
+
+    Split out of the list query so that query can widen to 100 issues without
+    paying a GraphQL round trip per issue for a field only the selected issue
+    needs.
+
+    Returns [] rather than raising when the fetch fails. The comments are
+    context for the investigation, not the thing being investigated: an issue
+    the agent can still read the title and body of is worth reporting, and a
+    poll that died here would take the whole FOUND payload with it.
+    """
+    res = run_gh(
+        ["issue", "view", str(number), "-R", repo, "--json", "comments"],
+        check=False,
+    )
+    if res.returncode != 0:
+        return []
+    try:
+        payload = json.loads(res.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    comments = payload.get("comments") if isinstance(payload, dict) else None
+    return comments if isinstance(comments, list) else []
 
 
 def handle_poll(args):
@@ -722,6 +993,18 @@ def handle_poll(args):
     # a token without scope for this repo — or a repo that 404s — only fails
     # here. With check=True that exits non-zero having printed no JSON at all,
     # which the skill has no branch for.
+    #
+    # `comments` is deliberately absent from this projection and `--limit` is
+    # 100 rather than 10, and the two go together. Ranking by priority only
+    # reorders the rows the query returned, and `gh issue list --search` returns
+    # them newest-first: at a limit of 10 a P0 filed last week sits behind ten
+    # newer tickets and is never selected, which is the delay the ranking was
+    # added to remove. Widening the window is what makes the ranking mean
+    # anything. It is affordable only because `comments` is dropped — that field
+    # costs one GraphQL round trip per issue, so asking for it across 100 issues
+    # is what would blow `github_scan_gate`'s RESOLVER_TIMEOUT_S. The winner's
+    # comments are fetched on their own below, once there is exactly one issue
+    # to fetch them for.
     res = run_gh(
         [
             "issue",
@@ -731,9 +1014,9 @@ def handle_poll(args):
             "--search",
             search_query,
             "--json",
-            "number,title,body,comments,labels,createdAt",
+            "number,title,body,labels,createdAt",
             "--limit",
-            "10",
+            "100",
         ],
         check=False,
     )
@@ -776,20 +1059,26 @@ def handle_poll(args):
     raw_body = target.get("body") or ""
     sanitized_body = sanitize_untrusted_text(raw_body)
 
+    # Tier the issue on its title and body, which is everything the list query
+    # returned. Comments are excluded from tiering by design (see the section
+    # comment on evaluate_risk_tier), so fetching them first would change
+    # nothing about the grade.
+    risk_tier = evaluate_risk_tier(target)
+
     comments = []
-    for c in target.get("comments") or []:
-        raw_author = c.get("author", {}).get("login", "unknown") if isinstance(c.get("author"), dict) else "unknown"
-        author_sanitized = f"<untrusted_author>{sanitize_untrusted_text(raw_author)}</untrusted_author>"
-        c_body = c.get("body") or ""
+    for c in _fetch_comments(repo, target["number"]):
+        author = c.get("author") if isinstance(c.get("author"), dict) else {}
+        # A GitHub login is `[A-Za-z0-9-]` and at most 39 characters, so there
+        # is nothing here for a boundary tag to defend against; wrapping it only
+        # put markup in front of every reader of this field. Sanitized anyway,
+        # because the cost is nil and the assumption is GitHub's to break.
         comments.append(
             {
-                "author": author_sanitized,
+                "author": sanitize_untrusted_text(author.get("login") or "unknown"),
                 "createdAt": c.get("createdAt", ""),
-                "body": f"<untrusted_comment>{sanitize_untrusted_text(c_body)}</untrusted_comment>",
+                "body": f"<untrusted_comment>{sanitize_untrusted_text(c.get('body') or '')}</untrusted_comment>",
             }
         )
-
-    risk_tier = evaluate_risk_tier(target)
 
     print(
         json.dumps(
