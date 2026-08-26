@@ -1353,23 +1353,37 @@ COPY agents/platform/plugins/ agents/chat/plugins/ /opt/hermes/plugins/
 #     by absolute path, the sitecustomize.py the operator puts on PYTHONPATH, and
 #     verify_skills_provenance.py — the checker for the manifest below. A checker
 #     that the checked party can rewrite reports whatever it is told to.
+#   - /opt/chat-template, the Chat Agent's config.yaml. It is the template the
+#     entrypoint seeds $TARGET_DIR/config.yaml from on a fresh or pristine-upstream
+#     volume, and back-fills every ABSENT key from on every boot thereafter (step
+#     2d). A key added to the image copy therefore installs itself into the live
+#     default-profile config on the next restart and persists — the same
+#     rewrite-the-image-copy-and-let-the-entrypoint-propagate-it route the two
+#     templates above are covered against, over a file that holds toolsets,
+#     plugins.enabled and mcp_servers.
 #
-# The REST of /opt/defaults stays hermes-owned. It is the Chat Agent's own default
-# profile, and while the entrypoint copies it onto the PVC at boot, the image copy
-# is still read back afterwards (plugins/ by otel_config.py, onboarding/ by the
-# bootstrap_onboarding plugin). That residue is recorded in the security reference
-# as not covered rather than papered over; the read-only root filesystem is what
-# closes it in a pod.
+# /opt/defaults itself stays hermes-owned, scripts/ aside. It is the Chat Agent's
+# own default profile, and while the entrypoint copies it onto the PVC at boot, the
+# image copy is still read back afterwards (cron/jobs.json as --image-jobs, plugins/
+# by profile scaffolding and by otel_config.py, onboarding/ by the
+# bootstrap_onboarding plugin). Root-owned 0644 would still be readable, so the
+# exclusion is caution about a directory with several live readers rather than a
+# requirement; that residue is recorded in the security reference as not covered
+# rather than papered over, and the read-only root filesystem is what closes it in
+# a pod.
 #
 # Nothing at runtime writes to any path in the chown — the entrypoint,
 # profile_scaffold.py and cluster_agent_profile.py only ever read from the
-# templates, and every /opt/defaults/scripts reference in the tree is a read or a
-# copy OUT of it into $HERMES_HOME — so root ownership costs nothing.
+# templates, every /opt/defaults/scripts reference in the tree is a read or a
+# copy OUT of it into $HERMES_HOME, and every CHAT_TEMPLATE_CONFIG reference is a
+# plain `cp` or a read to back-fill from. A plain `cp` gives the destination to
+# the copying uid, so the PVC copies stay writable — so root ownership costs
+# nothing.
 #
 # The hermes chown that opens this RUN therefore names only what STAYS
-# hermes-owned. The four roots below are COPYed --chown=hermes:hermes already and
-# end up root:root regardless, so listing them there too would be two extra
-# recursive walks per build and two contradictory lines for the next reader.
+# hermes-owned. The five roots below are COPYed --chown=hermes:hermes already and
+# end up root:root regardless, so listing them there too would be extra recursive
+# walks per build and two contradictory lines for the next reader.
 # /opt/defaults is the exception that has to appear in both: the directory stays
 # hermes-owned and only its scripts/ subtree is taken back.
 #
@@ -1477,7 +1491,7 @@ COPY agents/platform/plugins/ agents/chat/plugins/ /opt/hermes/plugins/
 # manifest then records as source-only, which is correct: there is no bytecode to
 # account for.
 RUN set -eu; \
-    chown -R hermes:hermes /opt/defaults /opt/chat-template; \
+    chown -R hermes:hermes /opt/defaults; \
     for d in /opt/defaults /opt/hermes/skills /opt/hermes/plugins /opt/hermes/gateway /opt/hermes/tools /opt/cluster-template /opt/platform-template /opt/chat-template; do \
         find "$d" -type d -exec chmod 755 {} + ; \
         find "$d" -type f -exec chmod 644 {} + ; \
@@ -1500,7 +1514,7 @@ RUN set -eu; \
             || { echo "manifest for $d has $(wc -l < "$d/skills_manifest.sha256") entries, expected $n" >&2; exit 1; }; \
         chmod 644 "$d/skills_manifest.sha256"; \
     done; \
-    chown -R root:root /opt/hermes/skills /opt/hermes/plugins /opt/platform-template /opt/cluster-template /opt/defaults/scripts
+    chown -R root:root /opt/hermes/skills /opt/hermes/plugins /opt/platform-template /opt/cluster-template /opt/chat-template /opt/defaults/scripts
 
 USER 10000:10000
 

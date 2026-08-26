@@ -532,12 +532,14 @@ class SkillProvenanceContractTest(unittest.TestCase):
         # subdirectories would leave the more load-bearing half of the image's
         # prompt material writable by the uid it is meant to be protected from.
         #
-        # /opt/hermes/plugins and /opt/defaults/scripts are in the same list for
-        # the same reason and are not covered by any manifest, so this assertion
-        # is the only thing holding them: the first is Python imported into the
-        # agent's own process, and the second holds the checker for the manifests
-        # generated just above — a checker the checked party can rewrite reports
-        # whatever it is told to.
+        # /opt/hermes/plugins, /opt/defaults/scripts and /opt/chat-template are in
+        # the same list for the same reason and are covered by no manifest, so this
+        # assertion is the only thing holding them: the first is Python imported
+        # into the agent's own process; the second holds the checker for the
+        # manifests generated just above, and a checker the checked party can
+        # rewrite reports whatever it is told to; the third is the config template
+        # entrypoint step 2d back-fills absent keys into the live default profile
+        # from, on every boot, so a key added to the image copy installs itself.
         chowned = re.search(r"chown -R root:root ([^;]*)", self.generation_block())
         self.assertIsNotNone(chowned, "the manifest RUN no longer chowns anything to root")
         for root in (
@@ -545,6 +547,7 @@ class SkillProvenanceContractTest(unittest.TestCase):
             "/opt/hermes/plugins",
             "/opt/platform-template",
             "/opt/cluster-template",
+            "/opt/chat-template",
             "/opt/defaults/scripts",
         ):
             with self.subTest(root=root):
