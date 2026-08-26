@@ -476,16 +476,30 @@ class SkillProvenanceContractTest(unittest.TestCase):
                 self.assertIn(tree, block)
                 self.assertIn(tree, self.entrypoint)
 
-    def test_bytecode_is_excluded_on_both_sides(self):
-        # `compileall /opt/hermes` runs after the manifests are written and puts
-        # __pycache__ under /opt/hermes/skills. If the build stopped excluding
-        # it the manifest would be ordering-dependent; if the verifier stopped,
-        # every boot of a correct image would fail closed.
+    def test_bytecode_is_compiled_before_it_is_hashed(self):
+        # `compileall /opt/hermes` writes __pycache__ under /opt/hermes/skills,
+        # so its position relative to `sha256sum` decides whether bytecode is
+        # inside the manifest or an ordering accident. It runs in this same RUN
+        # and ahead of the manifest loop, which is what makes covering it
+        # deterministic. Move it back out to a RUN of its own, or after the
+        # loop, and every boot of a correct image fails closed on files the
+        # manifest never saw.
         block = self.generation_block()
-        self.assertIn("__pycache__", block)
-        self.assertIn(".pyc", block)
-        self.assertIn("__pycache__", self.vsp.EXCLUDED_DIRS)
-        self.assertIn(".pyc", self.vsp.EXCLUDED_SUFFIXES)
+        self.assertIn("compileall", block)
+        self.assertLess(block.index("compileall"), block.index("sha256sum"))
+
+    def test_bytecode_is_not_carved_out_of_the_manifest(self):
+        # CPython's default invalidation is source mtime plus size, not a
+        # content hash, and nothing here passes --invalidation-mode
+        # checked-hash. A .pyc is therefore an independent artifact: rewrite one
+        # under a preserved mtime and the interpreter runs it. An exclusion is
+        # also a name a symlink can be given, which is why neither side has one.
+        block = self.generation_block()
+        self.assertNotIn("__pycache__", block)
+        self.assertNotIn(".pyc", block)
+        for gone in ("EXCLUDED_DIRS", "EXCLUDED_SUFFIXES", "is_excluded"):
+            with self.subTest(name=gone):
+                self.assertFalse(hasattr(self.vsp, gone))
 
     def test_the_generated_manifest_is_checked_for_completeness(self):
         # `find … | sort > manifest` exits with sort's status, and no POSIX sh
@@ -512,9 +526,22 @@ class SkillProvenanceContractTest(unittest.TestCase):
         # profile by entrypoint step 2.6. Narrowing the chown back to the skills
         # subdirectories would leave the more load-bearing half of the image's
         # prompt material writable by the uid it is meant to be protected from.
+        #
+        # /opt/hermes/plugins and /opt/defaults/scripts are in the same list for
+        # the same reason and are not covered by any manifest, so this assertion
+        # is the only thing holding them: the first is Python imported into the
+        # agent's own process, and the second holds the checker for the manifests
+        # generated just above — a checker the checked party can rewrite reports
+        # whatever it is told to.
         chowned = re.search(r"chown -R root:root ([^;]*)", self.generation_block())
         self.assertIsNotNone(chowned, "the manifest RUN no longer chowns anything to root")
-        for root in ("/opt/hermes/skills", "/opt/platform-template", "/opt/cluster-template"):
+        for root in (
+            "/opt/hermes/skills",
+            "/opt/hermes/plugins",
+            "/opt/platform-template",
+            "/opt/cluster-template",
+            "/opt/defaults/scripts",
+        ):
             with self.subTest(root=root):
                 self.assertRegex(chowned.group(1), rf"{re.escape(root)}(\s|$)")
 
@@ -574,12 +601,14 @@ class SkillProvenanceContractTest(unittest.TestCase):
             shutil.copytree(source, profile, dirs_exist_ok=True)
             shutil.copytree(source, profile, dirs_exist_ok=True)
 
-    def test_deleting_the_verifier_stops_the_pod_rather_than_the_check(self):
+    def test_a_missing_verifier_stops_the_pod_rather_than_the_check(self):
         # What decides whether the check is mandatory has to be the manifest, not
-        # the script. The manifest is inside the root-owned tree; the script is in
-        # /opt/defaults/scripts, which the runtime uid owns and can delete. Gate on
-        # the script and one `rm` disables boot verification for the life of the
-        # image, silently, in the one step whose point is failing closed.
+        # the script. Both are root-owned now — the manifest inside the tree it
+        # describes, the script in /opt/defaults/scripts — so this is no longer
+        # about an `rm` the runtime uid can issue; it is about the alternative to
+        # reporting a missing checker being to skip the tree it would have
+        # checked. Gate on the script and a truncated image verifies clean
+        # forever, silently, in the one step whose point is failing closed.
         step = self.entrypoint[self.entrypoint.index("SKILL_PROVENANCE_SCRIPT="):]
         step = step[: step.index("\n# 1.6 ")]
         self.assertIn(f'[ -f "$_tree/{self.vsp.MANIFEST_NAME}" ] || continue', step)

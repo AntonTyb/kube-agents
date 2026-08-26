@@ -272,12 +272,14 @@ fi
 # the modes are left writable-looking). Read it as "this image's skills are the ones it
 # was built with", not as a runtime sandbox.
 #
-# The manifest, not the script, decides whether the check is mandatory. The verifier
-# lives in /opt/defaults/scripts, which the runtime user owns and can delete; the
-# manifest lives inside the root-owned tree it describes and cannot be. So a tree that
-# carries a manifest is verified or the container does not start, and deleting the
-# verifier turns the check off for nobody — it stops the pod instead. A tree with no
-# manifest beside it is one no manifesting build produced (agent-base ships
+# The manifest, not the script, decides whether the check is mandatory. Both sides are
+# root-owned in the image — the manifest inside the tree it describes, the verifier in
+# /opt/defaults/scripts — so neither is something the runtime user removes, and the
+# FATAL branch below reads as a corrupted or mis-built image rather than as the last
+# thing standing between an agent and a disabled check. It is kept because the
+# alternative to reporting a missing checker is skipping the tree it would have checked:
+# a tree that carries a manifest is verified or the container does not start. A tree
+# with no manifest beside it is one no manifesting build produced (agent-base ships
 # /opt/hermes/skills and never reaches the platform stage) and is skipped, which is also
 # what makes this a no-op on a developer host.
 #

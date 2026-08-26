@@ -22,6 +22,15 @@
 #     deploy/docker/Dockerfile). This check is what catches the cases ownership
 #     cannot — a corrupted layer, a bad build, or a future code path that runs
 #     as root.
+#   - EVERY file under the tree is compared, with no exclusions. Nothing is
+#     carved out by name, including compiled bytecode: the Dockerfile runs its
+#     compileall pass before it writes the manifest, so __pycache__ is already
+#     there to be hashed. A .pyc is not a derivative that comes along for free
+#     with its source — CPython's default invalidation is source mtime plus
+#     size, not a content hash, so bytecode edited under a preserved mtime is
+#     what the interpreter runs. An exclusion list would also be a list of names
+#     an attacker can choose: anything matched by one is invisible here, symlink
+#     included.
 #
 # Usage:
 #     verify_skills_provenance.py --manifest <path> --dir <tree>
@@ -39,17 +48,6 @@ from typing import Dict, List, Set, Tuple
 # the manifest usually lives INSIDE the tree it describes, so both sides have to
 # agree to leave it out of its own checksums.
 MANIFEST_NAME = "skills_manifest.sha256"
-
-# Compiled bytecode is excluded from both the manifest and this check.
-#
-# `compileall /opt/hermes` runs in the Dockerfile after the tree is populated and
-# writes __pycache__ under /opt/hermes/skills, so a manifest that included .pyc
-# files would be either incomplete or ordering-dependent on that step. They are
-# also derived artifacts: the .py they come from IS covered, and a .pyc whose
-# source hash matches is not an independent tamper vector — the interpreter
-# revalidates it against the source it was compiled from.
-EXCLUDED_DIRS = frozenset({"__pycache__"})
-EXCLUDED_SUFFIXES = (".pyc",)
 
 _READ_CHUNK = 65536
 
@@ -72,12 +70,6 @@ def compute_sha256(path: Path) -> str:
         while chunk := handle.read(_READ_CHUNK):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def is_excluded(relative: Path) -> bool:
-    if any(part in EXCLUDED_DIRS for part in relative.parts):
-        return True
-    return relative.name.endswith(EXCLUDED_SUFFIXES)
 
 
 def parse_manifest(manifest_path: Path) -> Dict[str, str]:
@@ -117,13 +109,15 @@ def scan_tree(directory: Path, manifest_path: Path) -> Tuple[Dict[str, Path], Li
     current content matches and the digest is identical, while what the tree
     actually loads has become a path the manifest says nothing about and that
     can change afterwards without touching anything covered.
+
+    Nothing is skipped by name on the way there. The symlink test is the first
+    thing every entry meets, so a link cannot hide behind a filename that some
+    earlier branch would have passed over.
     """
     found: Dict[str, Path] = {}
     symlinks: List[str] = []
     for path in directory.rglob("*"):
         relative = path.relative_to(directory)
-        if is_excluded(relative):
-            continue
         # Checked before is_dir()/is_file(), both of which resolve the link.
         if path.is_symlink():
             symlinks.append(relative.as_posix())

@@ -142,24 +142,52 @@ class TestTamperDetection(SkillTreeCase):
         self.assertEqual(len(problems), 3)
 
 
-class TestBytecodeIsIgnored(SkillTreeCase):
-    def test_pycache_written_after_the_manifest_does_not_fail_verification(self):
-        """`compileall /opt/hermes` runs after this tree is populated in the Dockerfile.
+class TestBytecodeIsCovered(SkillTreeCase):
+    """Bytecode is inside the manifest, not carved out of it.
 
-        It writes __pycache__ under /opt/hermes/skills. Treating that as an
-        untracked file would fail every boot of a correctly built image.
-        """
+    The Dockerfile's `compileall /opt/hermes` pass runs in the same RUN as the
+    manifest generation and BEFORE it, so a correctly built image has its
+    __pycache__ recorded like any other file. An exclusion here would be a hole
+    in the middle of what the manifest claims to cover: CPython validates a .pyc
+    against source mtime and size by default, not against a content hash, so
+    bytecode rewritten under a preserved mtime is what the interpreter runs.
+    """
+
+    def test_pycache_the_manifest_never_saw_is_reported(self):
         cache = self.tree / "gke-cost-analysis" / "scripts" / "__pycache__"
         cache.mkdir()
         (cache / "report.cpython-312.pyc").write_bytes(b"\x00\x01")
-        problems, checked = self.verify()
-        self.assertEqual(problems, [])
-        self.assertEqual(checked, 3)
+        problems, _ = self.verify()
+        self.assertTrue(
+            any("untracked file not present at build time" in p for p in problems),
+            f"bytecode added after the build must not verify clean, got {problems}",
+        )
 
-    def test_a_stray_pyc_outside_pycache_is_also_ignored(self):
+    def test_a_stray_pyc_outside_pycache_is_reported_too(self):
         (self.tree / "manage-cluster" / "loose.pyc").write_bytes(b"\x00")
         problems, _ = self.verify()
-        self.assertEqual(problems, [])
+        self.assertTrue(
+            any("loose.pyc" in p for p in problems),
+            f"a stray .pyc must not verify clean, got {problems}",
+        )
+
+    def test_a_symlink_named_pycache_is_reported_rather_than_skipped(self):
+        """The regression an exclusion list creates: a name that skips the symlink test.
+
+        The build refuses any symlink under a skill tree, so one here is always
+        something the build did not produce. When the scan skipped entries by
+        name it did so BEFORE testing for a link, which handed an attacker the
+        exclusion list as a set of names to hide under.
+        """
+        elsewhere = Path(self._tmp.name) / "attacker"
+        elsewhere.mkdir()
+        (elsewhere / "report.cpython-312.pyc").write_bytes(b"\x00\x01")
+        (self.tree / "gke-cost-analysis" / "scripts" / "__pycache__").symlink_to(elsewhere)
+        problems, _ = self.verify()
+        self.assertTrue(
+            any("symlink the build did not produce" in p for p in problems),
+            f"a symlink named __pycache__ must not be invisible, got {problems}",
+        )
 
 
 class TestManifestParsing(unittest.TestCase):
