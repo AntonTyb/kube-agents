@@ -194,10 +194,14 @@ KUBE_AGENTS_STATE_BUCKET=auto ./lifecycle.sh apply
   for local state — fine for a hand-driven evaluation, wrong for anything `uninstall.sh` or
   `upgrade.sh` should later find. The state contains every secret the install was given; the
   bucket's IAM is its protection.
-- `install.sh` re-runs are idempotent: it reuses `k8s-operator/scripts/vars.sh` from the first run,
-  regenerates `terraform.tfvars` from it, and `terraform apply` reconciles whatever changed. To
-  change configuration, use `./install.sh --menu` (Save & Apply re-applies through the same
-  engine), edit `vars.sh` and re-run, or edit your hand-written tfvars and re-apply.
+- `install.sh` re-runs rebuild `k8s-operator/scripts/vars.sh` from that run's flags and environment
+  rather than reading the previous one, then regenerate `terraform.tfvars` from it and let
+  `terraform apply` reconcile whatever changed. Anything you do not re-supply falls back to its
+  default — including `--gvisor`, which defaults to `true`, so a bare re-run moves an unsandboxed
+  install onto the sandbox. To re-run with what the install already has, source
+  `k8s-operator/scripts/vars.sh` first — its entries are `export`ed, so a child `./install.sh` sees
+  them. To change one setting, `./install.sh --menu` reads the existing state and Save & Apply
+  re-applies through the same engine; for a hand-driven install, edit your tfvars and re-apply.
 
 - **Private Container Registry**: If your GKE clusters may only pull from an approved registry, see
   [Private container registry](#private-container-registry) below for the full recipe. Mirroring
