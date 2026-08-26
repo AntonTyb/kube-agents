@@ -46,14 +46,19 @@ MANIFESTS_GO = (
 DEFAULT_AGENT_HOME = "/opt/data"
 
 
-def platform_stage(dockerfile_text: str) -> str:
-    """The Dockerfile text belonging to the `platform` target."""
+def stage_body(dockerfile_text: str, target: str) -> str:
+    """The Dockerfile text belonging to one `FROM … AS <target>` stage."""
     stages = re.split(r"^FROM .*? AS (\S+)\s*$", dockerfile_text, flags=re.M)
     # re.split with one group yields [pre, name, body, name, body, ...].
     for name, body in zip(stages[1::2], stages[2::2]):
-        if name == "platform":
+        if name == target:
             return body
-    raise AssertionError("no `FROM … AS platform` stage in the Dockerfile")
+    raise AssertionError(f"no `FROM … AS {target}` stage in the Dockerfile")
+
+
+def platform_stage(dockerfile_text: str) -> str:
+    """The Dockerfile text belonging to the `platform` target."""
+    return stage_body(dockerfile_text, "platform")
 
 
 class EntrypointStartsInsideTheWorkspaceTest(unittest.TestCase):
@@ -544,6 +549,27 @@ class SkillProvenanceContractTest(unittest.TestCase):
         ):
             with self.subTest(root=root):
                 self.assertRegex(chowned.group(1), rf"{re.escape(root)}(\s|$)")
+
+    def test_the_barrier_reaches_the_sidecars_copy_of_the_shared_scripts(self):
+        # /opt/defaults/scripts exists twice. The platform stage's copy is
+        # root-owned by the chown above; the credential-proxy stage builds FROM
+        # agent-base and fills its own, so nothing above reaches it. Leaving that
+        # one hermes-owned would put the weaker copy in the container holding the
+        # credentials — credential_proxy.py, github_token_refresh.py and
+        # gke_endpoint.py all run out of it as uid 10000 — and would quietly
+        # falsify the stage comment claiming the two directories are identical.
+        sidecar = stage_body(DOCKERFILE.read_text(), "credential-proxy")
+        copies = re.findall(
+            r"^COPY((?:\s+--\S+)*)((?:[^\n]*\\\n)*[^\n]*)$", sidecar, flags=re.M
+        )
+        into_scripts = [
+            flags for flags, body in copies if "/opt/defaults/scripts" in body
+        ]
+        self.assertTrue(
+            into_scripts, "no COPY into /opt/defaults/scripts in credential-proxy"
+        )
+        for flags in into_scripts:
+            self.assertIn("--chown=root:root", flags)
 
     def test_a_tree_missing_at_build_time_fails_the_build(self):
         # The asymmetry that would otherwise point the wrong way: the boot check

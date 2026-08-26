@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # verify_skills_provenance.py - Check a baked skill tree against the SHA-256
-# manifest the image build wrote beside it.
+# manifest the image build wrote into it.
 #
 # The skill trees are prompt material: a SKILL.md tells the agent what to do and
 # a skills/*/scripts/*.py runs with the agent's own credentials. Nothing today
@@ -22,8 +22,13 @@
 #     deploy/docker/Dockerfile). This check is what catches the cases ownership
 #     cannot — a corrupted layer, a bad build, or a future code path that runs
 #     as root.
-#   - EVERY file under the tree is compared, with no exclusions. Nothing is
-#     carved out by name, including compiled bytecode: the Dockerfile runs its
+#   - Every file under the tree is compared. The single exception is the
+#     manifest itself, which cannot contain its own checksum; that exclusion is
+#     by NAME and applies at any depth, so a plain file called
+#     skills_manifest.sha256 planted in a subdirectory is invisible to the build
+#     and to this check alike. A symlink so named is not — scan_tree tests
+#     is_symlink() before it tests the name. Nothing else is carved out,
+#     including compiled bytecode: the Dockerfile runs its
 #     compileall pass before it writes the manifest, so __pycache__ is already
 #     there to be hashed. A .pyc is not a derivative that comes along for free
 #     with its source — CPython's default invalidation is source mtime plus
@@ -53,7 +58,14 @@ _READ_CHUNK = 65536
 
 
 def make_log(prefix: str):
-    """Build a stderr logger tagged with a component prefix (shared across the profile scripts)."""
+    """Build a stderr logger tagged with a component prefix.
+
+    Byte-identical to profile_scaffold.make_log in this same directory, and
+    duplicated rather than imported on purpose: this module runs at entrypoint
+    step 1.55, before anything else in the directory has been exercised, and an
+    import is one more way for the check to fail to run at all. Its whole
+    dependency surface is the standard library.
+    """
 
     def _log(msg: str) -> None:
         print(f"[{prefix}] {msg}", file=sys.stderr)
