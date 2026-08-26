@@ -219,8 +219,8 @@ class CardBucketTest(unittest.TestCase):
     cards. A worker that ends its turn before the skill's Step 2 — which Step 1
     prescribes on an ``ERROR`` status — leaves the issue with no ``status:``
     label, so the poll keeps returning it and the key keeps suppressing it. The
-    poll returns only the lowest-numbered unaddressed issue, so that also hides
-    every higher-numbered one.
+    poll returns exactly one issue per tick — the highest-priority unaddressed
+    one — so that also hides every other issue.
     """
 
     PAYLOAD = {
@@ -272,8 +272,8 @@ class IssueCardTitleTest(unittest.TestCase):
     ``resolver.handle_poll`` emits the issue title twice: ``title``, wrapped in
     ``<untrusted_title>`` boundary tags for the model, and ``title_plain`` for
     everywhere else. The payloads elsewhere in this file are hand-written with a
-    bare ``title``, which is why reading the wrong one of the two stayed green
-    here while every card the watcher filed carried raw markup.
+    bare ``title``, so they cannot tell the two apart — which is why this class
+    builds its fixture in the shape ``handle_poll`` actually prints.
     """
 
     #: Shaped as ``handle_poll`` actually prints it, not as a test finds

@@ -472,15 +472,16 @@ def sweep_stale_issues(repo: str):
 
 def _is_safe_char(ch: str) -> bool:
     """Check whether a character is safe from control/zero-width/bidi smuggling."""
-    # Kept byte-for-byte identical to `_is_safe_char` in
+    # Logically identical to `_is_safe_char` in
     # agents/platform/scripts/platform_mcp_server.py, which is the canonical
     # copy: both classify untrusted external text bound for the same model, and
     # a class stripped in one place but not the other is a hole in whichever
     # side forgot. Importing it is not an option — that module builds a FastMCP
     # server at import time and pulls in `mcp`, `agent_common_server` and
     # `gke_endpoint`, none of which this script has or needs. The mirror is held
-    # honest by test_resolver.py's source-equality drift test, which fails if
-    # either definition is edited without the other.
+    # honest by test_resolver.py's drift test, which compares the two as parsed
+    # syntax — so this comment and the docstring may differ from the canonical
+    # copy's, and the logic may not.
     code = ord(ch)
     # Preserve newline (\n, 10) and tab (\t, 9)
     if code in (9, 10):
@@ -527,9 +528,14 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     # 2. Strip C0/C1 control characters, DEL, zero-width/bidi characters, and Unicode tag blocks
     cleaned = "".join(ch for ch in cleaned if _is_safe_char(ch))
 
-    # 3. Neutralize prompt injection delimiter tags, instruction markers, and fake system headers
+    # 3. Neutralize prompt injection delimiter tags, instruction markers, and fake system headers.
+    #    `[/\s]*` on both sides of the name, not just the front: `</untrusted_title>`,
+    #    `< /untrusted_title>` and `<untrusted_title/>` are the same trick, and the
+    #    self-closing spelling used to walk through and reach the model looking like
+    #    a boundary marker from inside the boundary.
     cleaned = re.sub(
-        r"<[/]?\s*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)(?:\s+[^>]*)?>",
+        r"<[/\s]*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)"
+        r"(?:\s+[^>]*?)?[/\s]*>",
         r"[\1_tag_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
@@ -540,8 +546,17 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
         cleaned,
         flags=re.IGNORECASE,
     )
+    #    Kept in step with `_neutralize_tokens` in
+    #    agents/platform/scripts/platform_mcp_server.py. The same framing reaching
+    #    the same model by two routes must not be defused on one and passed through
+    #    on the other: `<TOOL_CALL>`, `<USER_REQUEST>`, `### Instruction:` and a
+    #    counterfeit `[SECURITY NOTICE:` were all neutralized on the pod-diagnostics
+    #    path and verbatim on this one.
     cleaned = re.sub(
-        r"\[INST\]|\[/INST\]|<<SYS>>|<\|im_start\|>|<\|im_end\|>|###\s*system:",
+        r"\[/?INST\]|<<SYS>>|<\|im_start\|>|<\|im_end\|>"
+        r"|###\s*(?:system|instruction):"
+        r"|</?(?:USER_REQUEST|TOOL_CALL)>"
+        r"|(?:===\s*)?\[SECURITY\s+NOTICE:",
         "[instruction_marker_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
@@ -660,9 +675,8 @@ def _verb_forms(base: str) -> set[str]:
     """Expand a base verb into the inflections issue prose actually uses.
 
     A bare `\\b(delete)\\b` matches the one form nobody writing a ticket bothers
-    to use: `deleting`, `deletion` and `deletes` all walked past the previous
-    list, which is most of why it graded 2 of 14 real mutation phrasings as
-    read-only.
+    to use. `deleting`, `deletion` and `deletes` are the same request, and a
+    list of base forms sees none of them.
     """
     forms = {base, base + "s"}
     if base.endswith("e"):
@@ -684,14 +698,17 @@ _TIER3_VERBS = (
     "decommission", "terminate", "revoke", "rotate", "reset", "kill",
     "disable", "downgrade", "prune", "detach", "unbind", "invalidate",
     "recreate", "restart", "rollback", "undo", "expire", "quarantine",
-    "evacuate", "unmount", "unregister", "deregister", "scrub",
+    "evacuate", "unmount", "unregister", "deregister", "scrub", "drop",
 )
 
-# Noun and particle forms the inflection expander cannot reach.
+# Noun, particle and irregular forms the inflection expander cannot reach: it
+# appends suffixes, so it produces `overwrited` and `undoed` and never the words
+# anybody writes.
 _TIER3_EXTRA = (
     r"clean(?:\s|-)?up", r"tear(?:\s|-)?down", r"roll(?:\s|-)?back",
     r"deletion", r"removal", r"destruction", r"eviction", r"termination",
     r"revocation", r"rotation", r"decommissioning", r"force(?:\s|-)delete",
+    r"overwritten", r"undone", r"resetting", r"torn(?:\s|-)down", r"dropping",
     r"rm\s+-[rf]{1,2}\w*",
     r"scale\s+(?:\w+\s+){0,3}?(?:down\s+)?to\s+(?:0|zero)",
     # No leading `--`: this sits inside a `\b(?:...)\b` alternation, and a `\b`
@@ -715,14 +732,21 @@ _PRIVILEGED = (
 # Command invocations that mutate. A pasted command is a request in a way prose
 # is not, so these skip the directive test — but only the destructive
 # subcommands. `kubectl apply` and `kubectl create` land in TIER_2 below.
+# Every gap is `[^\S\n]` (horizontal whitespace) and bounded to a few words. A
+# gap that admits `\n`, or one that is unbounded, stops being a command pattern
+# and becomes a search for two words anywhere in the issue: `gcloud\s+(?:\w|-|\s)
+# *?(?:delete|remove)` matched a read-only `gcloud ... list` paste against the
+# word "delete" two lines below it, and escalated the diagnostic ticket that
+# contained both.
+_CMD_GAP = r"(?:[\w.=/:-]+[^\S\n]+){0,4}?"
 _MUTATING_COMMANDS = (
-    r"kubectl\s+(?:\w|-|=|\.|/)*\s*(?:delete|drain|evict|cordon|taint|uncordon)",
-    r"kubectl\s+rollout\s+undo",
-    r"kubectl\s+replace\s+.*--force",
-    r"gcloud\s+(?:\w|-|\s)*?(?:delete|remove)\b",
-    r"helm\s+(?:uninstall|delete|rollback)\b",
-    r"terraform\s+(?:destroy|state\s+rm)\b",
-    r"docker\s+(?:rm|rmi|system\s+prune)\b",
+    rf"kubectl[^\S\n]+{_CMD_GAP}(?:delete|drain|evict|cordon|taint|uncordon)\b",
+    r"kubectl[^\S\n]+rollout[^\S\n]+undo\b",
+    r"kubectl[^\S\n]+replace[^\S\n][^\n]*--force\b",
+    rf"gcloud[^\S\n]+{_CMD_GAP}(?:delete|remove)\b",
+    rf"helm[^\S\n]+{_CMD_GAP}(?:uninstall|delete|rollback)\b",
+    r"terraform[^\S\n]+(?:destroy|state[^\S\n]+rm)\b",
+    r"docker[^\S\n]+(?:rm|rmi|system[^\S\n]+prune)\b",
 )
 
 # Verbs that change state without taking anything away.
@@ -785,8 +809,21 @@ _IMPERATIVE_OPENERS = set(_TIER3_VERBS) | {
 
 
 def _is_negated(text: str, start: int) -> bool:
-    """True when the verb at `start` is preceded by a negation in its clause."""
-    return bool(_NEGATION_RE.search(text[:start]))
+    """True when the verb at `start` is preceded by a negation in its clause.
+
+    A request that comes *after* the symptom is still a request. "Pods won't
+    start, please delete the prod namespace" is the ordinary shape of a real
+    ticket — symptom clause, then the ask — and reading the leading negation as
+    covering the whole sentence graded every one of them read-only. It also made
+    the grade evadable by a single word: prefixing "not", "stuck", "keeps" or
+    "unable" to any request skipped the escalation branch. So a request marker
+    between the negation and the verb cancels the negation.
+    """
+    before = text[:start]
+    negation = _NEGATION_RE.search(before)
+    if not negation:
+        return False
+    return not _REQUEST_RE.search(before[negation.start():])
 
 
 def _has_unnegated_match(pattern: "re.Pattern", text: str) -> bool:
@@ -996,15 +1033,20 @@ def handle_poll(args):
     #
     # `comments` is deliberately absent from this projection and `--limit` is
     # 100 rather than 10, and the two go together. Ranking by priority only
-    # reorders the rows the query returned, and `gh issue list --search` returns
-    # them newest-first: at a limit of 10 a P0 filed last week sits behind ten
-    # newer tickets and is never selected, which is the delay the ranking was
-    # added to remove. Widening the window is what makes the ranking mean
-    # anything. It is affordable only because `comments` is dropped — that field
-    # costs one GraphQL round trip per issue, so asking for it across 100 issues
-    # is what would blow `github_scan_gate`'s RESOLVER_TIMEOUT_S. The winner's
-    # comments are fetched on their own below, once there is exactly one issue
-    # to fetch them for.
+    # reorders the rows the query returned, and which rows those are is not
+    # something this query gets to decide: `--search` goes to the search API,
+    # whose ordering without a `sort:` qualifier is GitHub's relevance ranking
+    # rather than anything this code can predict. At a limit of 10 the ranking
+    # therefore re-sorted an arbitrary handful and a P0 outside it was never a
+    # candidate — the delay the ranking was added to remove. Widening the window
+    # is what makes the ranking mean anything, and 100 covers the whole
+    # unaddressed backlog of a repository this agent is plausibly pointed at.
+    # It is affordable only because `comments` is dropped — that field costs one
+    # GraphQL round trip per issue, so asking for it across 100 issues is what
+    # would blow `github_scan_gate`'s RESOLVER_TIMEOUT_S. The winner's comments
+    # are fetched on their own below, once there is exactly one issue to fetch
+    # them for; that is one list call plus one view call, against the ten
+    # issues' worth of comment round trips the old projection paid every tick.
     res = run_gh(
         [
             "issue",

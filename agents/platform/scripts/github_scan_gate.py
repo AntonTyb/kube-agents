@@ -288,9 +288,10 @@ def _issue_card(payload: dict, now: datetime | None = None) -> Card:
         # therefore latches the key permanently — and the skill has an ordinary
         # path that does exactly that: Step 1 says to alert the room and
         # terminate on an `ERROR` status. The issue keeps no `status:` label, so
-        # `handle_poll` keeps returning it; because it returns only the
-        # lowest-numbered unaddressed issue, every higher-numbered one goes
-        # unseen too, and `file_card` cannot tell a create from a dedupe hit, so
+        # `handle_poll` keeps returning it; because it returns exactly one
+        # issue per tick — the highest-priority unaddressed one — every other
+        # issue goes unseen too, and `file_card` cannot tell a create from a
+        # dedupe hit, so
         # every subsequent tick looks like a clean run. The old `*/30` prompt
         # job had no cross-tick state to wedge; the key is what introduced it.
         #
