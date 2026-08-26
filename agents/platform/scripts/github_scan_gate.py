@@ -265,7 +265,11 @@ def _issue_card(payload: dict, now: datetime | None = None) -> Card:
     # the truncation and the card carries an *unclosed* boundary marker into the
     # worker — the demarcation failure the tags were added to prevent. Falls back
     # through `title` for a payload written before `title_plain` existed.
-    title = payload.get("title_plain") or payload.get("title") or f"issue #{number}"
+    # `.get(k, default)` rather than `or`: `or` tests falsiness, so a title made
+    # entirely of zero-width or control characters — which GitHub accepts —
+    # sanitizes to "" and falls through to the tagged `title`, putting the
+    # markup back on the card this line exists to keep it off.
+    title = payload.get("title_plain", payload.get("title", "")) or f"issue #{number}"
     bucket = (now or datetime.now(timezone.utc)).strftime(CARD_BUCKET_FORMAT)
     return Card(
         title=f"Triage and resolve {repo}#{number}: {title}"[:200],

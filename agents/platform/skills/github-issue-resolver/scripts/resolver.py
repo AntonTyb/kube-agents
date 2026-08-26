@@ -546,8 +546,16 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
         cleaned,
         flags=re.IGNORECASE,
     )
+    #    `(?<!\`)` is what keeps this linear. Without it a match can start at
+    #    every backtick in a run, and each start consumes to the end of the run
+    #    and backtracks through it — quadratic, 1,039 ms on the 8,192 backticks
+    #    the cap allows. `poll` sanitizes every comment on the issue, so ~291 of
+    #    them crossed RESOLVER_TIMEOUT_S; the lookbehind lets only the first
+    #    backtick of a run start a match and brings the same input to 0.34 ms.
+    #    `[^\S\n]*` rather than `\s*` so a fence cannot be matched to a keyword
+    #    on a later line.
     cleaned = re.sub(
-        r"```+\s*(system|instruction|prompt)",
+        r"(?<!`)`{3,}[^\S\n]*(system|instruction|prompt)\b",
         r"```text",
         cleaned,
         flags=re.IGNORECASE,
@@ -801,7 +809,10 @@ _REQUEST_RE = re.compile(
     r"\b(?:please|kindly|can\s+(?:you|we)|could\s+(?:you|we)|would\s+you"
     r"|we\s+need\s+to|needs?\s+to\s+be|should\s+(?:be|we|i)|must\s+be"
     r"|request(?:ing)?\s+(?:to|that)|action\s+(?:required|needed)|to-?do"
-    r"|run\s+the\s+following|execute\s+the\s+following|asking\s+(?:you|us)"
+    # Bare "run"/"execute", present tense only: "run kubectl … delete" hands a
+    # command over, "We *ran* kubectl … delete" reports having run it.
+    r"|run|execute"
+    r"|asking\s+(?:you|us)"
     r"|require[sd]?\s+(?:you|us|manual))\b",
     re.IGNORECASE,
 )
@@ -833,6 +844,22 @@ _IMPERATIVE_OPENERS = set(_TIER3_VERBS) | {
 _DETERMINER_RE = re.compile(
     r"(?:the|a|an|all|any|these|those|this|that|our|my|your|their|its|every|"
     r"each|both|some|old|stale|unused|orphaned|leftover|dangling)\b",
+    re.IGNORECASE,
+)
+
+# A predicate: the title is saying something *about* its opening word, so that
+# word is a subject and not an order. Disqualifying wherever it appears.
+_PREDICATE_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|being|not|no|never|cannot|"
+    r"does|did|has|have|had|fails?|failed|returns?|shows?|leaks?)\b|n't\b",
+    re.IGNORECASE,
+)
+
+# A phrase attached to the opening word, which makes it the head of a noun
+# phrase rather than a verb. Weaker evidence than a predicate, so it is only
+# consulted when no determiner marked out a direct object.
+_MODIFIER_RE = re.compile(
+    r"\b(?:in|of|on|for|from|after|before|during|with|at|by|into|about|\w+ing)\b",
     re.IGNORECASE,
 )
 
@@ -877,6 +904,36 @@ def _normalize_verb(text: str) -> str:
     return re.sub(r"[\s-]+", "", text.strip().lower())
 
 
+def _is_pasted_command(text: str, match: "re.Match") -> bool:
+    """True when a mutating command is being handed over, not talked about.
+
+    The command patterns used to bypass the directive test entirely, on the
+    reasoning that a pasted command is a request in a way prose is not. That
+    holds for a command on its own line and nowhere else — the same reporter
+    writes "We ran `kubectl delete pod checkout-7f9` and it came straight back",
+    "The gcloud guide on how to delete a cluster 404s", and "terraform destroy
+    is mentioned in the README", and all three escalated. The last of those is
+    the class most worth triaging automatically: the reporter already tried the
+    obvious fix.
+
+    Two things have to hold. The command starts its line — allowing for fences,
+    list markers and quoting, which is where a pasted command actually sits — or
+    an explicit request hands it over. And the rest of the line is not a
+    predicate about the command, which is what "terraform destroy *is*
+    mentioned" is.
+    """
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    lead = text[line_start : match.start()]
+    handed_over = not re.sub(r"[\s>*+\-#\d.)\]`]+", "", lead) or bool(
+        _REQUEST_RE.search(text[line_start : match.start()])
+    )
+    if not handed_over:
+        return False
+    line_end = text.find("\n", match.end())
+    rest = text[match.end() : line_end if line_end != -1 else len(text)]
+    return not _PREDICATE_RE.search(rest)
+
+
 def _starts_with_imperative(title: str) -> bool:
     """True when a title opens with a bare destructive verb.
 
@@ -891,8 +948,25 @@ def _starts_with_imperative(title: str) -> bool:
     # are the one word a reader hears in all three.
     if _normalize_verb(first.group(1)) not in _IMPERATIVE_OPENERS:
         return False
-    # ...and it has to be governing an object. See `_DETERMINER_RE`.
-    return bool(_DETERMINER_RE.match(title[first.end():].lstrip()))
+    rest = title[first.end():]
+    # A copula or a negation anywhere gives the title a predicate, which makes
+    # the opening word its subject however the rest reads: "Reset the password
+    # flow *is* broken for SSO users" and "Rotate the log file job *never* fires"
+    # are reports, and the determiner in each is part of a noun phrase rather
+    # than evidence of an object. Checked first, and regardless of what follows.
+    if _PREDICATE_RE.search(rest):
+        return False
+    # A determiner is then the clearest evidence of a direct object: "Delete
+    # *the* deployment".
+    if _DETERMINER_RE.match(rest.lstrip()):
+        return True
+    # Failing that, an order is still the reading whenever nothing attaches a
+    # phrase to the opening word. "Delete namespace prod" has no preposition and
+    # no participle; "Restart loop *on* the nginx ingress pod" and "Evict events
+    # *flooding* the audit log" each have one, and are noun phrases. Requiring a
+    # determiner alone lost every bare order of the first kind, which is most of
+    # how an operator writes one.
+    return not _MODIFIER_RE.search(rest)
 
 
 def _is_directive_occurrence(text: str, match: "re.Match") -> bool:
@@ -912,18 +986,19 @@ def _is_directive_occurrence(text: str, match: "re.Match") -> bool:
     """
     clause = re.split(r"[.;:!?\n]", text[: match.start()])[-1]
 
-    stripped = re.sub(r"^[\s>*+\-#\d.)\]]+", "", clause)
-    stripped = re.sub(r"^(?:please|kindly)[\s,]*", "", stripped, flags=re.IGNORECASE)
-    if (
-        not stripped.strip()
-        and _normalize_verb(match.group(0)) in _IMPERATIVE_OPENERS
-        and _DETERMINER_RE.match(text[match.end():].lstrip())
-    ):
-        return True
-
-    # Falling out of that is not a verdict: it says this occurrence is not a
-    # bare imperative, not that it is not a request. "Please delete namespace
-    # prod" carries no determiner and is still an order.
+    # A body line that opens with a destructive verb used to count as an order.
+    # It does not, and the reason is what a bug report is made of: "Steps to
+    # reproduce", "What we already tried", and "Workaround" are lists of
+    # imperatives, and the marker-stripping this used to do turned every bullet
+    # into a line-initial one. Twelve of nineteen ordinary reports written to
+    # test this escalated — and `status:escalation-needed` is terminal for the
+    # poll, so each one left autonomous triage for good.
+    #
+    # "Delete the pod" under "Steps to reproduce" and "Delete the pod" as a
+    # request are the same five characters; only the surrounding document says
+    # which, and that is not something this function can see. The title is where
+    # a request to *this* agent gets made, so `_starts_with_imperative` handles
+    # that case and a body needs an explicit marker.
     markers = list(_REQUEST_RE.finditer(clause))
     if not markers:
         return False
@@ -963,7 +1038,10 @@ def evaluate_risk_tier(issue: dict) -> str:
 
     if _has_unnegated_match(_PRIVILEGED_RE, full_text):
         return TIER_3_MUTATING
-    if _has_unnegated_match(_COMMAND_RE, full_text):
+    if any(
+        not _is_negated(full_text, m.start()) and _is_pasted_command(full_text, m)
+        for m in _COMMAND_RE.finditer(full_text)
+    ):
         return TIER_3_MUTATING
 
     # A destructive verb counts only where the issue is asking for it. A title
