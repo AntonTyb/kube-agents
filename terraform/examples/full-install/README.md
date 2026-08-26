@@ -1,20 +1,22 @@
 # Full install (Terraform root composition)
 
 A single `terraform apply` that provisions everything a running Platform Agent
-needs — the IaC counterpart of the interactive
-[`k8s-operator/scripts/provision.sh`](../../../k8s-operator/scripts/provision.sh)
-flow. Use one or the other per project, not both: they would fight over the
-same cluster, service accounts, and IAM bindings.
+needs. This composition **is** the install engine: the repository-root
+`install.sh` generates its `terraform.tfvars` and drives it through
+`lifecycle.sh`, and applying it by hand with your own tfvars is the same
+install without the interview.
 
 ## What it provisions
 
 - The required Google APIs (`google_project_service`, never disabled on
   destroy), including the Cloud KMS API for GKE database encryption and the Chat
   API when Google Chat is enabled.
-- A GKE Autopilot cluster ([`gke-cluster`](../../modules/gke-cluster) module)
-  with Workload Identity, Cloud KMS database encryption (CMEK), and the Backup
-  for GKE agent enabled, and the `kube-agents-host=true` discovery label
-  applied.
+- A GKE cluster ([`gke-cluster`](../../modules/gke-cluster) module) — Autopilot
+  by default, `cluster_mode = "standard"` for an e2-standard-4 node pool
+  (with an optional gVisor node pool), or `create_cluster = false` to
+  install onto an existing one — with Workload Identity, Cloud KMS database
+  encryption (CMEK), the Backup for GKE agent enabled, and the
+  `kube-agents-host=true` discovery label applied.
 - Optionally (`enable_gke_backup_plan = true`) a scheduled
   [`gke-backup-plan`](../../modules/gke-backup-plan) for the release namespace.
 - The agent's GCP identity ([`kube-agents-iam`](../../modules/kube-agents-iam)
@@ -29,9 +31,8 @@ same cluster, service accounts, and IAM bindings.
   ([`github-minter`](../../modules/github-minter) module): minter service
   account plus a KMS key ring and signing key.
 - Unless `enable_cert_manager = false`, [cert-manager](https://cert-manager.io)
-  via `helm_release`, pinned to the same version
-  [`provision_03_gcp_gke_operator.sh`](../../../k8s-operator/scripts/provision_03_gcp_gke_operator.sh)
-  installs. It issues the serving certificate for the operator's admission
+  via `helm_release`, pinned in `cert_manager_version`.
+  It issues the serving certificate for the operator's admission
   webhooks, which this composition turns on (`enable_webhooks`, default true)
   because it can guarantee the dependency — a bare `helm install` of the chart
   cannot, and leaves them off. See [cert-manager](#cert-manager) below.
@@ -88,6 +89,151 @@ been destroyed and re-applied even once, use `make tf-apply` instead — it
 adopts the Cloud KMS resources GCP refuses to delete, which a bare
 `terraform apply` fails on. See [Teardown and re-apply](#teardown-and-re-apply).
 
+### Remote state
+
+The composition ships no backend block, so a hand-driven apply uses local
+state in this directory. For an install whose state must outlive the checkout
+— anything driven by `install.sh`, whose companion `uninstall.sh` and
+`upgrade.sh` run from fresh clones — set `KUBE_AGENTS_STATE_BUCKET` before any
+`lifecycle.sh` subcommand:
+
+```bash
+KUBE_AGENTS_STATE_BUCKET=auto ./lifecycle.sh apply
+```
+
+`auto` derives the bucket name `<project_id>-kube-agents-tfstate`; any other
+value is used verbatim. The bucket is created on first use — versioned, with
+uniform bucket-level access, in the cluster's region — and a gitignored
+`backend_override.tf` points Terraform at
+`gs://<bucket>/<prefix>`, where the prefix defaults to
+`kube-agents/<cluster_name>` (override with `KUBE_AGENTS_STATE_PREFIX`) so two
+installs in one project keep separate state. Versioning is the recovery story:
+a corrupted or mistakenly-overwritten state file can be rolled back to a prior
+generation by copying it over the live object (`gcloud storage ls -a` lists the
+generations; `gcloud storage restore` is for soft-deleted objects, which is a
+different feature — with versioning on, a previous generation is a noncurrent
+version rather than a soft-deleted object):
+
+```bash
+gcloud storage ls -a gs://<bucket>/<prefix>/default.tfstate
+gcloud storage cp gs://<bucket>/<prefix>/default.tfstate#<generation> \
+  gs://<bucket>/<prefix>/default.tfstate
+```
+
+If the state is gone entirely,
+re-run `lifecycle.sh apply` against the same tfvars — KMS adoption is
+automatic, and `terraform import` covers the rest.
+
+### Recovering from an interrupted apply
+
+An apply killed part-way — Ctrl-C, a dropped connection, a laptop lid — leaves
+state locked, and the next command fails with `Error acquiring the state lock`.
+`terraform force-unlock` is the release, and it works here; what trips people up
+is which identifier it wants. On the `gcs` backend the lock ID is the **GCS
+generation number** of the lock object, not a UUID, and it is the `ID:` in the
+error Terraform just printed:
+
+```text
+Lock Info:
+  ID:        1787242876096737
+  Path:      gs://<bucket>/<prefix>/default.tflock
+```
+
+```bash
+terraform force-unlock 1787242876096737
+```
+
+Run it from a directory whose backend is already configured, or it will not
+reach the lock at all. `force-unlock` acts on whatever backend the working
+directory has, this composition ships no backend block, and `backend_override.tf`
+is gitignored and written only by `lifecycle.sh` — so in a checkout that has
+never been through `lifecycle.sh`, Terraform is on local state and refuses with a
+local-state error that never mentions GCS. That matters here more than it looks:
+`install.sh`, `uninstall.sh` and `upgrade.sh` all drive the apply from a
+disposable clone, so the directory that took the lock is routinely gone by the
+time anyone goes looking for it. The fix is the same one the `BackupPlan` import
+below needs — `KUBE_AGENTS_STATE_BUCKET=<same value> KUBE_AGENTS_STATE_PREFIX=<same value> ./lifecycle.sh adopt-kms`
+first, or work in a directory `lifecycle.sh` has already initialised.
+
+Pass a UUID from anywhere else — the `"ID"` field inside the lock object's own
+JSON, for instance — and it refuses with `Lock ID should be numerical value`,
+which reads like the backend not supporting `force-unlock` at all. It does.
+
+Establish that nothing is still applying before you run it. The ID in the error
+is the generation of the lock as it exists at that moment, so `force-unlock`
+matches it and releases it whether the holder is a dead process or a colleague's
+apply still running — the interactive confirmation is the only thing in the way,
+and `-force` removes that too. What the generation check does catch is a
+**stale** ID: one carried over from an earlier error, after which the lock was
+released and re-taken. Pass that and the command refuses rather than breaking a
+lock you were not looking at. That is the reason to prefer it to
+`gcloud storage rm gs://<bucket>/<prefix>/default.tflock`, which deletes the
+object whatever its generation and is the fallback for a lock whose ID you no
+longer have. `<bucket>` and `<prefix>` are the ones from
+[Remote state](#remote-state) — `<project_id>-kube-agents-tfstate` and
+`kube-agents/<cluster_name>` unless `KUBE_AGENTS_STATE_PREFIX` overrode it.
+
+A connectivity drop mid-apply produces two failures worth recognising, because
+neither means what it looks like:
+
+- **`http2: client connection lost` on the state upload.** Terraform retries this
+  itself and the retry usually succeeds, so the run can report a state-write
+  failure it then recovered from. Check the bucket before concluding state was
+  lost — and remember versioning is on, so a bad write can be rolled back to the
+  previous generation as above.
+- **A `BackupPlan` create that fails while polling its operation.** The
+  long-running operation keeps going server-side, so the plan is often `READY`
+  even though Terraform recorded a failure and holds nothing in state. Check with
+  `gcloud beta container backup-restore backup-plans describe`, then import it and
+  re-apply rather than deleting the plan to let Terraform recreate it.
+
+  Import into the same state the apply used, which on a remote-state install
+  means the backend has to be configured first. `backend_override.tf` is
+  gitignored and written only by `lifecycle.sh`, so in a checkout that has
+  `terraform.tfvars` but no override — one `install.sh` wrote into and something
+  later cleaned, say — a bare `terraform import` silently writes a **local**
+  `terraform.tfstate`, reports success, and leaves the next apply still trying to
+  create the plan. Run
+  `KUBE_AGENTS_STATE_BUCKET=<same value> ./lifecycle.sh adopt-kms` first — it is
+  the cheapest subcommand that initialises the backend — or work in a directory
+  `lifecycle.sh` has already initialised. Carry `KUBE_AGENTS_STATE_PREFIX` across
+  as well if the install set one. `ensure_backend` derives the prefix
+  independently of the bucket and inits with `-reconfigure`, so an omitted
+  override points the backend at the default `kube-agents/<cluster_name>` object,
+  and the import lands in an empty state that reports success while the real one
+  still has no plan.
+
+  `terraform.tfvars` is gitignored too, so a literally fresh clone has neither
+  file and fails earlier and more loudly: `ensure_backend` evaluates
+  `var.project_id` before it can write the override, and `lifecycle.sh` exits
+  with "could not evaluate var.project_id". Restore the tfvars the install used
+  before either recipe.
+
+  The import itself needs the placeholder Helm provider `adopt-kms` writes for
+  its own imports, and `lifecycle.sh` exposes no generic import subcommand to
+  borrow — so write it yourself. `terraform import` configures every provider
+  before it does anything, and the `helm` provider here is built from
+  `module.gke_cluster.cluster_endpoint`; the override was needed in practice even
+  with the cluster already in state. The filename suffix is what makes Terraform
+  treat it as an override, so keep it:
+
+  ```bash
+  cat > providers_lifecycle_override.tf <<'EOF'
+  provider "helm" {
+    kubernetes = {
+      host  = "https://127.0.0.1"
+      token = "placeholder"
+    }
+  }
+  EOF
+  terraform import 'module.gke_backup_plan[0].google_gke_backup_backup_plan.this' \
+    "projects/<project>/locations/<region>/backupPlans/<cluster_name>-backup-plan"
+  rm -f providers_lifecycle_override.tf
+  ```
+
+  Remove the override before the next apply — it is never meant to survive an
+  import, which is why `lifecycle.sh` deletes it on an `EXIT` trap.
+
 ### The `image_tag` rule
 
 `image_tag` (default `latest`) overrides both the operator and platform-agent
@@ -115,30 +261,49 @@ for `image_tag` — so a mirror populated at `latest` against an `image_tag` of
 reports success and the pods sit in ImagePullBackOff. Pass the same value to
 both.
 
-The mirror must be readable with the nodes' own credentials — an Artifact
-Registry in the same project is the simple case. No `imagePullSecrets` are
-rendered.
+A mirror the nodes cannot read on their own — Harbor or Artifactory with token
+auth, rather than an Artifact Registry in the same project — needs
+`image_pull_secrets` as well. It takes Secret names, and the Secrets are
+referenced rather than created, which is what keeps registry credentials out of
+Terraform state. Create them before applying, and create the namespace first:
+`create_namespace = true` on the release means Helm has not made it yet.
 
-**cert-manager is not covered.** `image_registry` and
-`third_party_image_registry` are values on `helm_release.kube_agents`;
+```bash
+kubectl create namespace kubeagents-system
+kubectl create secret docker-registry regcred \
+  --namespace kubeagents-system \
+  --docker-server=harbor.example.com \
+  --docker-username=robot\$kube-agents \
+  --docker-password="$TOKEN"
+```
+
+Both are idempotent against what Helm then finds. The names reach every pod the
+chart renders and, through `IMAGE_PULL_SECRETS` on the operator and
+`spec.deployment.imagePullSecrets` on the `PlatformAgent`, the agent pods the
+operator renders too.
+
+**cert-manager images follow the same prefix, but not the same credentials.**
 `helm_release.cert_manager` is a separate release of an upstream chart and
-never sees them, so with `enable_cert_manager = true` its four images still
-come from `quay.io/jetstack` however the prefixes are set. The chart itself is
-fetched over the network from `https://charts.jetstack.io`, which an air-gapped
-runner cannot reach at all. On a cluster that may only pull from an approved
-registry, set `enable_cert_manager = false` and install cert-manager yourself
-from the mirror before applying — `images.json` carries all four entries
-(`cert-manager-controller`, `-cainjector`, `-webhook`, `-acmesolver`), so
-`make mirror-images` has already copied them. `enable_webhooks` needs
-cert-manager present either way; the composition's `depends_on` only orders the
-release it manages, so with `enable_cert_manager = false` it is on you to have
-cert-manager serving first.
+never sees the `helm_release.kube_agents` values, but the composition passes
+it the same registry through its own image overrides
+(`local.cert_manager_mirror_values`), so its five images
+(`cert-manager-controller`, `-cainjector`, `-webhook`, `-acmesolver`,
+`-startupapicheck`) are pulled as `<prefix>/<name>:<tag>` — the layout
+`make mirror-images` writes from `images.json`, which carries all five
+entries. `image_pull_secrets` does **not** reach it, so a mirror that needs
+credentials means installing cert-manager yourself (below). Also not covered
+is the chart itself: it is fetched over the network from
+`https://charts.jetstack.io`, which an air-gapped runner cannot
+reach at all. On such a runner, set `enable_cert_manager = false` and install
+cert-manager yourself from the mirror before applying. `enable_webhooks`
+needs cert-manager present either way; the composition's `depends_on` only
+orders the release it manages, so with `enable_cert_manager = false` it is on
+you to have cert-manager serving first.
 
 ### IAM roles (`permission_set` and `project_roles`)
 
-`permission_set` names one of the bundles
-[`k8s-operator/scripts/provision_04_gcp_iam.sh`](../../../k8s-operator/scripts/provision_04_gcp_iam.sh)
-grants, using the same vocabulary as the scripts' `PLATFORM_AGENT_PERMISSION_SET`:
+`permission_set` names one of the agent's GCP IAM role bundles (the same
+vocabulary the installer's `--permission-set` flag uses):
 
 | `permission_set`      | Roles granted                                           |
 | --------------------- | ------------------------------------------------------- |
@@ -146,8 +311,8 @@ grants, using the same vocabulary as the scripts' `PLATFORM_AGENT_PERMISSION_SET
 | `gke-admin`           | `local.gke_admin_roles` in [`main.tf`](main.tf)         |
 | `custom`              | whatever `project_roles` lists — setting it is required |
 
-Both lists are copied verbatim from the script and are the values the parity
-check compares; read them there rather than from this page.
+Both lists live in [`main.tf`](main.tf); read them there rather than from
+this page.
 
 `project_roles` still wins when set, whatever `permission_set` says, so an
 existing configuration keeps the roles it had. `project_roles = []` grants
@@ -158,11 +323,10 @@ choice.
 
 ### Backups
 
-`enable_backup_agent` (default `true`) turns on the Backup for GKE addon,
-matching the cluster `provision_01_gcp_cluster.sh` creates. It costs nothing on
-its own. `enable_gke_backup_plan = true` then adds the scheduled plan that
-`provision_12_gke_backup_plan.sh` creates — opt-in in both paths, because
-backups are billed per backed-up pod and per GB of snapshot storage.
+`enable_backup_agent` (default `true`) turns on the Backup for GKE addon. It
+costs nothing on its own. `enable_gke_backup_plan = true` then adds the
+scheduled plan — opt-in, because backups are billed per backed-up pod and per
+GB of snapshot storage.
 
 Backups include Kubernetes Secrets and persistent volume data, so the agent's
 credentials are inside every snapshot: restrict backup/restore IAM to
@@ -175,7 +339,7 @@ setting `enable_gke_backup_plan = false` again, and changing
 `backup_encryption_key` — fails on that resource until the backups are purged.
 `make tf-destroy` purges them for you; the
 [module README](../../modules/gke-backup-plan/README.md#teardown-is-not-symmetric)
-has the commands for the other two cases, which no teardown script covers.
+has the commands for the other two cases, which nothing automates.
 
 ### cert-manager
 
@@ -183,24 +347,24 @@ The operator's admission webhooks — defaulting, validation, and the
 delete-protection tripwire on the `PlatformAgent` CR — need a serving
 certificate, and cert-manager is what issues it. `enable_cert_manager`
 (default `true`) installs it as its own `helm_release` at
-`cert_manager_version`, the version `provision_03_gcp_gke_operator.sh` applies;
+`cert_manager_version`;
 `enable_webhooks` (default `true`) then turns the webhooks on in the chart.
 
-Three differences from the script path are worth knowing:
+Three behaviours are worth knowing:
 
-- **This is not idempotent against an existing install.** `provision_03` skips
-  cert-manager when a `cert-manager-webhook` Deployment is already available;
-  Terraform does not look, and the apply fails on the CRDs that are already
-  there. Set `enable_cert_manager = false` on such a cluster — the webhooks
-  keep working, they just use the cert-manager that is already installed.
+- **This is not idempotent against an existing install.** install.sh probes an
+  existing cluster for a `cert-manager` Deployment in the `cert-manager`
+  namespace and turns this off when it finds one; a hand-written tfvars does
+  not get that probe, and the apply fails on the CRDs that are already there.
+  Set `enable_cert_manager = false` on such a cluster — the webhooks keep
+  working, they just use the cert-manager that is already installed.
 - **Destroying takes the CRDs with it**, and therefore every `Certificate`,
   `Issuer`, and `ClusterIssuer` in the cluster — not only the ones this
   composition created. On any cluster that shares cert-manager with another
   workload, install it separately and set `enable_cert_manager = false`.
-- **Leader election moves rather than switching off.** The script patches
-  `--leader-elect=false` onto the Autopilot deployments because cert-manager's
-  leases default to `kube-system`, which Autopilot restricts. This sets
-  `global.leaderElection.namespace = "cert-manager"`, which clears the same
+- **Leader election moves rather than switching off.** cert-manager's leases
+  default to `kube-system`, which Autopilot restricts. This sets
+  `global.leaderElection.namespace = "cert-manager"`, which clears the
   restriction without giving up the lock.
 
 The chart's `failurePolicy` stays at its default of `Ignore` here. Helm applies
@@ -233,11 +397,11 @@ Set `github_repo` to wire the agent's GitOps target repository
 
 `enable_slack = true` writes `slack_bot_token` / `slack_app_token` into the
 credentials Secret and turns on the CR's `slack` section, the same pair
-`provision_06_slack.sh` collects. Slack needs no GCP resources, so this is
+install.sh collects. Slack needs no GCP resources, so this is
 purely configuration — the Slack app itself is a manual step (below).
 
 **Manual steps that no IaC can perform** — canonical walkthrough:
-[INSTALL.md § Enable Google Chat & Slack Integrations](../../../INSTALL.md#step-5-enable-google-chat--slack-integrations-manual-required-steps):
+[INSTALL.md § Enable Google Chat & Slack Integrations](../../../INSTALL.md#step-4-enable-google-chat--slack-integrations-manual-required-steps):
 
 - **Google Chat:** register the Chat app on the Chat API configuration page —
   select Cloud Pub/Sub and enter the created topic (the `chat_topic_name`
@@ -270,9 +434,9 @@ the [chart README](../../../charts/kube-agents/README.md).
 
 ## Teardown and re-apply
 
-Use Terraform for teardown; do not mix this install path with the shell provisioner's
-`teardown_*.sh` scripts. In particular, `teardown_08_deploy_platform_agent.sh` removes the
-Terraform-managed `kube-agents-host` label out of band and causes plan drift.
+Use `lifecycle.sh destroy` for teardown; anything that mutates the
+Terraform-managed resources out of band (for instance removing the
+`kube-agents-host` label by hand) causes plan drift the next apply reverts.
 
 Four things in this stack are not symmetric — applying them is not the inverse
 of destroying them — and each one breaks a plain `terraform destroy`, or the

@@ -30,9 +30,24 @@ import (
 
 // SensitiveEnvVars defines environment variables that are sensitive and cannot be
 // overridden by user Deployment specs or injected into the credential proxy.
+//
+// Membership does two things, and both are needed: the validating webhook
+// rejects a spec.deployment.env entry with one of these names, and
+// mergeCredentialProxyEnv drops it. The webhook alone is not enough because
+// the chart's default failurePolicy is Ignore, so an unreachable webhook
+// admits the object with validation skipped; the drop is what actually holds,
+// and the rejection is what tells the operator why.
 var SensitiveEnvVars = map[string]struct{}{
 	"API_SERVER_KEY": {},
-	"HERMES_HOME":    {},
+	// Not a secret, unlike its neighbours: this is the read-only gate, and
+	// setting it to "false" disables every refusal the credential proxy makes
+	// for every command, agent and cluster in the Pod. It was already dropped
+	// silently on the way to the sidecar, which left an operator patching the
+	// CR, seeing it accepted, and getting no behaviour change and no
+	// explanation. Naming it here turns that into a field.Forbidden on
+	// spec.deployment.env[i].name.
+	"CREDENTIAL_PROXY_ENFORCE_READ_ONLY": {},
+	"HERMES_HOME":                        {},
 }
 
 type HermesSpec struct {
@@ -51,14 +66,18 @@ type HermesSpec struct {
 	// +optional
 	AgentHome string `json:"agentHome,omitempty"`
 
-	// ApiServerSecretRef securely references a Secret containing the API_SERVER_KEY.
+	// ApiServerSecretRef references the Secret key holding API_SERVER_EXTERNAL_KEY,
+	// the credential outside callers present to the credential-proxy sidecar. It
+	// does not set API_SERVER_KEY: the value the Hermes API server itself validates
+	// is the non-secret loopback sentinel `cluster-internal-trusted`, a compile-time
+	// constant the sidecar swaps in once it has authenticated the caller.
 	// +optional
 	ApiServerSecretRef *corev1.SecretKeySelector `json:"apiServerSecretRef,omitempty"`
 
 	// SessionKVApiKeySecretRef references the Secret key holding the bearer
 	// token for the pod-local Session KV server on port 8699. Distinct from
-	// ApiServerSecretRef: that path uses the non-secret loopback sentinel
-	// `cluster-internal-trusted`, which would authenticate nothing here.
+	// API_SERVER_KEY, which is that loopback sentinel and would authenticate
+	// nothing here.
 	// +optional
 	SessionKVApiKeySecretRef *corev1.SecretKeySelector `json:"sessionKVApiKeySecretRef,omitempty"`
 
@@ -108,6 +127,34 @@ type HarnessSpec struct {
 	// baked into the agent image.
 	// +optional
 	Tuning *TuningSpec `json:"tuning,omitempty"`
+
+	// Experimental holds opt-in behaviour that is not supported and may change
+	// or disappear in any release.
+	// +optional
+	Experimental *ExperimentalSpec `json:"experimental,omitempty"`
+}
+
+// ExperimentalSpec gathers the unsupported switches. Nothing here carries a
+// compatibility promise: a field may change meaning, change default, or be
+// removed outright between releases, and an install that depends on one is
+// expected to be re-checked at every upgrade. Fields belong here while the
+// question they answer is still open — once the answer is settled the switch
+// either graduates into a supported spec block or goes away.
+type ExperimentalSpec struct {
+	// PlatformFrontDoor makes the Platform Agent the profile the Hermes gateway
+	// runs as, so chat messages are handled by it directly instead of arriving
+	// at the Chat Agent, which delegates through the router and the kanban board.
+	//
+	// The trade is the Chat Agent's whole reason for existing: its lockdown (a
+	// router with three toolsets) is what keeps an inbound message from reaching
+	// the full Platform Agent tool surface before a card and a worker turn have
+	// framed it. With this on, an inbound message reaches that surface directly.
+	//
+	// One gateway means one profile, so this is not additive: while it is on, the
+	// Chat Agent persona sees no chat at all.
+	// +kubebuilder:default=false
+	// +optional
+	PlatformFrontDoor *bool `json:"platformFrontDoor,omitempty"`
 }
 
 // EventWatcherSpec configures the k8s-event-watcher, which runs as a peer service
@@ -272,7 +319,7 @@ type DeploymentSpec struct {
 
 	// Tag specifies the container image tag. It applies only when Image is set
 	// without a tag or digest, and falls back to "latest" there. When Image is
-	// omitted entirely, the operator's build-injected default version applies
+	// omitted entirely, the operator's default platform-agent version applies
 	// instead, so no "latest" default is persisted on the CR.
 	// +optional
 	Tag *string `json:"tag,omitempty"`
@@ -282,6 +329,37 @@ type DeploymentSpec struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +optional
 	ImagePullPolicy *corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// Note, deliberately not a doc comment — the blank line below keeps it out of
+	// the CRD description that `kubectl explain` prints. listType is atomic rather
+	// than the map Env and Sidecars use below: a list-map key has to be a required
+	// field, and corev1.LocalObjectReference's Name is optional, so a map marker
+	// here yields a CRD the API server rejects. That same optionality is why the
+	// webhook checks each name is non-empty and distinct, and why the controller
+	// normalizes the list before building the pod: nothing below either layer
+	// does. An empty name reaches the kubelet, which pulls anonymously; a repeat
+	// makes every apply of the generated Deployment fail, PodSpec's own
+	// imagePullSecrets being a server-side-apply list-map keyed on name.
+
+	// ImagePullSecrets references Secrets in the agent's namespace holding
+	// registry credentials, for installs whose mirror needs authenticating to
+	// (Harbor, Artifactory) rather than being readable with the nodes' own
+	// credentials. The Secrets are referenced, not created: each must already
+	// exist in the agent's namespace when the pod is scheduled.
+	//
+	// One pod means one pull identity — Kubernetes has no per-container split —
+	// so this covers every image in the pod: the agent, the credential-proxy and
+	// fluent-bit sidecars, any initContainers or sidecars set alongside, and the
+	// OCI image volumes AgentPlugins mount.
+	//
+	// Setting this REPLACES the operator's IMAGE_PULL_SECRETS default rather than
+	// adding to it, on the same terms as Image against PLATFORM_AGENT_IMAGE. A CR
+	// that names its own registry identity is stating it completely, and a
+	// silently merged fleet default would hand the kubelet credentials this agent
+	// never asked for.
+	// +listType=atomic
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	// BrowserArgs specifies custom command-line arguments to pass to the agent's browser (e.g. --no-sandbox).
 	// +optional
@@ -492,12 +570,16 @@ type StorageStatus struct {
 // found nothing and fell back to it", so the source is reported alongside it — that
 // distinction is the whole diagnostic question when spans do not arrive.
 type TelemetryStatus struct {
-	// OTLPEndpoint is the collector endpoint written into the agent pod.
+	// OTLPEndpoint is the collector endpoint written into the agent pod. Empty when the
+	// source is None, which is the one case where the pod is given no endpoint at all.
 	// +optional
 	OTLPEndpoint string `json:"otlpEndpoint,omitempty"`
 
 	// OTLPEndpointSource is how the endpoint was chosen: DeploymentEnv, Spec,
-	// OperatorEnv, Discovered, or Default.
+	// OperatorEnv, Discovered, Default, or None. None means discovery completed and
+	// this cluster has no collector, so the agent runs with OTEL_SDK_DISABLED=true and
+	// exports nothing; Default still means the GKE managed collector, and is what an
+	// install gets when discovery is switched off or could not complete.
 	// +optional
 	OTLPEndpointSource string `json:"otlpEndpointSource,omitempty"`
 }
