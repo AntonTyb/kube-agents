@@ -498,41 +498,18 @@ config_is_pristine_upstream_example() {
     [ -f "$1" ] && [ -f "$2" ] && cmp -s "$2" "$1"
 }
 
-# Fresh volume: lay the image's copy down before anything can read it, so neither the
-# gateway nor the dashboard sidecar comes up against a missing config, falls back to
-# Hermes' built-in defaults, and saves those over the top.
-if [ ! -f "$TARGET_DIR/config.yaml" ] && [ -f "$CHAT_TEMPLATE_CONFIG" ]; then
-    cp "$CHAT_TEMPLATE_CONFIG" "$TARGET_DIR/config.yaml" \
-        || echo "WARN: could not seed $TARGET_DIR/config.yaml from $CHAT_TEMPLATE_CONFIG" >&2
-elif [ -f "$CHAT_TEMPLATE_CONFIG" ] \
-    && config_is_pristine_upstream_example \
-        "$TARGET_DIR/config.yaml" "$INSTALL_DIR/cli-config.yaml.example"; then
-    # Fresh volume, stage2 having got here first. Overwrite rather than fill: nothing in
-    # that file is a runtime edit — no agent has run yet — so there is nothing to
-    # preserve, and filling into it is precisely what leaves the upstream defaults live.
-    echo "[ENTRYPOINT] config.yaml is upstream's untouched cli-config.yaml.example (fresh volume); replacing it with the image template." >&2
-    cp "$CHAT_TEMPLATE_CONFIG" "$TARGET_DIR/config.yaml" \
-        || echo "WARN: could not seed $TARGET_DIR/config.yaml from $CHAT_TEMPLATE_CONFIG" >&2
-elif [ -f "$CHAT_TEMPLATE_CONFIG" ]; then
-    # Existing volume: FILL what the file does not say, and change nothing it does.
-    #
-    # Two things hollow out the live file, and neither is a bug in the agent. Hermes'
-    # save_config strips every leaf the managed scope holds before writing (config.py,
-    # `_strip_dotted_keys(config, managed_keys)`), so one `/sethome` turns a pinned
-    # `model:` block into `model: {}` on disk. And a release that STOPS pinning a leaf —
-    # this one narrows the managed render to the model, the chat platforms and the cron
-    # approval mode — hands that leaf back to a file the previous release already emptied
-    # of it. The pod then runs on Hermes' built-in defaults for everything the image
-    # template was supposed to supply, with green health checks and no error anywhere.
-    #
-    # Fill-only, so it cannot become the thing it is repairing: a key the file already
-    # holds is left exactly as the agent last wrote it, including one the agent set to
-    # an empty string or an empty list on purpose. Only ABSENT keys are added, at any
-    # depth, which is why `model: {}` is repaired while `model: {default: other}` is not
-    # touched. That is what keeps a `/sethome` home channel, the monitoring install id
-    # and saved slash-command preferences across restarts — the property the deleted
-    # three-way merge kept getting wrong in the other direction.
-    "$INSTALL_DIR/.venv/bin/python3" - "$CHAT_TEMPLATE_CONFIG" "$TARGET_DIR/config.yaml" <<'PYEOF' || echo "WARN: could not backfill $TARGET_DIR/config.yaml from $CHAT_TEMPLATE_CONFIG; the agent may be running on Hermes defaults for keys the image template owns" >&2
+# Fill the keys an image template declares and the live config.yaml does not, at any
+# depth, and change nothing the file already says. $1 = the template, $2 = the live file.
+#
+# A function because two profiles need it: the default profile immediately below, and —
+# when the front-door flag makes the gateway write to it — the platform profile at step
+# 2.6b. One copy so the two cannot drift, and one heredoc so the tests can go on lifting
+# this program out by its marker and running it against real files.
+#
+# The caller reports its own failure: which file the fill was for is the whole of what a
+# reader needs from the warning, and only the caller knows.
+backfill_config_from_template() {
+    "$INSTALL_DIR/.venv/bin/python3" - "$1" "$2" <<'PYEOF'
 import os
 import sys
 
@@ -576,6 +553,44 @@ if added:
     os.replace(tmp_path, live_path)
     print(f"[ENTRYPOINT] config backfill: restored {len(added)} key(s) the live file did not hold: {', '.join(added)}")
 PYEOF
+}
+
+# Fresh volume: lay the image's copy down before anything can read it, so neither the
+# gateway nor the dashboard sidecar comes up against a missing config, falls back to
+# Hermes' built-in defaults, and saves those over the top.
+if [ ! -f "$TARGET_DIR/config.yaml" ] && [ -f "$CHAT_TEMPLATE_CONFIG" ]; then
+    cp "$CHAT_TEMPLATE_CONFIG" "$TARGET_DIR/config.yaml" \
+        || echo "WARN: could not seed $TARGET_DIR/config.yaml from $CHAT_TEMPLATE_CONFIG" >&2
+elif [ -f "$CHAT_TEMPLATE_CONFIG" ] \
+    && config_is_pristine_upstream_example \
+        "$TARGET_DIR/config.yaml" "$INSTALL_DIR/cli-config.yaml.example"; then
+    # Fresh volume, stage2 having got here first. Overwrite rather than fill: nothing in
+    # that file is a runtime edit — no agent has run yet — so there is nothing to
+    # preserve, and filling into it is precisely what leaves the upstream defaults live.
+    echo "[ENTRYPOINT] config.yaml is upstream's untouched cli-config.yaml.example (fresh volume); replacing it with the image template." >&2
+    cp "$CHAT_TEMPLATE_CONFIG" "$TARGET_DIR/config.yaml" \
+        || echo "WARN: could not seed $TARGET_DIR/config.yaml from $CHAT_TEMPLATE_CONFIG" >&2
+elif [ -f "$CHAT_TEMPLATE_CONFIG" ]; then
+    # Existing volume: FILL what the file does not say, and change nothing it does.
+    #
+    # Two things hollow out the live file, and neither is a bug in the agent. Hermes'
+    # save_config strips every leaf the managed scope holds before writing (config.py,
+    # `_strip_dotted_keys(config, managed_keys)`), so one `/sethome` turns a pinned
+    # `model:` block into `model: {}` on disk. And a release that STOPS pinning a leaf —
+    # this one narrows the managed render to the model, the chat platforms and the cron
+    # approval mode — hands that leaf back to a file the previous release already emptied
+    # of it. The pod then runs on Hermes' built-in defaults for everything the image
+    # template was supposed to supply, with green health checks and no error anywhere.
+    #
+    # Fill-only, so it cannot become the thing it is repairing: a key the file already
+    # holds is left exactly as the agent last wrote it, including one the agent set to
+    # an empty string or an empty list on purpose. Only ABSENT keys are added, at any
+    # depth, which is why `model: {}` is repaired while `model: {default: other}` is not
+    # touched. That is what keeps a `/sethome` home channel, the monitoring install id
+    # and saved slash-command preferences across restarts — the property the deleted
+    # three-way merge kept getting wrong in the other direction.
+    backfill_config_from_template "$CHAT_TEMPLATE_CONFIG" "$TARGET_DIR/config.yaml" \
+        || echo "WARN: could not backfill $TARGET_DIR/config.yaml from $CHAT_TEMPLATE_CONFIG; the agent may be running on Hermes defaults for keys the image template owns" >&2
 fi
 
 # Managed scope fails OPEN by design: a missing directory, or a config.yaml that does not
@@ -619,6 +634,74 @@ for expected in ("model.default", "model.base_url", "model.api_mode"):
 print(f"managed scope: {len(keys)} pinned config keys from {managed_scope.get_managed_dir()}")
 '; then
     echo "WARN: $MANAGED_DIR/config.yaml did not load as a managed scope (unparseable, or missing the model keys) — hermes fails open, so the agent is running UNPINNED" >&2
+fi
+
+# The same assertion for the ONE key in the managed .env that is not about chat, and the
+# only one whose absence takes the whole API surface down rather than degrading a feature.
+#
+# What it is guarding against, and why it needs guarding at all (issue #786). Hermes'
+# Docker stage2 hook — step 1 above, upstream's, in every container — generates a strong
+# random API_SERVER_KEY into $TARGET_DIR/.env whenever that file does not already carry
+# one, and load_hermes_dotenv applies that file with override=True. Before the operator
+# pinned this key, the gateway therefore authenticated against a value invented at boot
+# inside the pod that nothing else knew: `os.environ["API_SERVER_KEY"]`, the Secret, the
+# credential proxy's AGENT_API_UPSTREAM_KEY and the container's own startup probe all
+# presented the sentinel and all got 401. The managed .env is applied last of everything,
+# so pinning API_SERVER_KEY there is what makes the whole pod agree — but managed scope
+# fails open, so an absent or unmounted pin restores the broken state silently.
+#
+# It is checked HERE, before `exec`, rather than left to the container's startup probe.
+# The probe (agentAPIProbe in platformagent_manifests.go) does catch the failure — it
+# curls an authenticated route with $API_SERVER_KEY and the pod never goes Ready — but a
+# probe reports THAT something is wrong, not WHICH of the several things it could be. One
+# line naming the missing pin turns a CrashLoopBackOff into a diagnosis.
+#
+# Reads the file with grep rather than asking Hermes: this is the operator's rendered
+# text, and the point is to check what was MOUNTED, not what some library would resolve.
+# Comparing values, not just presence, because the two renders sit in different files in
+# different languages and agreeing is the entire property.
+#
+# Report, never exit, for the reason the block above gives.
+#
+# A function taking its inputs as arguments, so the tests can run the shipped definition
+# rather than a copy of it (tests/test_docker_entrypoint.py).
+warn_unless_api_key_is_pinned() {
+    _wuakip_managed_env="$1"
+    _wuakip_key="$2"
+
+    if [ ! -f "$_wuakip_managed_env" ]; then
+        echo "WARN: no managed $_wuakip_managed_env — API_SERVER_KEY is NOT pinned, so Hermes' stage2 hook may have generated a different key into $TARGET_DIR/.env and every authenticated call to this agent's API will 401 (issue #786)" >&2
+        return 0
+    fi
+    # -x and -F together: a line that merely CONTAINS the value is a different pin, and a
+    # key whose value happens to look like a pattern is still just a string.
+    if grep -qxF "API_SERVER_KEY=$_wuakip_key" "$_wuakip_managed_env"; then
+        return 0
+    fi
+    # The two remaining shapes are both broken, but they are NOT broken the same way, and
+    # the difference is which file an operator should go and read. Say which one wins.
+    if grep -q '^API_SERVER_KEY=' "$_wuakip_managed_env"; then
+        # The managed scope is applied last with override=True, so a file that pins some
+        # OTHER value is the value the gateway will accept — and it will then 401 this
+        # container's env, which is what the sidecar, the startup probe and every in-pod
+        # caller present.
+        echo "WARN: $_wuakip_managed_env pins API_SERVER_KEY to a different value than this container's env — the managed file is applied last, so the gateway will accept ITS key and 401 the credential proxy, the startup probe and every in-pod caller (issue #786). Re-render the operator's config ConfigMap; renderManagedEnv must emit the same value as the container env." >&2
+    else
+        # No pin for this key at all: the managed file overrides nothing, so the winner is
+        # $TARGET_DIR/.env — where Hermes' stage2 hook generates a random key that nothing
+        # outside the gateway process knows. This is the pre-fix shape exactly, and it is
+        # what a stale (chat-only) ConfigMap still renders.
+        echo "WARN: $_wuakip_managed_env does not pin API_SERVER_KEY — with no managed pin the PVC's $TARGET_DIR/.env wins, and Hermes' stage2 hook generates a random key there that the credential proxy, the startup probe and every in-pod caller will 401 against (issue #786). Re-render the operator's config ConfigMap; renderManagedEnv must emit API_SERVER_KEY." >&2
+    fi
+    return 0
+}
+
+# Gated on the key being SET as well as on the managed dir, and not only because there is
+# nothing to compare otherwise: an unset API_SERVER_KEY is Hermes' own supported shape —
+# stage2 generates one and the pod is internally consistent — so it is the operator's
+# arrangement, half-applied, that this is looking for.
+if [ -n "$MANAGED_DIR" ] && [ -n "${API_SERVER_KEY:-}" ]; then
+    warn_unless_api_key_is_pinned "$MANAGED_DIR/.env" "$API_SERVER_KEY"
 fi
 
 # The image's own copy of the scaffolder, never the volume's. Step 2 seeds
@@ -784,6 +867,17 @@ fi
 #     one exception, and it runs after this on purpose. Without syncing it, an
 #     image that changes the platform's toolsets or plugins has no effect on any
 #     existing deployment.
+#
+#     That last premise stops holding when HERMES_GATEWAY_PROFILE names this
+#     profile. The gateway is then homed here, so this is the file `/sethome`
+#     persists the home channel into and the monitoring policy mints
+#     `monitoring.install_id` in — exactly the runtime state step 2d exists to
+#     protect on the default profile, and a force-sync discards it on every
+#     restart. So config.yaml leaves the --items list, and step 2.6b below
+#     back-fills it the way step 2d back-fills the default profile's, with the
+#     same fill-only rule and the same trade: keys the image ADDS still arrive,
+#     keys the file already holds stay as the agent last wrote them. Everything
+#     else here force-syncs either way.
 #   - A cluster config.yaml is identity-stamped at scaffold time with that
 #     cluster's `cluster_identity` block (project/cluster/location), so it is
 #     runtime state. Overwriting it from the template would strip the record
@@ -850,9 +944,9 @@ fi
 # dressing one in a persona and a config makes it indistinguishable from a real profile at
 # the next start — which is how a half-built profile used to become permanent.
 #
-# `--cron-retire` finishes a retirement the two-release rule started. The five
-# ids named here shipped `enabled: false` for several releases and are now gone
-# from the image's roster; none could produce a finding on a stock install
+# `--cron-retire` finishes a retirement the two-release rule started. The first
+# five ids named here shipped `enabled: false` for several releases and are now
+# gone from the image's roster; none could produce a finding on a stock install
 # anyway (see the retired-watchdog note in
 # docs/site/src/content/docs/concepts/autonomous-watchdogs.md). Dropping the
 # shipped entries alone would stop there: merge_cron_store keeps every volume
@@ -860,16 +954,51 @@ fi
 # no image could ever reach again, and `cronjob(action='list')` would go on
 # showing them. Retiring the ids is what makes the deletion reach the volume.
 #
+# `github-issue-resolver` is here for the other reason the README gives: an id
+# that has to stop firing in ONE release, not two. It was a `*/30` prompt job,
+# so every tick it left behind is a full agent turn spent learning there was no
+# work; `github-repo-watcher` replaces it with a `no_agent` gate that files a
+# card only when the poll finds something. Leaving the old id enabled on the
+# volume for a release would mean both run — the model woken 48 times a day for
+# nothing, alongside the job whose entire purpose is to stop that. It is safe to
+# cut in one step because nothing is lost when it stops: the replacement polls
+# the same repository through the same `resolver.py poll`, three times as often.
+#
 # This list shrinks to nothing once no live volume can still be carrying the
 # entries. Until then, removing a name from it silently strands that id.
+
+# Whether the platform profile is the one the GATEWAY runs as, rather than one only
+# kanban workers and cron jobs ever home to. The operator sets HERMES_GATEWAY_PROFILE
+# from spec.harness.experimental.platformFrontDoor; two steps below turn on the answer,
+# and they have to agree, so they ask it here rather than each testing the variable.
+# Unset — every install that has not opted in — both of them are a no-op.
+platform_is_front_door() {
+    [ "${HERMES_GATEWAY_PROFILE:-}" = "platform" ]
+}
+
+# The image-owned entries step 2.6 force-syncs into the platform profile.
+#
+# config.yaml is on the list only while the image owns it outright. At the front door
+# the running agent writes to it — `/sethome` persists the home channel there and the
+# monitoring policy mints monitoring.install_id — so a force-sync discards both on
+# every restart. It comes off the list and step 2.6b back-fills the file instead, the
+# way step 2d does for the default profile. Nothing else on the list is written at
+# runtime, so nothing else moves either way; the one entry is derived rather than a
+# second list so the two answers cannot drift apart.
+platform_sync_items() {
+    _items="SOUL.md AGENTS.md CAPABILITIES.md cron skills governance hindsight"
+    platform_is_front_door || _items="config.yaml $_items"
+    echo "$_items"
+}
+
 if [ -f "$TARGET_DIR/profiles/platform/profile.yaml" ] && [ -d "$PLATFORM_TEMPLATE" ] && [ -f "$SCAFFOLD" ]; then
     HOME=/tmp HERMES_HOME="$TARGET_DIR" "$INSTALL_DIR/.venv/bin/python3" \
         "$SCAFFOLD" \
         --name platform \
         --template "$PLATFORM_TEMPLATE" \
         --plugins /opt/defaults/plugins \
-        --items "config.yaml SOUL.md AGENTS.md CAPABILITIES.md cron skills governance hindsight" \
-        --cron-retire "blueprint-sync policy-propagation global-capacity-orchestrator standardization-validator lifecycle-deprecation-manager" \
+        --items "$(platform_sync_items)" \
+        --cron-retire "blueprint-sync policy-propagation global-capacity-orchestrator standardization-validator lifecycle-deprecation-manager github-issue-resolver" \
         >/dev/null || echo "WARN: platform profile force-sync failed; continuing" >&2
 fi
 
@@ -1040,6 +1169,55 @@ if [ -d "$CLUSTER_TEMPLATE" ]; then
                 || echo "WARN: failed to strip memory.provider from $d/config.yaml; this cluster agent keeps an inert provider" >&2
         fi
     done
+fi
+
+# 2.6b Back-fill the platform profile's config.yaml when it is the front door.
+#
+# Step 2d's problem, arriving at a second profile. Step 2.6 just left this file alone
+# because the gateway now writes to it, and an untouched file tracks the image for as
+# long as the volume lives: an image that adds an mcp server, a toolset or a plugin to
+# agents/platform/config.yaml would reach a fresh volume and no existing one. So the
+# platform profile takes the same deal the default profile takes — fill what the file
+# does not say, change nothing it does. Keys the image ADDS arrive; keys the file
+# already holds stay as the agent last wrote them, which is what makes `/sethome` and
+# monitoring.install_id survive the restart.
+#
+# The operator's own settings do NOT come through here. profile-platform.overlay.yaml
+# is merged by step 2.7 like every other profile's, and the managed scope pins the
+# immutable leaves at load time — the same two routes the default profile takes.
+#
+# Runs after step 2.6, which is what leaves config.yaml alone for it to read, and
+# before step 2.7, so the overlay is merged into the filled file rather than a fill
+# landing on top of the overlay.
+#
+# PRIMARY ONLY, exactly as step 2d is: nothing here is per-container, and a second
+# writer racing the first over one file on a shared PVC is what step 1.5 exists to stop.
+#
+# Flag off, this step does not run and step 2.6 force-syncs config.yaml as it always
+# has, which subsumes any fill.
+#
+# Both of step 2d's arms, for the same reason it has two. Once config.yaml is off the
+# force-sync, this step is the ONLY thing left that can write it: step 2.5 is gated on
+# the profile being absent, step 2.6 no longer carries the name in --items, and step
+# 2.7 skips a profile directory whose config.yaml is missing. So a profile registered
+# without one — profile_scaffold writes profile.yaml before it copies the template, and
+# the caller above swallows a failure between the two with a WARN — would stay that way
+# for the life of the volume, on the profile receiving chat, with an absent
+# platform_toolsets resolving to the full core bundle rather than failing closed. Flag
+# off the next boot healed it; flag on nothing does. Seed from the template when the
+# file is absent, fill it when it is not.
+if platform_is_front_door && [ "$IS_BOOTSTRAP_PRIMARY" = "1" ] \
+    && [ -f "$PLATFORM_TEMPLATE/config.yaml" ] \
+    && [ -d "$TARGET_DIR/profiles/platform" ]; then
+    if [ -f "$TARGET_DIR/profiles/platform/config.yaml" ]; then
+        backfill_config_from_template \
+            "$PLATFORM_TEMPLATE/config.yaml" "$TARGET_DIR/profiles/platform/config.yaml" \
+            || echo "WARN: could not backfill profiles/platform/config.yaml from $PLATFORM_TEMPLATE/config.yaml; the front door may be missing keys the image template owns" >&2
+    else
+        echo "[ENTRYPOINT] profiles/platform/config.yaml is missing; seeding it from the image template." >&2
+        cp "$PLATFORM_TEMPLATE/config.yaml" "$TARGET_DIR/profiles/platform/config.yaml" \
+            || echo "WARN: could not seed profiles/platform/config.yaml from $PLATFORM_TEMPLATE/config.yaml; the front door has no config of its own" >&2
+    fi
 fi
 
 # 2.65 Link profile-targeted plugin image volumes into their profile homes.
@@ -1237,10 +1415,11 @@ mkdir -p "$TARGET_DIR/logs"
 if [ "$IS_BOOTSTRAP_PRIMARY" = "1" ] && [ -f "$TARGET_DIR/scripts/session_kv_server.py" ]; then
     echo "Starting Session KV server on port 8699..."
     # Bound to loopback, not 0.0.0.0. Every caller — this container's MCP
-    # server and incident_context plugin, and the event watcher in the
-    # credential-proxy container — reaches it over the shared pod network
-    # namespace, so nothing needs it published on the pod IP. It carries chat
-    # identifiers, so the narrower bind is the correct default.
+    # server, incident_context plugin, and kanban notifier (the gateway this
+    # script execs below), and the event watcher in the credential-proxy
+    # container — reaches it over the shared pod network namespace, so nothing
+    # needs it published on the pod IP. It carries chat identifiers, so the
+    # narrower bind is the correct default.
     PYTHONPATH="$TARGET_DIR/scripts" "$INSTALL_DIR/.venv/bin/python3" -m uvicorn scripts.session_kv_server:app --app-dir "$TARGET_DIR" --host 127.0.0.1 --port 8699 >"$TARGET_DIR/logs/session_kv_server.log" 2>&1 &
 fi
 

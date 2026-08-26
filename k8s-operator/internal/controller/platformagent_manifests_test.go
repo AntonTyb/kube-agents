@@ -19,6 +19,7 @@ package controller
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -71,6 +72,23 @@ func containerByName(t *testing.T, containers []corev1.Container, name string) c
 	}
 	t.Fatalf("no container named %q; got %v", name, got)
 	return corev1.Container{}
+}
+
+// findContainer looks a container up by name across both lists.
+//
+// These assertions used to index by position (Containers[4]). The credential
+// proxy became a native sidecar on 2026-08-14 and moved from Containers into
+// InitContainers, which broke every positional reference at once. Name lookup
+// does not care which list a container lives in, or what order it appears in.
+func findContainer(spec corev1.PodSpec, name string) (corev1.Container, bool) {
+	for _, list := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for _, c := range list {
+			if c.Name == name {
+				return c, true
+			}
+		}
+	}
+	return corev1.Container{}, false
 }
 
 func TestBuildConfigMap(t *testing.T) {
@@ -405,8 +423,9 @@ func TestBuildDeployment(t *testing.T) {
 		t.Errorf("expected sandbox service account token automount to be disabled")
 	}
 
-	if len(dep.Spec.Template.Spec.Containers) != 5 {
-		t.Errorf("expected 5 containers, got %d", len(dep.Spec.Template.Spec.Containers))
+	// 4, not 5: the credential proxy is a native sidecar and lives in InitContainers.
+	if len(dep.Spec.Template.Spec.Containers) != 4 {
+		t.Errorf("expected 4 containers, got %d", len(dep.Spec.Template.Spec.Containers))
 	} else {
 		dashboardC := containerByName(t, dep.Spec.Template.Spec.Containers, "platform-agent-dashboard")
 		if dashboardC.Name != "platform-agent-dashboard" {
@@ -424,17 +443,44 @@ func TestBuildDeployment(t *testing.T) {
 		if dashboardC.ImagePullPolicy != corev1.PullAlways {
 			t.Errorf("expected dashboard container image pull policy Always, got %s", dashboardC.ImagePullPolicy)
 		}
-		if len(dashboardC.VolumeMounts) != 4 {
-			t.Errorf("expected 4 volume mounts on dashboard container (3 base + 1 extra), got %d", len(dashboardC.VolumeMounts))
+		if len(dashboardC.VolumeMounts) != 5 {
+			t.Errorf("expected 5 volume mounts on dashboard container (4 base + 1 extra), got %d", len(dashboardC.VolumeMounts))
 		}
 		if dashboardC.SecurityContext == nil || dashboardC.SecurityContext.AllowPrivilegeEscalation == nil || *dashboardC.SecurityContext.AllowPrivilegeEscalation {
 			t.Errorf("expected SecurityContext.AllowPrivilegeEscalation false on dashboard container")
+		}
+		if dashboardC.SecurityContext == nil || dashboardC.SecurityContext.ReadOnlyRootFilesystem == nil || !*dashboardC.SecurityContext.ReadOnlyRootFilesystem {
+			t.Errorf("expected SecurityContext.ReadOnlyRootFilesystem true on dashboard container")
 		}
 		if dashboardC.Resources.Requests.Cpu().String() != "256m" || dashboardC.Resources.Requests.Memory().String() != "512Mi" {
 			t.Errorf("expected CPU 256m and Mem 512Mi requests on dashboard container, got %v", dashboardC.Resources.Requests)
 		}
 		if dashboardC.Resources.Limits.Cpu().String() != "1" || dashboardC.Resources.Limits.Memory().String() != "2Gi" {
 			t.Errorf("expected CPU 1 and Mem 2Gi limits on dashboard container, got %v", dashboardC.Resources.Limits)
+		}
+		// The probe has to reach the listener over loopback. `hermes dashboard`
+		// binds 127.0.0.1, so the tcpSocket probe this replaces was dialled by
+		// kubelet against the pod IP, refused every time, and left the container
+		// — and therefore the whole pod — permanently NotReady (#822). Asserting
+		// the shape is the only guard available here: nothing in this suite can
+		// open a socket against the real CLI.
+		switch probe := dashboardC.ReadinessProbe; {
+		case probe == nil:
+			t.Errorf("expected a readiness probe on the dashboard container")
+		case probe.TCPSocket != nil:
+			t.Errorf("dashboard readiness probe must not be tcpSocket: kubelet dials the pod IP and the listener is loopback-only")
+		case probe.Exec == nil || len(probe.Exec.Command) == 0:
+			t.Errorf("expected an exec readiness probe on the dashboard container, got %+v", probe.ProbeHandler)
+		default:
+			cmd := strings.Join(probe.Exec.Command, " ")
+			if !strings.Contains(cmd, "http://127.0.0.1:9119/") {
+				t.Errorf("expected the dashboard readiness probe to target http://127.0.0.1:9119/, got %q", cmd)
+			}
+			// --fail would turn an auth-gated or non-2xx root path into an
+			// unready pod; the probe only asserts that something answers.
+			if strings.Contains(cmd, "--fail") {
+				t.Errorf("dashboard readiness probe must not use curl --fail: any HTTP response proves the listener is up, got %q", cmd)
+			}
 		}
 		if len(dashboardC.Env) != 6 {
 			t.Errorf("expected 6 env vars on dashboard container, got %d", len(dashboardC.Env))
@@ -475,9 +521,12 @@ func TestBuildDeployment(t *testing.T) {
 				t.Errorf("event-watcher should no longer be a standalone container")
 			}
 		}
-		proxyC := containerByName(t, dep.Spec.Template.Spec.Containers, "envoy-credential-proxy")
-		if proxyC.Name != "envoy-credential-proxy" {
-			t.Errorf("expected managed Envoy sidecar, got %s", proxyC.Name)
+		proxyC, proxyFound := findContainer(dep.Spec.Template.Spec, "envoy-credential-proxy")
+		if !proxyFound {
+			t.Fatal("expected managed Envoy sidecar in either container list")
+		}
+		if proxyC.RestartPolicy == nil || *proxyC.RestartPolicy != corev1.ContainerRestartPolicyAlways {
+			t.Errorf("credential proxy must be a native sidecar so it binds 8643 first")
 		}
 		// The watcher's loopback flags live in the entrypoint, not here — the
 		// container passes no arguments at all. Only the per-install cluster
@@ -514,8 +563,9 @@ func TestBuildDeployment(t *testing.T) {
 		}
 	}
 
-	if len(dep.Spec.Template.Spec.InitContainers) != 3 {
-		t.Errorf("expected managed cleanup plus 2 configured init containers, got %d", len(dep.Spec.Template.Spec.InitContainers))
+	// 4: managed cleanup, 2 configured, plus the credential proxy native sidecar.
+	if len(dep.Spec.Template.Spec.InitContainers) != 4 {
+		t.Errorf("expected cleanup + 2 configured + proxy sidecar, got %d", len(dep.Spec.Template.Spec.InitContainers))
 	} else {
 		cleanup := dep.Spec.Template.Spec.InitContainers[0]
 		if cleanup.Name != "sandbox-credential-cleanup" {
@@ -601,7 +651,10 @@ func TestBuildDeployment(t *testing.T) {
 	if envMap["CREDENTIAL_PROXY_URL"].Value != "http://127.0.0.1:8765" {
 		t.Errorf("expected localhost Envoy CREDENTIAL_PROXY_URL, got %s", envMap["CREDENTIAL_PROXY_URL"].Value)
 	}
-	proxyC := containerByName(t, dep.Spec.Template.Spec.Containers, "envoy-credential-proxy")
+	proxyC, found := findContainer(dep.Spec.Template.Spec, "envoy-credential-proxy")
+	if !found {
+		t.Fatalf("credential proxy container not found in either container list")
+	}
 	proxyEnv := make(map[string]corev1.EnvVar)
 	for _, env := range proxyC.Env {
 		proxyEnv[env.Name] = env
@@ -654,8 +707,12 @@ func TestBuildDeployment(t *testing.T) {
 			t.Errorf("sandbox must not mount a ServiceAccount token: %#v", mount)
 		}
 	}
+	proxyContainer, proxyFound := findContainer(dep.Spec.Template.Spec, "envoy-credential-proxy")
+	if !proxyFound {
+		t.Fatal("credential proxy container not found in either container list")
+	}
 	proxyHasTokenMount := false
-	for _, mount := range proxyC.VolumeMounts {
+	for _, mount := range proxyContainer.VolumeMounts {
 		if mount.Name == "credential-proxy-ksa-token" && mount.ReadOnly {
 			proxyHasTokenMount = true
 		}
@@ -755,6 +812,19 @@ func TestBuildDeployment(t *testing.T) {
 		}
 	}
 
+	// The one writable path the read-only root filesystem leaves the agent. Without
+	// it the entrypoint's HOME=/tmp invocations fail before the gateway starts.
+	if _, ok := mountsMap["tmp-scratch"]; !ok {
+		t.Errorf("expected tmp-scratch mount on platform-agent, not found")
+	} else if mountsMap["tmp-scratch"].MountPath != "/tmp" {
+		t.Errorf("expected tmp-scratch mount path /tmp, got %s", mountsMap["tmp-scratch"].MountPath)
+	}
+
+	agentC := containerByName(t, dep.Spec.Template.Spec.Containers, "platform-agent")
+	if agentC.SecurityContext == nil || agentC.SecurityContext.ReadOnlyRootFilesystem == nil || !*agentC.SecurityContext.ReadOnlyRootFilesystem {
+		t.Errorf("expected SecurityContext.ReadOnlyRootFilesystem true on platform-agent container")
+	}
+
 	// Verify Fluent Bit container
 	fbContainer := containerByName(t, dep.Spec.Template.Spec.Containers, "fluent-bit")
 	if fbContainer.Name != "fluent-bit" {
@@ -763,11 +833,31 @@ func TestBuildDeployment(t *testing.T) {
 	if fbContainer.Image != "fluent/fluent-bit:5.1.0" {
 		t.Errorf("expected fluent-bit image fluent/fluent-bit:5.1.0, got %s", fbContainer.Image)
 	}
+	if fbContainer.SecurityContext == nil || fbContainer.SecurityContext.ReadOnlyRootFilesystem == nil || !*fbContainer.SecurityContext.ReadOnlyRootFilesystem {
+		t.Errorf("expected SecurityContext.ReadOnlyRootFilesystem true on fluent-bit container")
+	}
+	// Deliberately no /tmp here: the shipper buffers in memory and must not share
+	// the agent's scratch volume.
+	for _, m := range fbContainer.VolumeMounts {
+		if m.Name == "tmp-scratch" {
+			t.Errorf("fluent-bit must not mount the agent's tmp-scratch volume")
+		}
+	}
 
 	// Verify volumes
 	volumesMap := make(map[string]corev1.Volume)
 	for _, vol := range dep.Spec.Template.Spec.Volumes {
 		volumesMap[vol.Name] = vol
+	}
+	if v, ok := volumesMap["tmp-scratch"]; !ok {
+		t.Errorf("expected tmp-scratch volume, not found")
+	} else if v.EmptyDir == nil {
+		t.Errorf("expected tmp-scratch to be an emptyDir")
+	} else if v.EmptyDir.SizeLimit == nil || v.EmptyDir.SizeLimit.String() != "2Gi" {
+		// Unbounded, this is the only writable path outside the PVC for the two
+		// agent containers, so a runaway write becomes node-level disk pressure
+		// and the kubelet picks an eviction victim that need not be this pod.
+		t.Errorf("expected tmp-scratch sizeLimit 2Gi, got %v", v.EmptyDir.SizeLimit)
 	}
 	if _, ok := volumesMap["fluent-bit-config"]; !ok {
 		t.Errorf("expected fluent-bit-config volume, not found")
@@ -868,8 +958,12 @@ func TestBuildDeployment_DashboardEnabled(t *testing.T) {
 			if dep.Spec.Template.Spec.ShareProcessNamespace == nil || !*dep.Spec.Template.Spec.ShareProcessNamespace {
 				t.Errorf("expected ShareProcessNamespace to be true, got %v", dep.Spec.Template.Spec.ShareProcessNamespace)
 			}
-			if len(dep.Spec.Template.Spec.Containers) != 4 {
-				t.Fatalf("expected dashboard deployment plus credential sidecar to have 4 containers, got %d", len(dep.Spec.Template.Spec.Containers))
+			// 3: the credential proxy is a native sidecar and lives in InitContainers.
+			if len(dep.Spec.Template.Spec.Containers) != 3 {
+				t.Fatalf("expected dashboard deployment to have 3 containers, got %d", len(dep.Spec.Template.Spec.Containers))
+			}
+			if _, ok := findContainer(dep.Spec.Template.Spec, "envoy-credential-proxy"); !ok {
+				t.Fatal("credential proxy sidecar missing")
 			}
 			if dep.Spec.Template.Spec.Containers[0].Name != "platform-agent" {
 				t.Errorf("expected container 0 to be platform-agent, got %s", dep.Spec.Template.Spec.Containers[0].Name)
@@ -879,9 +973,6 @@ func TestBuildDeployment_DashboardEnabled(t *testing.T) {
 			}
 			if dep.Spec.Template.Spec.Containers[2].Name != "fluent-bit" {
 				t.Errorf("expected container 2 to be fluent-bit, got %s", dep.Spec.Template.Spec.Containers[2].Name)
-			}
-			if dep.Spec.Template.Spec.Containers[3].Name != "envoy-credential-proxy" {
-				t.Errorf("expected container 3 to be envoy-credential-proxy, got %s", dep.Spec.Template.Spec.Containers[3].Name)
 			}
 
 			svc := buildPlatformService(agent)
@@ -922,17 +1013,18 @@ func TestBuildDeployment_DashboardDisabled(t *testing.T) {
 	if dep.Spec.Template.Spec.ShareProcessNamespace != nil {
 		t.Errorf("expected ShareProcessNamespace to be nil, got %v", *dep.Spec.Template.Spec.ShareProcessNamespace)
 	}
-	if len(dep.Spec.Template.Spec.Containers) != 3 {
-		t.Fatalf("expected dashboard-disabled deployment plus credential sidecar to have 3 containers, got %d", len(dep.Spec.Template.Spec.Containers))
+	// 2: the credential proxy is a native sidecar and lives in InitContainers.
+	if len(dep.Spec.Template.Spec.Containers) != 2 {
+		t.Fatalf("expected dashboard-disabled deployment to have 2 containers, got %d", len(dep.Spec.Template.Spec.Containers))
+	}
+	if _, ok := findContainer(dep.Spec.Template.Spec, "envoy-credential-proxy"); !ok {
+		t.Fatal("credential proxy sidecar missing")
 	}
 	if dep.Spec.Template.Spec.Containers[0].Name != "platform-agent" {
 		t.Errorf("expected container 0 to be platform-agent, got %s", dep.Spec.Template.Spec.Containers[0].Name)
 	}
 	if dep.Spec.Template.Spec.Containers[1].Name != "fluent-bit" {
 		t.Errorf("expected container 1 to be fluent-bit, got %s", dep.Spec.Template.Spec.Containers[1].Name)
-	}
-	if dep.Spec.Template.Spec.Containers[2].Name != "envoy-credential-proxy" {
-		t.Errorf("expected container 2 to be envoy-credential-proxy, got %s", dep.Spec.Template.Spec.Containers[2].Name)
 	}
 
 	svc := buildPlatformService(agent)
@@ -964,6 +1056,19 @@ func TestSafeSandboxEnvOverridesRejectsValueFrom(t *testing.T) {
 	got := safeSandboxEnvOverrides(custom)
 	if len(got) != 1 || got[0].Name != "OTEL_SERVICE_NAME" || got[0].Value != "platform-agent" {
 		t.Fatalf("expected only literal allowlisted telemetry env, got %#v", got)
+	}
+}
+
+func TestSafeSandboxEnvOverridesPassesOtelSdkDisabled(t *testing.T) {
+	// The chart documents OTEL_SDK_DISABLED as the off-switch for clusters
+	// with no OTLP collector, where the exporter otherwise retries an
+	// unresolvable hostname for the life of the pod. Off the allowlist the
+	// documented recipe renders, validates, and silently does nothing.
+	got := safeSandboxEnvOverrides([]corev1.EnvVar{
+		{Name: "OTEL_SDK_DISABLED", Value: "true"},
+	})
+	if len(got) != 1 || got[0].Name != "OTEL_SDK_DISABLED" || got[0].Value != "true" {
+		t.Fatalf("expected OTEL_SDK_DISABLED to survive the allowlist, got %#v", got)
 	}
 }
 
@@ -1012,6 +1117,44 @@ func TestSafeSandboxEnvOverridesPassesAlertLimits(t *testing.T) {
 	// Widening the allowlist must not have widened it to everything.
 	if _, ok := values["SESSION_KV_DB_PATH"]; ok {
 		t.Errorf("SESSION_KV_DB_PATH must stay operator-owned, got %#v", got)
+	}
+}
+
+func TestSafeSandboxEnvOverridesPassesEodRecapFilters(t *testing.T) {
+	// This is the end-of-day recap's whole configuration surface — the script
+	// reads it from the environment on every run and there is no config file
+	// behind it. Off the allowlist, the SOP's documented override renders,
+	// validates, and silently does nothing, and a fleet whose noisy namespace
+	// is not one of the three shipped exclusions has no supported way to quiet
+	// it.
+	custom := []corev1.EnvVar{
+		{Name: "EOD_EXCLUDE_NAMESPACES", Value: "kube-system,istio-system"},
+		{Name: "GKE_CLUSTER_NAME", Value: "impostor"},
+		{
+			Name: "EOD_EXCLUDE_NAMESPACES",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "s"},
+				Key:                  "k",
+			}},
+		},
+	}
+
+	got := safeSandboxEnvOverrides(custom)
+	values := map[string]string{}
+	for _, e := range got {
+		if e.ValueFrom != nil {
+			t.Errorf("ValueFrom must never survive the allowlist, got %#v", e)
+		}
+		values[e.Name] = e.Value
+	}
+
+	if values["EOD_EXCLUDE_NAMESPACES"] != "kube-system,istio-system" {
+		t.Errorf("expected the recap's namespace filter to be overridable, got %q", values["EOD_EXCLUDE_NAMESPACES"])
+	}
+	// The recap resolves its own cluster name; letting the CR relabel every
+	// row would make one cluster's noise read as another's.
+	if _, ok := values["GKE_CLUSTER_NAME"]; ok {
+		t.Errorf("GKE_CLUSTER_NAME must stay operator-owned, got %#v", got)
 	}
 }
 
@@ -1232,7 +1375,10 @@ func TestEventWatcherTokenEnvMatchesStartServices(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "my-agent", Namespace: "my-ns"},
 	}
 	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456", nil, renderOptions{imageVolumeSupported: true})
-	proxyC := containerByName(t, dep.Spec.Template.Spec.Containers, "envoy-credential-proxy")
+	proxyC, proxyFound := findContainer(dep.Spec.Template.Spec, "envoy-credential-proxy")
+	if !proxyFound {
+		t.Fatal("credential proxy container not found in either container list")
+	}
 	for _, env := range proxyC.Env {
 		if env.Name != tokenEnv {
 			continue
@@ -1289,7 +1435,9 @@ func TestKustomizeNetworkPolicies_PodSelectorMatchesCommonLabels(t *testing.T) {
 	}
 }
 
-func TestFQDNPatternList_MatchesKustomizeManifest(t *testing.T) {
+// fqdnPatternsFromPolicy returns the egress match patterns buildFQDNNetworkPolicy emits.
+func fqdnPatternsFromPolicy(t *testing.T) []string {
+	t.Helper()
 	agent := &agentv1alpha1.PlatformAgent{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "platform-agent",
@@ -1310,14 +1458,79 @@ func TestFQDNPatternList_MatchesKustomizeManifest(t *testing.T) {
 	if !ok || len(matchesList) == 0 {
 		t.Fatalf("expected matches list in FQDN policy")
 	}
-	var goPatterns []string
+	var patterns []string
 	for _, m := range matchesList {
 		if mMap, isMap := m.(map[string]interface{}); isMap {
 			if p, isStr := mMap["pattern"].(string); isStr {
-				goPatterns = append(goPatterns, p)
+				patterns = append(patterns, p)
 			}
 		}
 	}
+	return patterns
+}
+
+// fqdnPatternToRegexp compiles an FQDNNetworkPolicy match pattern the way the
+// Dataplane V2 (Cilium) engine does: dots are literal and a wildcard spans DNS
+// characters only, so it stops at a label boundary. GKE documents the same rule
+// — "*.company.com" matches "api.company.com" but not "eu.api.company.com".
+func fqdnPatternToRegexp(t *testing.T, pattern string) *regexp.Regexp {
+	t.Helper()
+	escaped := strings.ReplaceAll(pattern, ".", "[.]")
+	escaped = strings.ReplaceAll(escaped, "*", "[-a-zA-Z0-9_]*")
+	re, err := regexp.Compile("^" + escaped + "$")
+	if err != nil {
+		t.Fatalf("pattern %q does not compile: %v", pattern, err)
+	}
+	return re
+}
+
+// TestFQDNPatternList_MatchesRealHostnames pins the egress allowlist against
+// hostnames the gateway actually dials. TestFQDNPatternList_MatchesKustomizeManifest
+// only proves the two copies of the list agree — it would pass just as happily
+// if both were wrong, which is how "*.gke.goog" was first shipped one label
+// short of every DNS control-plane endpoint it was added to allow.
+func TestFQDNPatternList_MatchesRealHostnames(t *testing.T) {
+	patterns := fqdnPatternsFromPolicy(t)
+
+	hostnames := []string{
+		// GKE DNS-based control plane endpoint: <cluster-hash>-<project-number>.<region>.gke.goog
+		//
+		// Synthetic, but the shape is copied from live clusters: a 36-character
+		// hash, a project number, and a location label. Do not paste a real
+		// endpoint in — the hostname carries the project number of whoever's
+		// cluster it came from, and what this test needs is the shape.
+		"gke-0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b-123456789012.us-central1.gke.goog",
+		// A zonal cluster puts the zone where the region sits, so the label is
+		// longer but the shape is unchanged. Keeping both means a pattern
+		// narrowed to a region-shaped label fails here rather than in the field.
+		"gke-9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e-210987654321.us-central1-a.gke.goog",
+		"container.googleapis.com",
+		"oauth2.googleapis.com",
+		"accounts.google.com",
+		"us-central1-docker.pkg.dev",
+		"us.gcr.io",
+		"github.com",
+		"api.github.com",
+		"objects.githubusercontent.com",
+		"slack.com",
+	}
+
+	for _, host := range hostnames {
+		matched := false
+		for _, p := range patterns {
+			if fqdnPatternToRegexp(t, p).MatchString(host) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("no FQDN egress pattern matches %q; the gateway cannot reach it under FQDN network policy (patterns: %v)", host, patterns)
+		}
+	}
+}
+
+func TestFQDNPatternList_MatchesKustomizeManifest(t *testing.T) {
+	goPatterns := fqdnPatternsFromPolicy(t)
 
 	path := filepath.Join("..", "..", "..", "deploy", "kustomize", "gke-dataplane-v2", "fqdn-networkpolicy.yaml")
 	data, err := os.ReadFile(path)
@@ -2499,15 +2712,43 @@ func TestManagedEnvPinsPlatformKeysButNotHome(t *testing.T) {
 		}
 	}
 
-	// A deployment with no chat integration pins nothing, so the render is empty — but
-	// buildConfigMapData still writes the key, and must: the managed volume projects it
-	// by name, and a ConfigMap item naming a missing key fails the mount and the pod
-	// never starts (see renderManagedEnv's doc comment). What is asserted here is the
-	// CONTENT, not the key's presence: an agent with no chat integration has no platform
-	// credential worth freezing, and a pin invented for one would only be a key the agent
-	// is refused permission to set.
-	if got := renderManagedEnv(newTestPlatformAgent()); got != "" {
-		t.Errorf("renderManagedEnv with no integration = %q, want empty", got)
+	// A deployment with no chat integration pins no PLATFORM key — an agent with no chat
+	// integration has no platform credential worth freezing, and a pin invented for one
+	// would only be a key the agent is refused permission to set. What survives is the
+	// loopback bearer, which is not conditional on anything; see the next test.
+	bare := renderManagedEnv(newTestPlatformAgent())
+	if got, want := bare, "API_SERVER_KEY="+loopbackAgentAPIKey+"\n"; got != want {
+		t.Errorf("renderManagedEnv with no integration = %q, want %q", got, want)
+	}
+}
+
+// TestManagedEnvPinsTheLoopbackKeyUnconditionally is the regression for issue #786.
+//
+// Hermes' stage2 hook generates a strong random API_SERVER_KEY into $HERMES_HOME/.env on
+// any boot where that file does not already carry one, and load_hermes_dotenv applies the
+// PVC file over the container environment — so the operator setting the env var is not
+// enough, and was not: every authenticated call to the gateway API 401'd against a key
+// nothing else in the system had ever seen. The managed scope is applied LAST with
+// override=True, which is why the pin has to live here and not only in the container env.
+//
+// Unconditional matters as much as present. The failure was found through the Google Chat
+// relay, but it belongs to the API server, which every deployment runs — including the
+// probes on the platform-agent container, which curl that API and so would hold the pod
+// out of Ready forever on an agent with no integration at all.
+func TestManagedEnvPinsTheLoopbackKeyUnconditionally(t *testing.T) {
+	for name, agent := range map[string]*agentv1alpha1.PlatformAgent{
+		"no integration": newTestPlatformAgent(),
+		"chat":           chatAgent(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := renderManagedEnv(agent)
+			want := "API_SERVER_KEY=" + loopbackAgentAPIKey
+			if !slices.Contains(strings.Split(strings.TrimSpace(env), "\n"), want) {
+				t.Errorf("the managed .env does not pin %q, so Hermes' stage2 hook generates its own "+
+					"key into the PVC .env and every authenticated call to the gateway API 401s "+
+					"(issue #786):\n%s", want, env)
+			}
+		})
 	}
 }
 
@@ -2928,7 +3169,7 @@ func TestProfileOverlayDeduplicatesPluginsEnabled(t *testing.T) {
 	p2 := pluginWithProfile("sessionstore", "platform", "")
 
 	var parsed map[string]any
-	if err := yaml.Unmarshal([]byte(renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{p1, p2}, nil, nil)), &parsed); err != nil {
+	if err := yaml.Unmarshal([]byte(renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{p1, p2}, nil, nil, nil)), &parsed); err != nil {
 		t.Fatalf("unmarshal overlay: %v", err)
 	}
 
@@ -3203,7 +3444,7 @@ platform_toolsets:
     - {name: three}
 `)
 
-	rendered := renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{first, second}, nil, nil)
+	rendered := renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{first, second}, nil, nil, nil)
 	if rendered == "" {
 		t.Fatalf("expected the overlay to render")
 	}
@@ -3425,7 +3666,7 @@ func TestRenderProfileOverlayYAML(t *testing.T) {
 	overlay := renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{
 		pluginWithProfile("stockout", "platform", "platform_toolsets:\n  pubsub:\n    - gke\n"),
 		pluginWithProfile("second", "platform", ""),
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(overlay), &parsed); err != nil {
@@ -3449,7 +3690,7 @@ func TestRenderProfileOverlayYAML(t *testing.T) {
 func TestRenderProfileOverlayYAMLDropsDisallowedSubtrees(t *testing.T) {
 	overlay := renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{
 		pluginWithProfile("stockout", "platform", "agent:\n  max_turns: 9999\nlogging:\n  level: debug\napprovals:\n  cron_mode: approve\n"),
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(overlay), &parsed); err != nil {
@@ -3469,7 +3710,7 @@ func TestRenderProfileOverlayYAMLDropsDisallowedSubtrees(t *testing.T) {
 func TestRenderProfileOverlayYAMLOperatorLimitsBeatPluginConfig(t *testing.T) {
 	overlay := renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{
 		pluginWithProfile("stockout", "platform", "agent:\n  max_turns: 9999\n"),
-	}, limits(8, 200), nil)
+	}, limits(8, 200), nil, nil)
 
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(overlay), &parsed); err != nil {
@@ -3504,7 +3745,7 @@ func TestRenderProfileOverlayYAMLOperatorLimitsBeatPluginConfig(t *testing.T) {
 // nothing left for that comparison to compare.
 
 func TestRenderProfileOverlayYAMLEmptyWhenNothingToSay(t *testing.T) {
-	if got := renderProfileOverlayYAML(nil, nil, nil); got != "" {
+	if got := renderProfileOverlayYAML(nil, nil, nil, nil); got != "" {
 		t.Errorf("expected empty overlay, got %q (an empty map marshals to \"{}\" and would rewrite the profile config every start)", got)
 	}
 }
@@ -3934,7 +4175,7 @@ approvals:
 		t.Errorf("targeted plugin's pubsub subscription must reach the DEFAULT profile, got %v", rendered["platforms"])
 	}
 	var overlay map[string]any
-	if err := yaml.Unmarshal([]byte(renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{plugin}, nil, nil)), &overlay); err != nil {
+	if err := yaml.Unmarshal([]byte(renderProfileOverlayYAML([]*agentv1alpha1.AgentPlugin{plugin}, nil, nil, nil)), &overlay); err != nil {
 		t.Fatalf("unmarshal overlay: %v", err)
 	}
 	if _, ok := overlay["platforms"]; ok {
@@ -4165,6 +4406,77 @@ func TestDeploymentEnvCannotOverrideTheEventWatcherSwitch(t *testing.T) {
 	}
 }
 
+// A CR that already mounts /tmp must not collide with the operator's tmp-scratch mount.
+// Two VolumeMounts on one mountPath make the Deployment unappliable, so the failure is not
+// a redundant mount but a reconcile that stops on an upgrade.
+func TestUserSuppliedTmpMountReplacesTmpScratch(t *testing.T) {
+	cases := []struct {
+		name      string
+		configure func(*agentv1alpha1.DeploymentSpec)
+		// Per container, because the two inputs do not reach the same set of them:
+		// extraVolumeMounts is appended to the gateway and the dashboard, storages
+		// only to the gateway.
+		wantTmpOwner map[string]string
+	}{
+		{
+			name: "extraVolumeMounts",
+			configure: func(d *agentv1alpha1.DeploymentSpec) {
+				d.ExtraVolumeMounts = []corev1.VolumeMount{{Name: "my-tmp", MountPath: "/tmp"}}
+			},
+			wantTmpOwner: map[string]string{"platform-agent": "my-tmp", "platform-agent-dashboard": "my-tmp"},
+		},
+		{
+			// Trailing slash included on purpose: it is the same path to the API
+			// server's uniqueness check, so a name comparison would miss it.
+			name: "extraVolumeMounts with a trailing slash",
+			configure: func(d *agentv1alpha1.DeploymentSpec) {
+				d.ExtraVolumeMounts = []corev1.VolumeMount{{Name: "my-tmp", MountPath: "/tmp/"}}
+			},
+			wantTmpOwner: map[string]string{"platform-agent": "my-tmp", "platform-agent-dashboard": "my-tmp"},
+		},
+		{
+			// The dashboard keeps tmp-scratch here, and that is correct rather than an
+			// oversight: storages never reach it, so there is nothing to collide with
+			// and no reason to take its scratch space away.
+			name: "storages",
+			configure: func(d *agentv1alpha1.DeploymentSpec) {
+				d.Storages = []agentv1alpha1.StorageSpec{{Name: "scratch", MountPath: "/tmp"}}
+			},
+			wantTmpOwner: map[string]string{"platform-agent": "scratch-vol", "platform-agent-dashboard": tmpScratchVolumeName},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := newTestPlatformAgent()
+			agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{}
+			tc.configure(agent.Spec.Deployment)
+
+			pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
+
+			// Every container, not the one the guard was written for. The API server
+			// applies its uniqueness check per container, so checking a single one
+			// passes while the Deployment it describes is still rejected.
+			all := append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...)
+			for _, c := range all {
+				seen := make(map[string]string)
+				for _, m := range c.VolumeMounts {
+					clean := path.Clean(m.MountPath)
+					if prev, dup := seen[clean]; dup {
+						t.Errorf("container %s: duplicate mountPath %q, from volumes %q and %q", c.Name, clean, prev, m.Name)
+					}
+					seen[clean] = m.Name
+				}
+				if want, checked := tc.wantTmpOwner[c.Name]; checked {
+					if got := seen["/tmp"]; got != want {
+						t.Errorf("container %s: /tmp served by volume %q, want %q", c.Name, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 // The same hole, on the variable next to it. EVENT_WATCHER_CLUSTER_NAME is
 // appended after the same merge and was unreserved for as long as it has
 // existed; it is pinned here so the two cannot drift apart again.
@@ -4219,5 +4531,735 @@ func TestTheEmergencyStopLeavesTheSidecarWiringIntact(t *testing.T) {
 	}
 	if !sawClusterName || !sawSessionKey {
 		t.Errorf("disabling the watcher must not strip its configuration, got %#v", off.Env)
+	}
+}
+
+// --- spec.harness.experimental.platformFrontDoor -----------------------------------
+
+// frontDoorAgent builds a PlatformAgent with Google Chat on and the experimental flag
+// set as given, so the on/off pair differs in exactly one field.
+func frontDoorAgent(name string, replicas int32, on bool) *agentv1alpha1.PlatformAgent {
+	agent := haAgent(name, replicas)
+	agent.Spec.Integration = &agentv1alpha1.PlatformAgentIntegrationSpec{
+		GoogleChat: &agentv1alpha1.GoogleChatSpec{Enabled: ptr.To(true)},
+	}
+	if on {
+		agent.Spec.Harness = &agentv1alpha1.HarnessSpec{
+			Experimental: &agentv1alpha1.ExperimentalSpec{PlatformFrontDoor: ptr.To(true)},
+		}
+	}
+	return agent
+}
+
+// platformOverlay parses the platform profile's overlay out of the ConfigMap.
+func platformOverlay(t *testing.T, agent *agentv1alpha1.PlatformAgent) map[string]any {
+	t.Helper()
+	raw, ok := buildConfigMapData(agent, nil)[profileOverlayKey(platformProfileName)]
+	if !ok {
+		t.Fatalf("no %s in the ConfigMap", profileOverlayKey(platformProfileName))
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("unmarshal platform overlay: %v\n%s", err, raw)
+	}
+	return parsed
+}
+
+func lookup(m map[string]any, path []string) (any, bool) {
+	var cur any = m
+	for _, key := range path {
+		asMap, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		if cur, ok = asMap[key]; !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+func listAt(t *testing.T, m map[string]any, path []string) []any {
+	t.Helper()
+	v, _ := lookup(m, path)
+	list, _ := v.([]any)
+	return list
+}
+
+func sortedStrings(t *testing.T, list []any) []string {
+	t.Helper()
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		out = append(out, fmt.Sprint(v))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestPlatformFrontDoorArgsSelectTheProfile pins where the profile name reaches the
+// gateway from, which differs by replica count.
+//
+// `--profile` is a GLOBAL flag: hermes_cli/main.py::_apply_profile_override pre-parses it
+// out of argv before any import and re-points HERMES_HOME. `hermes gateway run --profile
+// platform` is a different command — the subcommand has no such flag — so the position
+// here is load-bearing, not stylistic.
+//
+// Above one replica the argv belongs to leader_elect.py, which starts the gateway as a
+// child; the profile reaches it through HERMES_GATEWAY_PROFILE instead, and putting it in
+// the container args there would replace the wrapper and lose leader election entirely.
+func TestPlatformFrontDoorArgsSelectTheProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replicas int32
+		on       bool
+		want     []string
+	}{
+		{"off at one replica keeps the image CMD", 1, false, nil},
+		{"on at one replica names the profile", 1, true, []string{"hermes", "--profile", "platform", "gateway", "run"}},
+		{"off above one replica keeps the wrapper", 2, false, []string{"/opt/hermes/.venv/bin/python3", "/opt/data/leader_elect.py"}},
+		{"on above one replica keeps the wrapper", 2, true, []string{"/opt/hermes/.venv/bin/python3", "/opt/data/leader_elect.py"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := buildDeployment(frontDoorAgent("fd-agent", tc.replicas, tc.on), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+			gateway := containerNamed(t, dep, "platform-agent")
+
+			if len(gateway.Command) != 0 {
+				t.Errorf("Command must stay unset so the image ENTRYPOINT still runs the "+
+					"shared-state setup; got %v", gateway.Command)
+			}
+			if len(tc.want) == 0 {
+				if len(gateway.Args) != 0 {
+					t.Errorf("expected the image CMD to stand, got args=%v", gateway.Args)
+				}
+				return
+			}
+			if !reflect.DeepEqual(gateway.Args, tc.want) {
+				t.Errorf("args = %v, want %v", gateway.Args, tc.want)
+			}
+		})
+	}
+}
+
+// TestPlatformFrontDoorProfileEnvIsGatewayOnly pins the variable to the one container
+// that has readers for it.
+//
+// In the gateway it has two: leader_elect.py builds its argv from it, and
+// docker-entrypoint.sh step 2.6 reads it to stop force-syncing profiles/platform/config.yaml
+// from the image, because as the front door that file is one the agent itself writes to.
+//
+// The dashboard sidecar must NOT get it. It carries AGENT_SHARED_STATE_SETUP=skip and execs
+// out of the entrypoint at the step-1.5 gate, so it would never act on it — but it also does
+// not mount the operator's overlay directory, and a container that reached step 2.6b without
+// one would back-fill the platform config from image defaults alone while the primary was
+// writing the same file.
+//
+// On the gateway it is present either way, and the off case is the half worth pinning: the
+// operator emitting nothing leaves an AgentPlugin's spec.env — copied verbatim, no allowlist
+// — as the only writer of the name, and last-wins cannot settle a duplicate that does not
+// exist. Empty is the off answer both readers already understand.
+func TestPlatformFrontDoorProfileEnvIsGatewayOnly(t *testing.T) {
+	for _, replicas := range []int32{1, 2} {
+		t.Run(fmt.Sprintf("replicas=%d", replicas), func(t *testing.T) {
+			on := buildDeployment(frontDoorAgent("fd-env", replicas, true), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+			got, found := envValue(containerNamed(t, on, "platform-agent"), gatewayProfileEnvVar)
+			if !found || got != platformProfileName {
+				t.Errorf("gateway %s = %q (found=%v), want %q", gatewayProfileEnvVar, got, found, platformProfileName)
+			}
+			if _, found := envValue(containerNamed(t, on, "platform-agent-dashboard"), gatewayProfileEnvVar); found {
+				t.Errorf("the dashboard sidecar must not carry %s: it has no overlay mount, so "+
+					"acting on it would mean rebuilding the platform config from image defaults alone",
+					gatewayProfileEnvVar)
+			}
+
+			off := buildDeployment(frontDoorAgent("fd-env", replicas, false), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+			got, found = envValue(containerNamed(t, off, "platform-agent"), gatewayProfileEnvVar)
+			if !found || got != "" {
+				t.Errorf("gateway %s = %q (found=%v) with the flag off, want an empty value that "+
+					"is still emitted: a name the operator never writes is one an AgentPlugin's "+
+					"spec.env can claim outright", gatewayProfileEnvVar, got, found)
+			}
+			if _, found := envValue(containerNamed(t, off, "platform-agent-dashboard"), gatewayProfileEnvVar); found {
+				t.Errorf("the dashboard sidecar must not carry %s with the flag off either",
+					gatewayProfileEnvVar)
+			}
+		})
+	}
+}
+
+// TestPlatformFrontDoorOverlayCarriesTheIngressKeys covers the config half: the profile the
+// gateway is now homed at has to have the toolsets and the ingress plugins that until now
+// only the default profile's rendering carried.
+func TestPlatformFrontDoorOverlayCarriesTheIngressKeys(t *testing.T) {
+	overlay := platformOverlay(t, frontDoorAgent("fd-overlay", 1, true))
+
+	// The toolsets key is the one that cannot be left to the fallback: an absent key puts
+	// the platform on the auto-generated `hermes-google_chat` composite and unions in every
+	// enabled MCP server, which is broader than the worker surface this pins, not narrower.
+	toolsets, _ := overlay["platform_toolsets"].(map[string]any)
+	for _, platform := range []string{"google_chat", "slack"} {
+		got := sortedStrings(t, listAt(t, overlay, []string{"platform_toolsets", platform}))
+		want := slices.Sorted(slices.Values(frontDoorToolsets))
+		if !slices.Equal(got, want) {
+			t.Errorf("platform_toolsets.%s = %v, want %v", platform, got, want)
+		}
+	}
+	if len(toolsets) == 0 {
+		t.Error("platform_toolsets is empty")
+	}
+
+	enabled := sortedStrings(t, listAt(t, overlay, []string{"plugins", "enabled"}))
+	for _, plugin := range frontDoorPlugins {
+		if !slices.Contains(enabled, plugin) {
+			t.Errorf("plugins.enabled is missing %q; it hooks ingress, so a message reaching "+
+				"this profile without it silently loses the behaviour. Got %v", plugin, enabled)
+		}
+	}
+}
+
+// TestPlatformFrontDoorOverlayLeavesTheAdaptersToTheManagedScope is the other half of the
+// same contract, and the one that is easy to get wrong: the adapters the gateway needs are
+// already on this profile, so rendering them here too is a second writer, not a fix.
+//
+// managed-config.yaml is machine-global — get_managed_dir() takes no profile argument — so
+// `platforms.*` and `display.platforms` land on every profile including this one, and a
+// managed leaf REPLACES rather than merges. An overlay copy would either lose to it or
+// silently diverge from it depending on which config the reader resolves first.
+func TestPlatformFrontDoorOverlayLeavesTheAdaptersToTheManagedScope(t *testing.T) {
+	overlay := platformOverlay(t, frontDoorAgent("fd-adapters", 1, true))
+	for _, key := range []string{"platforms", "display"} {
+		if _, present := overlay[key]; present {
+			t.Errorf("%s is rendered into the platform overlay; the managed scope already "+
+				"lands it on every profile, and two writers for one key is what its contract "+
+				"forbids:\n%v", key, overlay)
+		}
+	}
+
+	// Same reasoning, different reader: nothing consumes `leader_election` from config at
+	// all any more. Leadership is the Lease held by leader_elect.py, driven by container env.
+	if _, present := platformOverlay(t, frontDoorAgent("fd-adapters", 2, true))["leader_election"]; present {
+		t.Error("leader_election is rendered into the platform overlay, but no reader remains " +
+			"for it; leadership is the Lease leader_elect.py holds")
+	}
+}
+
+// The flag is only worth having if it comes back off. profile_overlay.py unapplies a
+// withdrawn key from its last-applied record, so the revert is exactly "the operator stops
+// rendering these" — which is worth a test of its own, because the platform overlay is
+// written unconditionally and it would be easy to leave the keys in it.
+func TestPlatformFrontDoorOverlayIsEmptyWhenOff(t *testing.T) {
+	overlay := platformOverlay(t, frontDoorAgent("fd-off", 1, false))
+	for _, key := range []string{"platform_toolsets", "kanban"} {
+		if _, present := overlay[key]; present {
+			t.Errorf("%s is rendered into the platform overlay with the flag off, so turning "+
+				"the flag off would not undo it:\n%v", key, overlay)
+		}
+	}
+	if plugins, ok := overlay["plugins"].(map[string]any); ok {
+		t.Errorf("plugins is rendered with no plugin targeting the profile: %v", plugins)
+	}
+}
+
+// TestPlatformFrontDoorOverlayKeepsTargetedPlugins guards a clobber that only appears when
+// both features are in use. The overlay's plugins.enabled used to be ASSIGNED after the
+// front-door keys were merged, so an AgentPlugin targeting the platform profile replaced the
+// ingress plugins wholesale — and the symptom is not a missing plugin but chat sessions that
+// stop persisting, on an install where the flag had been working.
+func TestPlatformFrontDoorOverlayKeepsTargetedPlugins(t *testing.T) {
+	agent := frontDoorAgent("fd-plugins", 1, true)
+	overlay := map[string]any{}
+	raw := buildConfigMapData(agent, []*agentv1alpha1.AgentPlugin{
+		pluginWithProfile("extratool", platformProfileName, ""),
+	})[profileOverlayKey(platformProfileName)]
+	if err := yaml.Unmarshal([]byte(raw), &overlay); err != nil {
+		t.Fatalf("unmarshal platform overlay: %v\n%s", err, raw)
+	}
+
+	enabled := sortedStrings(t, listAt(t, overlay, []string{"plugins", "enabled"}))
+	for _, want := range append(slices.Clone(frontDoorPlugins), "extratool") {
+		if !slices.Contains(enabled, want) {
+			t.Errorf("plugins.enabled = %v, missing %q", enabled, want)
+		}
+	}
+}
+
+// TestPlatformFrontDoorOverlayMergesTargetedPluginToolsets guards the second half of the
+// clobber TestPlatformFrontDoorOverlayKeepsTargetedPlugins covers for plugins.enabled.
+//
+// `platform_toolsets` is allowlisted and not gateway-scoped, so a plugin targeting this
+// profile reaches the same merge — and mergeMaps only recurses into a nested map that
+// toStrMap recognises. Built as map[string][]string the front door's own subtree was
+// REPLACED rather than merged, and the symptom is not a missing key: the chat platforms fall
+// back to the auto-generated `hermes-google_chat` composite — the full core bundle plus every
+// enabled MCP server (see frontDoorToolsets) — so the front door quietly widens rather than
+// failing shut, on an install where the flag had been working.
+func TestPlatformFrontDoorOverlayMergesTargetedPluginToolsets(t *testing.T) {
+	agent := frontDoorAgent("fd-toolsets", 1, true)
+	overlay := map[string]any{}
+	raw := buildConfigMapData(agent, []*agentv1alpha1.AgentPlugin{
+		pluginWithProfile("pubsubtool", platformProfileName,
+			"platform_toolsets:\n  pubsub:\n    - kanban\n  google_chat:\n    - mcp-extra\n"),
+	})[profileOverlayKey(platformProfileName)]
+	if err := yaml.Unmarshal([]byte(raw), &overlay); err != nil {
+		t.Fatalf("unmarshal platform overlay: %v\n%s", err, raw)
+	}
+
+	// The plugin's own key arrives, and the front door's survive alongside it.
+	if got := sortedStrings(t, listAt(t, overlay, []string{"platform_toolsets", "pubsub"})); !slices.Equal(got, []string{"kanban"}) {
+		t.Errorf("platform_toolsets.pubsub = %v, want the plugin's own list", got)
+	}
+	if got := sortedStrings(t, listAt(t, overlay, []string{"platform_toolsets", "slack"})); !slices.Equal(got, slices.Sorted(slices.Values(frontDoorToolsets))) {
+		t.Errorf("platform_toolsets.slack = %v, want the front door's toolsets left intact", got)
+	}
+
+	// Within a subtree the two sides union, which is the contract the AgentPlugin CRD page
+	// states: "list values are unioned with the operator's own entries rather than
+	// replacing them".
+	want := slices.Sorted(slices.Values(append(slices.Clone(frontDoorToolsets), "mcp-extra")))
+	if got := sortedStrings(t, listAt(t, overlay, []string{"platform_toolsets", "google_chat"})); !slices.Equal(got, want) {
+		t.Errorf("platform_toolsets.google_chat = %v, want %v", got, want)
+	}
+}
+
+// TestFrontDoorKanbanMatchesChatConfig is the drift guard frontDoorKanban names.
+//
+// The dispatcher and the notifier run in the gateway process and read `kanban` through
+// load_config(), which resolves from get_hermes_home() — so the block has to be on whichever
+// profile the gateway is homed at, and it has to say the same thing there. The image copy
+// lives in agents/chat/config.yaml and reaches the default profile only; neither
+// agents/platform/config.yaml nor the managed scope declares the key, so a block that fails
+// to follow the gateway does not fall back to the chat profile's: it falls back to upstream,
+// where dispatch is unbounded, the tick is 60s, and spec.harness.tuning.maxInProgress
+// silently stops meaning anything.
+//
+// The comparison is against the image file rather than against the default profile's
+// overlay because the operator does not render the block there at all — it defers to
+// agents/chat/config.yaml, which is what makes that file the one source to track.
+func TestFrontDoorKanbanMatchesChatConfig(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "agents", "chat", "config.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var image struct {
+		Kanban map[string]any `yaml:"kanban"`
+	}
+	if err := yaml.Unmarshal(raw, &image); err != nil {
+		t.Fatalf("unmarshaling %s: %v", path, err)
+	}
+	if len(image.Kanban) == 0 {
+		t.Fatalf("kanban is gone from %s; frontDoorKanban has no source to track and this test "+
+			"would pass against nothing", path)
+	}
+
+	got, ok := platformOverlay(t, frontDoorAgent("fd-kanban", 1, true))["kanban"].(map[string]any)
+	if !ok {
+		t.Fatal("the front-door overlay carries no kanban block, so the dispatcher reverts to " +
+			"upstream's unbounded behaviour")
+	}
+	if !reflect.DeepEqual(got, image.Kanban) {
+		t.Errorf("the front door's kanban block differs from the one the chat profile gets "+
+			"from %s:\n  overlay: %v\n  image:   %v", path, got, image.Kanban)
+	}
+
+	// The CR field is the reason equality with the image is not enough on its own: it is
+	// documented as "board-wide cap on concurrent kanban workers", and reaching only a
+	// profile the gateway is not homed at is the same as not reaching anything.
+	withCap := frontDoorAgent("fd-kanban-cap", 1, true)
+	withCap.Spec.Harness.Tuning = &agentv1alpha1.TuningSpec{MaxInProgress: ptr.To(7)}
+	capped, _ := platformOverlay(t, withCap)["kanban"].(map[string]any)
+	if capped["max_in_progress"] != 7 {
+		t.Errorf("max_in_progress = %v, want spec.harness.tuning.maxInProgress (7) to reach the "+
+			"profile the gateway runs as", capped["max_in_progress"])
+	}
+}
+
+// TestFrontDoorPluginsMatchChatConfig is the drift guard frontDoorPlugins names.
+//
+// The list is derived, not chosen: every ingress plugin the chat profile enables, less the
+// two named below, less the three agents/platform/config.yaml already enables. Adding an
+// ingress plugin to the chat profile and not here is the drift that matters — it hooks a
+// message the front door is the one receiving, so the behaviour is simply lost, with
+// nothing logged.
+//
+// The two exclusions are listed here rather than assumed, so that adding a third is a
+// deliberate edit to a test that states its reason and not a quiet trim of a var.
+func TestFrontDoorPluginsMatchChatConfig(t *testing.T) {
+	read := func(name string) []string {
+		t.Helper()
+		path := filepath.Join("..", "..", "..", "agents", name, "config.yaml")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		var image struct {
+			Plugins struct {
+				Enabled []string `yaml:"enabled"`
+			} `yaml:"plugins"`
+		}
+		if err := yaml.Unmarshal(raw, &image); err != nil {
+			t.Fatalf("unmarshaling %s: %v", path, err)
+		}
+		if len(image.Plugins.Enabled) == 0 {
+			t.Fatalf("plugins.enabled is gone from %s; this test would pass against nothing", path)
+		}
+		return image.Plugins.Enabled
+	}
+
+	// agent_roster: delegation only, and the front door does the work itself.
+	// bootstrap_onboarding: its markers and its delivery job both resolve from the home
+	// the flag moves away from, so enabling it here greets an onboarded install and
+	// promises a report the dead `default` roster can never deliver.
+	excluded := []string{"agent_roster", "bootstrap_onboarding"}
+
+	onPlatform := read("platform")
+	want := []string{}
+	for _, plugin := range read("chat") {
+		if slices.Contains(excluded, plugin) || slices.Contains(onPlatform, plugin) {
+			continue
+		}
+		want = append(want, plugin)
+	}
+	for _, plugin := range excluded {
+		if !slices.Contains(read("chat"), plugin) {
+			t.Errorf("%q is excluded from frontDoorPlugins but the chat profile no longer "+
+				"enables it; the exclusion and its reasoning are now stale", plugin)
+		}
+	}
+	if got := slices.Sorted(slices.Values(frontDoorPlugins)); !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("frontDoorPlugins is no longer the chat profile's ingress plugins:\n"+
+			"  operator: %v\n  derived:  %v", got, slices.Sorted(slices.Values(want)))
+	}
+}
+
+// TestFrontDoorToolsetsMatchPlatformConfig is the drift guard frontDoorToolsets names.
+//
+// The list is the image's own `cli` toolsets verbatim, and that equality IS the contract:
+// a chat message should reach the surface a kanban worker on this profile already has, no
+// more. Add an MCP server to agents/platform/config.yaml and chat ingress would otherwise
+// silently not get it, which reads as the agent choosing not to use a tool.
+func TestFrontDoorToolsetsMatchPlatformConfig(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "agents", "platform", "config.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var image struct {
+		PlatformToolsets map[string][]string `yaml:"platform_toolsets"`
+	}
+	if err := yaml.Unmarshal(raw, &image); err != nil {
+		t.Fatalf("unmarshaling %s: %v", path, err)
+	}
+	want, ok := image.PlatformToolsets["cli"]
+	if !ok {
+		t.Fatalf("platform_toolsets.cli is gone from %s; frontDoorToolsets has no source to "+
+			"track and this test would pass against nothing", path)
+	}
+	if got, want := slices.Sorted(slices.Values(frontDoorToolsets)), slices.Sorted(slices.Values(want)); !slices.Equal(got, want) {
+		t.Errorf("frontDoorToolsets differs from platform_toolsets.cli in %s:\n  operator: %v\n  image:    %v",
+			path, got, want)
+	}
+}
+
+// TestImagePullSecretsReachThePodSpec is the end-to-end check for #499: an
+// authenticated private registry is only usable if the pull identity lands on
+// the pod, and the pod is where it has to land — Kubernetes has no
+// per-container pull identity, so one field covers the agent, both
+// operator-injected sidecars, and anything the CR adds beside them.
+func TestImagePullSecretsReachThePodSpec(t *testing.T) {
+	agent := func(secrets ...string) *agentv1alpha1.PlatformAgent {
+		var refs []corev1.LocalObjectReference
+		for _, s := range secrets {
+			refs = append(refs, corev1.LocalObjectReference{Name: s})
+		}
+		return &agentv1alpha1.PlatformAgent{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-agent", Namespace: "my-ns"},
+			Spec: agentv1alpha1.PlatformAgentSpec{
+				AgentSpec: agentv1alpha1.AgentSpec{
+					Deployment: &agentv1alpha1.DeploymentSpec{ImagePullSecrets: refs},
+				},
+			},
+		}
+	}
+	names := func(refs []corev1.LocalObjectReference) []string {
+		var out []string
+		for _, r := range refs {
+			out = append(out, r.Name)
+		}
+		return out
+	}
+
+	t.Run("from the CR", func(t *testing.T) {
+		t.Setenv(imagePullSecretsEnvVar, "")
+
+		dep := buildDeployment(agent("harbor-pull", "extra-pull"), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+		if got, want := names(dep.Spec.Template.Spec.ImagePullSecrets), []string{"harbor-pull", "extra-pull"}; !slices.Equal(got, want) {
+			t.Errorf("Deployment pod spec imagePullSecrets = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("from the operator-wide default", func(t *testing.T) {
+		t.Setenv(imagePullSecretsEnvVar, "fleet-pull")
+
+		dep := buildDeployment(agent(), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+		if got, want := names(dep.Spec.Template.Spec.ImagePullSecrets), []string{"fleet-pull"}; !slices.Equal(got, want) {
+			t.Errorf("Deployment pod spec imagePullSecrets = %v, want %v — IMAGE_PULL_SECRETS must reach a CR that names none", got, want)
+		}
+	})
+
+	t.Run("the CR wins over the default", func(t *testing.T) {
+		t.Setenv(imagePullSecretsEnvVar, "fleet-pull")
+
+		dep := buildDeployment(agent("harbor-pull"), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+		if got, want := names(dep.Spec.Template.Spec.ImagePullSecrets), []string{"harbor-pull"}; !slices.Equal(got, want) {
+			t.Errorf("Deployment pod spec imagePullSecrets = %v, want %v", got, want)
+		}
+	})
+
+	// The default install must render exactly as it did before this field
+	// existed; an empty slice instead of nil would show up as `imagePullSecrets:
+	// []` on every agent Deployment in the fleet.
+	t.Run("absent when nothing is configured", func(t *testing.T) {
+		t.Setenv(imagePullSecretsEnvVar, "")
+
+		bare := &agentv1alpha1.PlatformAgent{ObjectMeta: metav1.ObjectMeta{Name: "my-agent", Namespace: "my-ns"}}
+		dep := buildDeployment(bare, "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+		if got := dep.Spec.Template.Spec.ImagePullSecrets; got != nil {
+			t.Errorf("Deployment pod spec imagePullSecrets = %v, want nil", got)
+		}
+	})
+
+	// buildStatefulSet shares buildPodTemplateSpec with buildDeployment, and the
+	// RWO storage path is the only way to reach it — an agent with custom RWO
+	// storage must not be the one install that cannot pull from its mirror.
+	t.Run("on the StatefulSet path too", func(t *testing.T) {
+		t.Setenv(imagePullSecretsEnvVar, "")
+
+		sts := buildStatefulSet(agent("harbor-pull"), "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+		if got, want := names(sts.Spec.Template.Spec.ImagePullSecrets), []string{"harbor-pull"}; !slices.Equal(got, want) {
+			t.Errorf("StatefulSet pod spec imagePullSecrets = %v, want %v", got, want)
+		}
+	})
+}
+
+// The read-only kill switch. Unlike the two above it is not appended by
+// buildCredentialProxySidecar afterwards, so an unreserved name here does not
+// duplicate or lose a race — it is simply accepted, and the proxy reads the
+// user's value. `CREDENTIAL_PROXY_ENFORCE_READ_ONLY: "false"` under
+// spec.deployment.env turned off every refusal in the policy: all commands,
+// all agents, all clusters in the Pod, no expiry, and nothing in the CR that
+// reads like a security change. Whoever can edit the PlatformAgent is often
+// exactly who the policy is meant to constrain, so the switch cannot be theirs.
+//
+// Asserting absence rather than a value is deliberate: the proxy defaults to
+// enforcing when the variable is unset, so dropping the entry is the fix, and
+// an operator-set "true" would be indistinguishable from the merge having
+// silently passed the user's own "true" through.
+func TestDeploymentEnvCannotDisableReadOnlyEnforcement(t *testing.T) {
+	for _, userValue := range []string{"false", "0", "no", "true"} {
+		t.Run(userValue, func(t *testing.T) {
+			agent := newTestPlatformAgent()
+			agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{
+				Env: []corev1.EnvVar{{Name: "CREDENTIAL_PROXY_ENFORCE_READ_ONLY", Value: userValue}},
+			}
+
+			for _, e := range buildCredentialProxySidecar(agent, "/opt/data").Env {
+				if e.Name == "CREDENTIAL_PROXY_ENFORCE_READ_ONLY" {
+					t.Fatalf("spec.deployment.env set the read-only kill switch to %q; it must be dropped as reserved", e.Value)
+				}
+			}
+		})
+	}
+}
+
+// TestCredentialProxyBindsBeforeTheSandboxExists guards the port-preemption fix.
+//
+// The proxy owns 8643, which the Service targets, and it shares a network
+// namespace with the agent sandbox. As an ordinary container the two started in
+// parallel and raced for the bind: bind 0.0.0.0:8643 from the sandbox and the
+// proxy dies with EADDRINUSE into CrashLoopBackOff, leaving the agent holding
+// the port external traffic is routed to. Reproduced on a live cluster
+// 2026-08-10.
+//
+// A native sidecar -- an init container with restartPolicy: Always -- starts
+// before any app container, so the sandbox no longer begins from the same instant
+// and cannot win the bind by starting first. The kubelet gates on the sidecar
+// having STARTED, plus its startupProbe if it declares one; this container
+// declares only a readinessProbe, so a window remains between the sidecar's exec
+// and Envoy's listen. Narrowed, not closed -- see buildPodTemplateSpec.
+//
+// Asserting the restart policy rather than list membership: an init container
+// WITHOUT it is one the kubelet waits to exit, which a long-running proxy never
+// does. In practice this container never gets that far -- it carries a
+// readinessProbe, which is not permitted on a non-restartable init container, so
+// the API server refuses the pod template. Either way the policy is half the fix
+// and not decoration, which is what this asserts.
+func TestCredentialProxyBindsBeforeTheSandboxExists(t *testing.T) {
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-agent", Namespace: "test-ns"},
+		Spec:       agentv1alpha1.PlatformAgentSpec{},
+	}
+	dep := buildDeployment(agent, "h1", "h2", "h3", "h4", nil, renderOptions{imageVolumeSupported: true})
+	spec := dep.Spec.Template.Spec
+
+	proxy, found := findContainer(spec, "envoy-credential-proxy")
+	if !found {
+		t.Fatal("credential proxy container is missing entirely")
+	}
+
+	inInit := false
+	for _, c := range spec.InitContainers {
+		if c.Name == "envoy-credential-proxy" {
+			inInit = true
+		}
+	}
+	if !inInit {
+		t.Error("credential proxy is an ordinary container; it races the sandbox for port 8643")
+	}
+	if proxy.RestartPolicy == nil || *proxy.RestartPolicy != corev1.ContainerRestartPolicyAlways {
+		t.Error("credential proxy lacks restartPolicy: Always, so it is not a native sidecar " +
+			"-- either it races the sandbox, or the kubelet waits forever for it to exit")
+	}
+
+	// The port it is racing for. If this moves, the test above stops meaning anything.
+	holds8643 := false
+	for _, p := range proxy.Ports {
+		if p.ContainerPort == 8643 {
+			holds8643 = true
+		}
+	}
+	if !holds8643 {
+		t.Error("credential proxy no longer declares 8643; re-check what the Service targets")
+	}
+}
+
+// The mount stays put when the CR mounts elsewhere -- the case above must not be paid for
+// by every other CR losing its writable /tmp under a read-only root filesystem.
+func TestUnrelatedExtraMountKeepsTmpScratch(t *testing.T) {
+	agent := newTestPlatformAgent()
+	agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{
+		ExtraVolumeMounts: []corev1.VolumeMount{{Name: "extra-vol", MountPath: "/tmpfoo"}},
+	}
+
+	pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
+	c := containerByName(t, pod.Spec.Containers, "platform-agent")
+
+	for _, m := range c.VolumeMounts {
+		if m.Name == tmpScratchVolumeName && m.MountPath == "/tmp" {
+			return
+		}
+	}
+	t.Errorf("expected the tmp-scratch mount at /tmp, got %v", c.VolumeMounts)
+}
+
+// operatorBuiltContainers is every container buildPodTemplateSpec constructs itself, as
+// opposed to the ones a CR hands it through spec.deployment.sidecars/initContainers. The
+// list is written out rather than derived so that adding a container to the Pod has to
+// touch this file: the test below fails on a name it does not know, and the fix is to add
+// it here and give it hardenedSecurityContext().
+var operatorBuiltContainers = []string{
+	"sandbox-credential-cleanup",
+	"envoy-credential-proxy",
+	"platform-agent",
+	"platform-agent-dashboard",
+	"fluent-bit",
+}
+
+// The invariant the read-only-root work exists to establish, asserted once over the whole
+// Pod instead of container by container.
+//
+// Three of the five containers went without a read-only root for as long as they existed
+// and every test stayed green, because the assertions named containers one at a time and
+// nobody wrote one for the containers that were missing it. The golden manifests did
+// capture the omission, but a golden is regenerated mechanically when a container is
+// added, so it records whatever was built rather than rejecting it.
+//
+// So this walks. The name check is the half that catches the next container: an addition
+// the author forgot to harden arrives as an unknown name, not as a silent pass.
+func TestEveryContainerHasAHardenedSecurityContext(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent *agentv1alpha1.PlatformAgent
+		// The dashboard is the one operator-built container a CR can switch off.
+		absent string
+	}{
+		{name: "default", agent: newTestPlatformAgent()},
+		{
+			name: "dashboard disabled",
+			agent: func() *agentv1alpha1.PlatformAgent {
+				a := newTestPlatformAgent()
+				a.Spec.Harness = &agentv1alpha1.HarnessSpec{
+					Hermes: &agentv1alpha1.HermesSpec{DashboardEnabled: ptr.To(false)},
+				}
+				return a
+			}(),
+			absent: "platform-agent-dashboard",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := buildPodTemplateSpec(tc.agent, "h", "h", "h", "h", nil, renderOptions{})
+
+			want := make(map[string]bool, len(operatorBuiltContainers))
+			for _, n := range operatorBuiltContainers {
+				if n != tc.absent {
+					want[n] = true
+				}
+			}
+
+			all := append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...)
+			for _, c := range all {
+				if !want[c.Name] {
+					t.Errorf("container %q is not in operatorBuiltContainers: if the operator "+
+						"grew a container, give it hardenedSecurityContext() and add it to that list",
+						c.Name)
+					continue
+				}
+				delete(want, c.Name)
+
+				sc := c.SecurityContext
+				if sc == nil {
+					t.Errorf("container %s: no SecurityContext; want hardenedSecurityContext()", c.Name)
+					continue
+				}
+				if sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+					t.Errorf("container %s: ReadOnlyRootFilesystem is not true", c.Name)
+				}
+				if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+					t.Errorf("container %s: AllowPrivilegeEscalation is not false", c.Name)
+				}
+				if sc.Capabilities == nil || !slices.Contains(sc.Capabilities.Drop, corev1.Capability("ALL")) {
+					t.Errorf("container %s: capabilities do not drop ALL, got %v", c.Name, sc.Capabilities)
+				}
+			}
+			// Without this the walk passes vacuously the day a container stops being
+			// built at all -- which is a change worth noticing, whatever its reason.
+			for n := range want {
+				t.Errorf("expected container %q in the Pod, not found", n)
+			}
+		})
+	}
+}
+
+// The other side of the same invariant: it covers what the operator builds and stops
+// there. A CR can still add a writable container to this Pod, which
+// docs/credential-isolation-design.md states as the limit of the guarantee -- pinned here
+// so that the doc and the code cannot drift apart silently.
+func TestCRSuppliedSidecarsAreNotHardenedByTheOperator(t *testing.T) {
+	agent := newTestPlatformAgent()
+	agent.Spec.Deployment = &agentv1alpha1.DeploymentSpec{
+		Sidecars:       []corev1.Container{{Name: "user-sidecar", Image: "example.com/side:v1"}},
+		InitContainers: []corev1.Container{{Name: "user-init", Image: "example.com/init:v1"}},
+	}
+
+	pod := buildPodTemplateSpec(agent, "h", "h", "h", "h", nil, renderOptions{})
+
+	for _, c := range append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...) {
+		if c.Name != "user-sidecar" && c.Name != "user-init" {
+			continue
+		}
+		if c.SecurityContext != nil {
+			t.Errorf("container %s: the operator rewrote a CR-supplied SecurityContext (%+v); "+
+				"if that is now intended, docs/credential-isolation-design.md says otherwise",
+				c.Name, c.SecurityContext)
+		}
 	}
 }

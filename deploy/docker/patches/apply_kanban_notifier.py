@@ -30,14 +30,16 @@ appliers documented ("it sits after the handoff lines... so this patch composes
 with those instead of fighting them for the same lines, whatever order the
 build applies them in") stops existing: one edit produces both.
 
-The output is what the three old patches produced plus one added call —
-:data:`MARKER_CALL`, which records a terminal event whose wake the narrowing
-suppressed (section 4 of ``deploy/docker/patches/kanban_notifier.py``).
+The output is what the three old patches produced plus two added calls —
+:data:`INCIDENT_CALL`, which keys the delivered report to the chat thread it was
+posted in (section 5), and :data:`MARKER_CALL`, which records a terminal event
+whose wake the narrowing suppressed (section 4 of
+``deploy/docker/patches/kanban_notifier.py``).
 Everything else is byte-identical, comment text aside, and
 ``test_kanban_notifier.py``'s ``LegacyEquivalenceTest`` still asserts that
-against a replay of the old pipeline: it subtracts :data:`MARKER_CALL` and
-requires the remainder to match exactly, so the merge stays a refactor and the
-one new behaviour stays visible as one block. Upstream's now-unused
+against a replay of the old pipeline: it subtracts those two calls and
+requires the remainder to match exactly, so the merge stays a refactor and each
+new behaviour stays visible as one block. Upstream's now-unused
 ``lines = …`` assignments are kept rather than tidied away: they are upstream's
 code, not ours, and a patch that also edits the thing being patched cannot
 claim to be behaviour-preserving.
@@ -81,16 +83,26 @@ WAKE_INDENT = " " * 24
 # Covers both of upstream's hard slices (the 200-character one that severed a
 # published ledger URL down to ".../is" on 2026-08-03, and the 160-character one
 # in the no-summary branch) and ends where the hook has to go.
+#
+# v2026.8.13 added the two ``wake_handoff =`` lines: the same clipped string,
+# kept for the synthetic wake turn (#70752). They are carried through unchanged,
+# which means the wake turn inherits the un-severed clip for free — a strict
+# improvement on the hard slice, and the most this patch should do to them. The
+# full report is deliberately NOT handed to the wake turn: it goes on the
+# delivered message, below, where a human reads it. See section 1 of
+# gateway/kanban_notifier.py.
 
 HANDOFF_ANCHOR = (
     f"{HANDOFF_INDENT}if payload_summary:\n"
     f"{HANDOFF_INDENT}    lines = payload_summary.strip().splitlines()\n"
     f"{HANDOFF_INDENT}    h = lines[0][:200] if lines else payload_summary[:200]\n"
     f'{HANDOFF_INDENT}    handoff = f"\\n{{h}}"\n'
+    f"{HANDOFF_INDENT}    wake_handoff = h\n"
     f"{HANDOFF_INDENT}elif task and task.result:\n"
     f"{HANDOFF_INDENT}    lines = task.result.strip().splitlines()\n"
     f"{HANDOFF_INDENT}    r = lines[0][:160] if lines else task.result[:160]\n"
     f'{HANDOFF_INDENT}    handoff = f"\\n{{r}}"\n'
+    f"{HANDOFF_INDENT}    wake_handoff = r\n"
 )
 
 # Assignment, not ``+=``. In the branch that has no event summary the notifier
@@ -105,10 +117,12 @@ HANDOFF_PATCHED = (
     f"{HANDOFF_INDENT}    lines = payload_summary.strip().splitlines()\n"
     f"{HANDOFF_INDENT}    h = _clip_handoff(payload_summary)\n"
     f'{HANDOFF_INDENT}    handoff = f"\\n{{h}}"\n'
+    f"{HANDOFF_INDENT}    wake_handoff = h\n"
     f"{HANDOFF_INDENT}elif task and task.result:\n"
     f"{HANDOFF_INDENT}    lines = task.result.strip().splitlines()\n"
     f"{HANDOFF_INDENT}    r = _clip_handoff(task.result)\n"
     f'{HANDOFF_INDENT}    handoff = f"\\n{{r}}"\n'
+    f"{HANDOFF_INDENT}    wake_handoff = r\n"
     f"{HANDOFF_INDENT}handoff = _kanban_handoff_with_result(handoff, task)\n"
 )
 
@@ -116,14 +130,35 @@ HANDOFF_PATCHED = (
 
 WAKE_ANCHOR = (
     f'{WAKE_INDENT}_WAKE_KINDS = ("completed", "gave_up", "crashed", "timed_out", "blocked")\n'
-    f'{WAKE_INDENT}_wake_kinds = {{ev.kind for ev in d["events"] if ev.kind in _WAKE_KINDS}}\n'
+    f"{WAKE_INDENT}_wake_kinds = (\n"
+    f'{WAKE_INDENT}    {{ev.kind for ev in d["events"] if ev.kind in _WAKE_KINDS}}\n'
+    f"{WAKE_INDENT}    if wake_agent\n"
+    f"{WAKE_INDENT}    else set()\n"
+    f"{WAKE_INDENT})\n"
 )
 
-# `adapter=` is load-bearing, not decoration: without it the narrowing also
-# applies to adapters whose send() the notifier deliberately skips, where the
-# wake IS the delivery. See wake_kinds_for's docstring.
+# `adapter=` and `passive_delivered=` are both load-bearing, not decoration.
+# Each names one way the notifier reaches this point having sent no text ping,
+# and where nothing was sent the wake IS the delivery: narrowing it away drops
+# the completion on the floor. `adapter=` covers the non-push platforms;
+# `passive_delivered=send_passive` covers v2026.8.13's `delivery_mode="wake"`
+# subscriptions, which suppress the ping on a push adapter too. See
+# wake_kinds_for's docstring.
 #
-# The marker call is the one line here that is not upstream-equivalent. It has
+# ``if wake_agent else set()`` is upstream's, added in v2026.8.13 along with the
+# subscription's ``delivery_mode`` (notify / notify+wake / wake), and it is kept
+# verbatim rather than folded into the helper. The two gates answer different
+# questions and both have to hold: upstream's is "did this subscriber ask to be
+# woken at all", ours is "is this event kind worth a model turn". Collapsing
+# them would put a per-subscription setting inside a module-level config reader.
+#
+# Note that ``wake_agent`` and ``send_passive`` partition the three modes
+# differently and neither implies the other, which is the trap this arrangement
+# exists to avoid: ``notify`` has a ping and no wake, ``notify+wake`` has both,
+# and ``wake`` has a wake and no ping. Only the middle one has an already-
+# delivered answer for the narrowing to be redundant with.
+#
+# The marker call is the one block here that is not upstream-equivalent. It has
 # to sit at this exact point and no earlier: control only reaches the `else`
 # clause this block lives in when every text ping for the delivery has been
 # sent, which is what makes "its result was already delivered to this
@@ -132,20 +167,71 @@ WAKE_ANCHOR = (
 # after the line above. `self`, `task`, `sub` and `board_slug` are all already
 # in scope (the line above this anchor computes `task_terminal` from `task`,
 # and `self._kanban_unsub(sub, board_slug)` is called further down the same
-# block). See section 4 of gateway/kanban_notifier.py.
-WAKE_PATCHED = (
-    f"{WAKE_INDENT}# kube-agents patch: see gateway/kanban_notifier.py\n"
-    f'{WAKE_INDENT}_wake_kinds = _wake_kinds_for(d["events"], adapter=adapter)\n'
+# block).
+#
+# It takes `wake_configured=wake_agent` for the same reason the gate is kept
+# separate: with mode="notify" the wake set is empty because the *subscriber*
+# turned waking off, and a note claiming this patch suppressed the wake would be
+# a lie told on every completion of every notify-only card. See section 4 of
+# gateway/kanban_notifier.py.
+MARKER_CALL = (
     f"{WAKE_INDENT}_kanban_note_suppressed(\n"
     f'{WAKE_INDENT}    self, d["events"], _wake_kinds, task, sub, board_slug,\n'
+    f"{WAKE_INDENT}    wake_configured=wake_agent,\n"
     f"{WAKE_INDENT})\n"
 )
 
-#: The marker call, as emitted — the one block of :data:`WAKE_PATCHED` that the
-#: three superseded appliers had no counterpart for. Named here so
-#: ``test_kanban_notifier.py`` can subtract it and keep checking the rest of
-#: this applier's output against the legacy pipeline byte for byte.
-MARKER_CALL = "".join(WAKE_PATCHED.splitlines(keepends=True)[2:])
+# The second block with no legacy counterpart. It shares this anchor with the
+# marker call because it wants the same guarantee and the same locals: control
+# reaches here only once the text ping for this event has been sent, which is
+# what makes "the reader has this report" — the premise of storing it for them
+# to reply to — true rather than hopeful. `sub` carries the chat address
+# `tools/kanban_event_routing.py` substituted and `task` carries the report;
+# nowhere else in the notifier are both in scope at once with the delivery
+# already done.
+#
+# `ev`, not `d["events"]`, and that is the one place it deliberately differs
+# from the marker call beside it. This anchor is 24 spaces in, which puts it
+# inside `for ev in d["events"]:` as well as `for d in deliveries:` —
+# apply_kanban_progress_lines.py says the same thing about the same indent.
+# The marker call wants the delivery's whole kind set because it is reporting
+# what the narrowing suppressed across it; this one is asking whether *this*
+# send was the report. Handed the list, it would fire on a `commented` event
+# too, storing the row before the `completed` iteration below sends the report
+# it claims the reader has, and then storing it again on the iteration that
+# did. `INSERT OR IGNORE` would absorb the duplicate row; the premise and the
+# log line are what it would not absorb.
+#
+# `posted=send_passive` for the same reason the marker call takes it: with
+# delivery_mode="wake" the agent is woken and the thread gets no message, so
+# there is no delivered report to key to it. See wake_kinds_for's docstring.
+#
+# Ahead of MARKER_CALL, not after it. Neither can raise — both wrap everything —
+# but the order is the order the two records matter in: the row the *user's*
+# next message needs, then the note the *agent's* next turn needs. It reads
+# nothing the wake set produced, so unlike the marker call it has no dependency
+# on the assignment above.
+#
+# See section 5 of gateway/kanban_notifier.py.
+INCIDENT_CALL = (
+    f"{WAKE_INDENT}_kanban_store_incident(ev, task, sub, posted=send_passive)\n"
+)
+
+#: :data:`INCIDENT_CALL` and :data:`MARKER_CALL` above are the two blocks of
+#: :data:`WAKE_PATCHED` that the three superseded appliers had no counterpart
+#: for. Named separately so ``test_kanban_notifier.py`` can subtract them and
+#: keep checking the rest of this applier's output against the legacy pipeline
+#: byte for byte.
+WAKE_PATCHED = (
+    f"{WAKE_INDENT}# kube-agents patch: see gateway/kanban_notifier.py\n"
+    f"{WAKE_INDENT}_wake_kinds = (\n"
+    f'{WAKE_INDENT}    _wake_kinds_for(\n'
+    f'{WAKE_INDENT}        d["events"], adapter=adapter, passive_delivered=send_passive\n'
+    f"{WAKE_INDENT}    )\n"
+    f"{WAKE_INDENT}    if wake_agent\n"
+    f"{WAKE_INDENT}    else set()\n"
+    f"{WAKE_INDENT})\n"
+) + INCIDENT_CALL + MARKER_CALL
 
 EDITS = (
     ("completion handoff", HANDOFF_ANCHOR, HANDOFF_PATCHED),
@@ -154,14 +240,15 @@ EDITS = (
 
 # Appended rather than inserted: unlike a `check_fn=`, these names are resolved
 # when the notifier loop runs, long after the module finishes importing. One
-# trailer for all three, which is the other half of the merge — the notifier now
-# names a single kube-agents module instead of three.
+# trailer for all of them, which is the other half of the merge — the notifier
+# now names a single kube-agents module instead of three.
 TRAILER = (
     "\n\n# kube-agents patch: see gateway/kanban_notifier.py\n"
     "from gateway.kanban_notifier import (  # noqa: E402\n"
     "    clip_handoff as _clip_handoff,\n"
     "    handoff_with_result as _kanban_handoff_with_result,\n"
     "    note_suppressed_completion as _kanban_note_suppressed,\n"
+    "    store_incident_report as _kanban_store_incident,\n"
     "    wake_kinds_for as _wake_kinds_for,\n"
     ")\n"
 )
@@ -171,9 +258,17 @@ TRAILER = (
 #: message blames upstream drift for what is actually a duplicated build step,
 #: and before the old delivery applier grew this guard a second pass exited 0
 #: and left a second hook call and a second trailer import behind.
+#:
+#: The wake sentinel is the helper's argument line, not the whole assignment and
+#: not the call opener: v2026.8.13's ``delivery_mode`` gate made the patched
+#: statement a parenthesized conditional, so ``_wake_kinds = `` and the call no
+#: longer share a line, and the arguments now wrap onto their own line too. The
+#: argument text is what is unique in the file — the trailer's
+#: ``wake_kinds_for as _wake_kinds_for`` import does not carry the arguments,
+#: and ``_wake_kinds_for(`` alone would also match that import's alias.
 SENTINELS = (
     "handoff = _kanban_handoff_with_result(handoff, task)",
-    '_wake_kinds = _wake_kinds_for(d["events"], adapter=adapter)',
+    'd["events"], adapter=adapter, passive_delivered=send_passive',
     "_kanban_note_suppressed(",
 )
 
