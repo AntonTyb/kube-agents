@@ -533,9 +533,15 @@ def sanitize_untrusted_text(text: str, max_length: int = 8192) -> str:
     #    `< /untrusted_title>` and `<untrusted_title/>` are the same trick, and the
     #    self-closing spelling used to walk through and reach the model looking like
     #    a boundary marker from inside the boundary.
+    #    One quantifier each side of the name, and `[^>]*` rather than a lazy
+    #    `\s+[^>]*?` followed by another `[/\s]*`. Two quantifiers that can both
+    #    match the same run of spaces make the failure case cubic: `<system`
+    #    followed by 3,200 spaces and no `>` took 11.7 seconds, 8x per doubling,
+    #    and the 8,192-character cap above is the only bound on it. Any GitHub
+    #    account can put that in an issue body, and `poll` sanitizes the title,
+    #    the body and every comment on every tick.
     cleaned = re.sub(
-        r"<[/\s]*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)"
-        r"(?:\s+[^>]*?)?[/\s]*>",
+        r"<[/\s]*(system|instruction|prompt|context|admin|untrusted_[a-z0-9_-]+)\b[^>]*>",
         r"[\1_tag_neutralized]",
         cleaned,
         flags=re.IGNORECASE,
@@ -807,6 +813,29 @@ _IMPERATIVE_OPENERS = set(_TIER3_VERBS) | {
     "cleanup", "teardown", "rollback", "purge", "drop",
 }
 
+# What has to follow the verb before a leading verb is read as an order.
+#
+# Nearly every verb in `_TIER3_VERBS` is also an ordinary English noun or noun
+# modifier, and Kubernetes prose is made of them: "Restart loop on the nginx
+# ingress pod", "Drop in QPS after the 1.29 upgrade", "Taint toleration not
+# respected", "Evict events flooding the audit log", and the literal
+# `kubectl describe pod` line "Restart count: 45". Reading a leading verb as an
+# imperative on its own escalated all of those — ordinary diagnostics, removed
+# from autonomous triage and parked on a human, which is the opposite of what
+# this skill is for.
+#
+# An English imperative takes a direct object, so a determiner or quantifier
+# after the verb is the cheap discriminator: "Delete *the* deployment" and "Drop
+# *the* old namespace" are orders, "Restart *loop*" and "Drop *in* QPS" are noun
+# phrases. Failing this test only rules out the bare-imperative reading — the
+# request-marker path still runs, which is what keeps "Please delete namespace
+# prod" (no determiner anywhere) graded TIER_3.
+_DETERMINER_RE = re.compile(
+    r"(?:the|a|an|all|any|these|those|this|that|our|my|your|their|its|every|"
+    r"each|both|some|old|stale|unused|orphaned|leftover|dangling)\b",
+    re.IGNORECASE,
+)
+
 
 def _is_negated(text: str, start: int) -> bool:
     """True when the verb at `start` is preceded by a negation in its clause.
@@ -860,7 +889,10 @@ def _starts_with_imperative(title: str) -> bool:
         return False
     # Compared with separators removed so "Clean up", "clean-up" and "Cleanup"
     # are the one word a reader hears in all three.
-    return _normalize_verb(first.group(1)) in _IMPERATIVE_OPENERS
+    if _normalize_verb(first.group(1)) not in _IMPERATIVE_OPENERS:
+        return False
+    # ...and it has to be governing an object. See `_DETERMINER_RE`.
+    return bool(_DETERMINER_RE.match(title[first.end():].lstrip()))
 
 
 def _is_directive_occurrence(text: str, match: "re.Match") -> bool:
@@ -882,9 +914,16 @@ def _is_directive_occurrence(text: str, match: "re.Match") -> bool:
 
     stripped = re.sub(r"^[\s>*+\-#\d.)\]]+", "", clause)
     stripped = re.sub(r"^(?:please|kindly)[\s,]*", "", stripped, flags=re.IGNORECASE)
-    if not stripped.strip() and _normalize_verb(match.group(0)) in _IMPERATIVE_OPENERS:
+    if (
+        not stripped.strip()
+        and _normalize_verb(match.group(0)) in _IMPERATIVE_OPENERS
+        and _DETERMINER_RE.match(text[match.end():].lstrip())
+    ):
         return True
 
+    # Falling out of that is not a verdict: it says this occurrence is not a
+    # bare imperative, not that it is not a request. "Please delete namespace
+    # prod" carries no determiner and is still an order.
     markers = list(_REQUEST_RE.finditer(clause))
     if not markers:
         return False

@@ -27,6 +27,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1097,6 +1098,40 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         cleaned_backticks = resolver.sanitize_untrusted_text(backtick_payload, max_length=8192)
         self.assertIn("[TRUNCATED: Exceeded 8192 character limit]", cleaned_backticks)
 
+    def test_an_unterminated_tag_does_not_stall_the_neutralizer(self):
+        """A tag name followed by whitespace and no `>` is the pathological input.
+
+        The case above puts its padding *before* the keyword, so truncation cuts
+        the payload down to 8,192 spaces with no `system` left in it and the
+        neutralizer never starts. Padding *after* the keyword is what makes the
+        regex work: it has to try every way of splitting that run between the
+        quantifiers on either side of the name.
+
+        A form of this regex with two quantifiers able to consume the same run
+        was cubic — 3,200 spaces took 11.7 seconds, eight times more per
+        doubling, and the 8,192-character cap was the only bound. `poll`
+        sanitizes the title, the body and every comment on every tick, and
+        anyone with a GitHub account can open an issue, so that is the whole
+        watcher wedged past ``RESOLVER_TIMEOUT_S`` for as long as the issue is
+        open.
+
+        Timed rather than asserted on shape: the defect is not visible in the
+        output, only in how long it takes to produce it.
+        """
+        budget_s = 5.0
+        for pad in (2048, 8192, 20000):
+            with self.subTest(pad=pad):
+                payload = "<system" + " " * pad
+                start = time.monotonic()
+                resolver.sanitize_untrusted_text(payload)
+                elapsed = time.monotonic() - start
+                self.assertLess(
+                    elapsed,
+                    budget_s,
+                    f"neutralizing '<system' + {pad} spaces took {elapsed:.1f}s; "
+                    "the regex has regained a backtracking path",
+                )
+
     def test_calculate_issue_priority_p0(self):
         issue = {
             "number": 50,
@@ -1388,6 +1423,21 @@ class RiskTierCorpusTest(unittest.TestCase):
         ("Cluster listing fails", "We ran gcloud container clusters list and got an error\nThe operator will delete nothing here"),
         # A status update is not an order, however imperative the first word.
         ("Removed nodes still show in the console", "Removed the deployment yesterday and it still lists."),
+        # Nearly every verb in the TIER_3 list is also an ordinary noun or noun
+        # modifier, and Kubernetes prose is built out of them. A leading verb
+        # read as an imperative on its own escalated all of these — and the
+        # last two are literal `kubectl describe pod` output, so pasting a pod
+        # description into an issue was enough to park it on a human.
+        ("Restart loop on the nginx ingress pod", ""),
+        ("Drop in QPS after the 1.29 upgrade", ""),
+        ("Taint toleration not respected", ""),
+        ("Reset connection errors from the sidecar", ""),
+        ("Kill switch documentation is wrong", ""),
+        ("Rollback of the 1.29 upgrade left orphaned pods", ""),
+        ("Drain timeout too aggressive on node pool b", ""),
+        ("Evict events flooding the audit log", ""),
+        ("CrashLoopBackOff in checkout-api", "Restart count: 45"),
+        ("Pod unhealthy", "Restart count: 45\nLast State: Terminated"),
         # Polite requests for a *diagnosis*. Every one of these carries a
         # request marker and a mutating verb, and grading the pair as a
         # request escalated the most ordinary ticket the resolver ever sees.
