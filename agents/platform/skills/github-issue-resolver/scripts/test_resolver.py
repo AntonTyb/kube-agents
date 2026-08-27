@@ -1098,8 +1098,15 @@ class TestResolverSecurityAndPrioritization(unittest.TestCase):
         truncation marker came back. A fence neutralizer that can start a match
         at every backtick in a run is quadratic, and `poll` runs it over every
         comment on the issue.
+
+        The budget has to sit between the two, and a generous-looking one is
+        not automatically safe: at 5 s this test still passed with the
+        quadratic neutralizer restored, which is the whole defect it is named
+        for. Either payload runs in about 1.5 ms once the lookbehind is in
+        place and about 1,040 ms without it, so 250 ms is ~130x headroom over
+        healthy and ~4x under the defect.
         """
-        budget_s = 5.0
+        budget_s = 0.25
         for label, payload in (
             ("whitespace", "<" + " " * 65000 + "system"),
             ("backticks", "`" * 65000 + "system"),
