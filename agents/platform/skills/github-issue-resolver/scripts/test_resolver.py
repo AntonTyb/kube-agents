@@ -592,10 +592,13 @@ class HandlePollRoutingTest(unittest.TestCase):
     def test_poll_ranks_over_a_window_wider_than_one_page(self):
         """Ranking only means something if the query returns enough to rank.
 
-        `gh issue list --search` answers newest-first. At the old `--limit 10` a
-        P0 with ten newer tickets in front of it was never in the list the
-        ranking saw, so the priority sort re-ordered a page that had already
-        excluded the issue it existed to promote.
+        `--search` goes to the search API, and without a `sort:` qualifier its
+        ordering is GitHub's relevance ranking rather than anything this code
+        can predict — see the comment on the query in `resolver.py`. Whatever
+        that order turns out to be, at the old `--limit 10` a P0 sitting
+        eleventh in it was never in the list the ranking saw, so the priority
+        sort re-ordered a page that had already excluded the issue it existed
+        to promote.
         """
         record = []
         self._poll("https://github.com/acme/toolkit", record=record)
@@ -614,7 +617,13 @@ class HandlePollRoutingTest(unittest.TestCase):
             self.assertIn(field, projection)
 
     def test_poll_still_reports_when_the_comment_fetch_fails(self):
-        """Comments are context for the investigation, not the finding itself."""
+        """Comments are context for the investigation, not the finding itself.
+
+        The failure is warned about on stderr because the payload cannot carry
+        it: `"comments": []` is also what an issue with no comments looks like,
+        so without the warning a report written from a partial view of the
+        thread is indistinguishable from a complete one.
+        """
         issues = [{"number": 7, "title": "first", "body": "b", "labels": []}]
         payload = self._poll(
             "https://github.com/acme/toolkit",
@@ -625,6 +634,7 @@ class HandlePollRoutingTest(unittest.TestCase):
         self.assertEqual(payload["status"], "FOUND")
         self.assertEqual(payload["issue_number"], 7)
         self.assertEqual(payload["comments"], [])
+        self.assertIn("could not fetch comments for issue #7", self.stderr)
 
     def test_no_routing_path_raises_systemexit(self):
         """poll's contract is JSON on stdout, never a bare non-zero exit."""

@@ -656,12 +656,22 @@ def _fetch_comments(repo: str, number) -> list:
     context for the investigation, not the thing being investigated: an issue
     the agent can still read the title and body of is worth reporting, and a
     poll that died here would take the whole FOUND payload with it.
+
+    A failure is warned about on stderr, though, because the payload cannot
+    tell the two apart: `"comments": []` is what an issue with no comments
+    looks like too, so an investigation that silently lost the reporter's
+    follow-up context would read as a complete one.
     """
     res = run_gh(
         ["issue", "view", str(number), "-R", repo, "--json", "comments"],
         check=False,
     )
     if res.returncode != 0:
+        print(
+            f"Warning: could not fetch comments for issue #{number}; "
+            "continuing with title and body only.",
+            file=sys.stderr,
+        )
         return []
     try:
         payload = json.loads(res.stdout)
