@@ -204,6 +204,13 @@ registered commented-out leaves its domain honestly uncovered until it activates
 activating it forces the allowlist edit in `domains.yaml` in the same change. devops-bench
 ignores the extra key (`extra: "ignore"` on its task model), so the field is free to carry.
 
+A task may also carry a top-level `expected_fail: true`, which inverts the presubmit's verdict for
+it: failing is the declared outcome, and _passing_ every repetition is what reports. That is the
+eval-driven-development marker — write the case for a gap before the fix exists, land it
+expected-fail, and the flip to `false` shows up in the diff that closes the gap. It defaults to
+`false`, so no existing task needs the field, and like `domain:` it is read by `bench-gate` rather
+than by devops-bench.
+
 A new task must also be registered: the presubmit runs only what the `TASKS` array in
 `hack/ci-eval-pr.sh` names, and `scripts/test_task_registration.py` fails the build for a
 task that appears nowhere. A commented-out `TASKS` entry counts as registered, pending
@@ -281,6 +288,10 @@ Things the loader will hold you to:
 - **`id` also accepts `task_id`,** and `prompt` also accepts `goal` or `input`, for older
   specs. Those aliases are upstream compatibility for other people's corpora: a task in
   this repository uses `id` and `prompt`, and the validator rejects `task_id`.
+- **The directory name is the case identity,** and `bench-gate` refuses a task whose `id` disagrees
+  with it. devops-bench joins on the folder — it writes `folder:` into the record and `taskFolder:`
+  into `rows.json` — and `baselines/<id>.jsonl` joins on the same string, so a task that answers to
+  two names would score against another case's evidence.
 
 Placeholders are substituted in the prompt, the expected output, and the verification spec:
 `{{PROJECT_ID}}`, `{{CLUSTER_NAME}}`, `{{APP_LOCATION}}`, `{{TARGET_DEPLOYMENT_NAME}}`,
