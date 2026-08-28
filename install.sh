@@ -53,6 +53,10 @@ on_error() {
 }
 trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
 
+# Sourced/baked release version. On developer checkouts (main), this is empty.
+# Release automation stamps this value (e.g. BAKED_RELEASE_VERSION="0.2.0") when publishing a GA release.
+BAKED_RELEASE_VERSION=""
+
 # ─── Agentic & Automation Parameter States ────────────────────────────────────
 PARAM_NON_INTERACTIVE="${NONINTERACTIVE:-false}"
 PARAM_DRY_RUN="${DRY_RUN:-false}"
@@ -377,11 +381,16 @@ cluster_mode_label() {
 }
 
 # The image tag doubles as the source ref that verify_local_source_ref checks the
-# checkout against, so HEAD is the natural default: it is an immutable 40-character
-# SHA and it is exactly the revision of the scripts about to run. Empty when the
-# installer runs outside a Git worktree (curl | bash), where the caller must supply one.
+# checkout against. When downloaded as an official release via curl | bash, the baked
+# release tag takes precedence. In local Git checkouts, an exact SemVer release tag or
+# HEAD commit SHA is used as the default.
 default_image_tag() {
   local repo_dir="${1:-.}"
+  # 1. Baked release version takes precedence (for curl | bash from official release URLs)
+  if [ -n "${BAKED_RELEASE_VERSION:-}" ]; then
+    echo "$BAKED_RELEASE_VERSION"
+    return 0
+  fi
   # Only a kube-agents checkout may supply the default. Without this guard,
   # running the curl | bash one-liner from inside any unrelated Git repository
   # would offer that repository's HEAD, which then fails at `git fetch` for a
@@ -389,6 +398,21 @@ default_image_tag() {
   if [ ! -f "${repo_dir}/k8s-operator/scripts/installer_common.sh" ]; then
     return 0
   fi
+  # 2. Check if local git repo is checked out at an exact SemVer release tag
+  local exact_tag=""
+  exact_tag="$(git -C "$repo_dir" describe --tags --exact-match --match="[0-9]*" 2>/dev/null || echo "")"
+  if [[ "$exact_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+    echo "$exact_tag"
+    return 0
+  fi
+  # 3. Check if running inside an unpacked release archive directory (e.g. kube-agents-0.1.0 or kube-agents-0.2.0)
+  local base_dir=""
+  base_dir="$(basename "$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")")"
+  if [[ "$base_dir" =~ ^kube-agents-([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  # 4. Fall back to local HEAD commit SHA for developer iterations
   git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo ""
 }
 
@@ -396,13 +420,20 @@ default_image_tag() {
 # it the way git does and say where it came from. Empty outside a Git worktree.
 default_image_tag_label() {
   local repo_dir="${1:-.}"
-  if [ ! -f "${repo_dir}/k8s-operator/scripts/installer_common.sh" ]; then
+  local tag
+  tag="$(default_image_tag "$repo_dir")"
+  if [ -z "$tag" ]; then
     return 0
   fi
-  local short=""
-  short="$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || echo "")"
-  if [ -n "$short" ]; then
-    printf 'local HEAD checkout %s' "$short"
+
+  if [ -n "${BAKED_RELEASE_VERSION:-}" ] && [ "$tag" = "$BAKED_RELEASE_VERSION" ]; then
+    printf 'official release %s' "$tag"
+  elif [ "$tag" = "$(git -C "$repo_dir" describe --tags --exact-match --match="[0-9]*" 2>/dev/null || echo "")" ]; then
+    printf 'release tag %s' "$tag"
+  elif [[ "$(basename "$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")")" =~ ^kube-agents-${tag}$ ]]; then
+    printf 'release archive %s' "$tag"
+  else
+    printf 'local HEAD checkout %s' "${tag:0:7}"
   fi
 }
 
@@ -455,6 +486,13 @@ verify_local_source_ref() {
   fi
 
   if ! git -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # In official stamped release archives (unpacked tarball/zip outside Git),
+    # BAKED_RELEASE_VERSION is stamped during release automation.
+    if [ -n "${BAKED_RELEASE_VERSION:-}" ] && [ "${BAKED_RELEASE_VERSION}" = "${expected_ref}" ]; then
+      SOURCE_REF_VERIFIED="${repo_dir}@${expected_ref}"
+      print_success "Verified install sources match baked official release ${BAKED_RELEASE_VERSION}."
+      return 0
+    fi
     if [ "$lenient" = "true" ]; then
       print_warning "Cannot verify source/image alignment because '$repo_dir' is not a Git worktree."
       SOURCE_REF_VERIFIED="${repo_dir}@${expected_ref}"
@@ -531,7 +569,11 @@ acquire_source_repo() {
     else
       print_info "Cloning kube-agents install sources at '$expected_ref' into $resolved_dir..."
       git clone --filter=blob:none --no-checkout https://github.com/gke-labs/kube-agents.git "$resolved_dir"
-      git -C "$resolved_dir" fetch --depth=1 origin "$expected_ref"
+      if [[ "$expected_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        git -C "$resolved_dir" fetch --depth=1 https://github.com/gke-labs/kube-agents.git "$expected_ref"
+      else
+        git -C "$resolved_dir" fetch --depth=1 https://github.com/gke-labs/kube-agents.git "+refs/tags/${expected_ref}:refs/tags/${expected_ref}"
+      fi
       git -C "$resolved_dir" checkout --detach FETCH_HEAD
     fi
     cd "$resolved_dir"
@@ -1442,7 +1484,7 @@ main() {
         exit 1
       fi
       image_tag="$head_sha"
-      print_info "Defaulting image tag to the checkout's HEAD: ${C_BOLD}${image_tag}${C_RESET}"
+      print_info "Defaulting image tag to $(default_image_tag_label): ${C_BOLD}${image_tag}${C_RESET}"
     else
       prompt_read "Container image tag (validated release tag or full commit SHA)" \
         image_tag "$head_sha" false "$(default_image_tag_label)"

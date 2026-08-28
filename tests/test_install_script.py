@@ -18,6 +18,7 @@ from tests.testing.common import (
     INVALID_IMMUTABLE_REFS,
     MOCK_GOOGLE_CHAT_MODE,
     VALID_IMMUTABLE_REFS,
+    create_mock_git_repo,
     get_isolated_test_env,
 )
 
@@ -88,6 +89,87 @@ KUBE_AGENTS_SOURCE_ONLY=true source "{_INSTALL_SH}"
         proc = self._run_install_func(cmd)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(f"DIR={_REPO_ROOT}", proc.stdout)
+
+    def test_acquire_source_repo_refuses_to_mutate_dirty_existing_repo(self):
+        """Verifies acquire_source_repo uses existing HOME/kube-agents and verify_local_source_ref rejects dirty checkout."""
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        try:
+            home_dir = pathlib.Path(temp_dir.name) / "home"
+            repo_dir = home_dir / "kube-agents"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True)
+            (repo_dir / "file.txt").write_text("initial\n")
+            subprocess.run(["git", "add", "file.txt"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "tag", "0.2.0"], cwd=str(repo_dir), check=True)
+
+            # Make working tree dirty
+            (repo_dir / "file.txt").write_text("dirty changes\n")
+
+            outside_dir = pathlib.Path(temp_dir.name) / "outside"
+            outside_dir.mkdir()
+            isolated_install_sh = outside_dir / "install.sh"
+            isolated_install_sh.write_text(_INSTALL_SH.read_text())
+
+            cmd = 'out_dir=""; acquire_source_repo out_dir "0.2.0"'
+            setup = f"""
+KUBE_AGENTS_SOURCE_ONLY=true source "{isolated_install_sh}"
+{cmd}
+"""
+            proc = subprocess.run(
+                ["bash", "-c", setup],
+                capture_output=True,
+                text=True,
+                env={"HOME": str(home_dir), "PATH": os.environ["PATH"]},
+                cwd=str(outside_dir),
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Using existing repository", proc.stdout)
+            self.assertIn("without modifying local changes", proc.stdout)
+            self.assertIn("dirty checkout", proc.stdout)
+        finally:
+            temp_dir.cleanup()
+
+    def test_acquire_source_repo_uses_clean_existing_repo_without_modifying_changes(self):
+        """Verifies acquire_source_repo uses clean existing HOME/kube-agents without mutating branch/checkout."""
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        try:
+            home_dir = pathlib.Path(temp_dir.name) / "home"
+            repo_dir = home_dir / "kube-agents"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True)
+            (repo_dir / "file.txt").write_text("initial\n")
+            subprocess.run(["git", "add", "file.txt"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "tag", "0.2.0"], cwd=str(repo_dir), check=True)
+
+            outside_dir = pathlib.Path(temp_dir.name) / "outside"
+            outside_dir.mkdir()
+            isolated_install_sh = outside_dir / "install.sh"
+            isolated_install_sh.write_text(_INSTALL_SH.read_text())
+
+            cmd = 'out_dir=""; acquire_source_repo out_dir "0.2.0"; echo "RESOLVED=$out_dir"'
+            setup = f"""
+KUBE_AGENTS_SOURCE_ONLY=true source "{isolated_install_sh}"
+{cmd}
+"""
+            proc = subprocess.run(
+                ["bash", "-c", setup],
+                capture_output=True,
+                text=True,
+                env={"HOME": str(home_dir), "PATH": os.environ["PATH"]},
+                cwd=str(outside_dir),
+            )
+            self.assertEqual(proc.returncode, 0, f"Failed: {proc.stderr}")
+            self.assertIn("Using existing repository", proc.stdout)
+            self.assertIn("without modifying local changes", proc.stdout)
+            self.assertIn(f"RESOLVED={repo_dir}", proc.stdout)
+        finally:
+            temp_dir.cleanup()
 
     def test_parse_args_google_chat_mode(self):
         """Verifies parse_args captures --google-chat-mode."""
@@ -349,6 +431,99 @@ KUBE_AGENTS_SOURCE_ONLY=true source "{_INSTALL_SH}"
             with self.subTest(line=line):
                 self.assertIn("DEFAULT_VERTEX_LOCATION", line)
                 self.assertNotIn("$region", line)
+
+    def test_default_image_tag_returns_baked_release_version(self):
+        """Verifies default_image_tag prioritizes BAKED_RELEASE_VERSION when defined."""
+        cmd = 'BAKED_RELEASE_VERSION="0.2.0"; default_image_tag'
+        proc = self._run_install_func(cmd)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "0.2.0")
+
+    def test_default_image_tag_label_returns_official_release(self):
+        """Verifies default_image_tag_label formats baked release version label."""
+        cmd = 'BAKED_RELEASE_VERSION="0.2.0"; default_image_tag_label'
+        proc = self._run_install_func(cmd)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "official release 0.2.0")
+
+    def test_default_image_tag_falls_back_to_head_sha(self):
+        """Verifies default_image_tag defaults to local HEAD SHA in developer checkouts."""
+        cmd = 'BAKED_RELEASE_VERSION=""; default_image_tag'
+        proc = self._run_install_func(cmd)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertRegex(
+            proc.stdout.strip(),
+            r"^([0-9a-f]{40}|[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)$",
+            f"Expected valid 40-character SHA or SemVer tag, got: {proc.stdout.strip()}",
+        )
+
+    def test_default_image_tag_resolves_semver_when_multiple_tags_present(self):
+        """Verifies default_image_tag prefers numeric SemVer tag over rc_*_validated tags on the same commit."""
+        temp_dir, repo_dir, git = create_mock_git_repo()
+        try:
+            # Add installer_common.sh so repo is recognized as kube-agents
+            scripts_dir = pathlib.Path(repo_dir) / "k8s-operator" / "scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            (scripts_dir / "installer_common.sh").write_text("# mock installer_common.sh\n")
+            git("add", "k8s-operator/scripts/installer_common.sh")
+            git("commit", "-m", "chore: add installer_common.sh")
+
+            # Apply both an rc_* tag and a 0.2.0 GA tag on the same commit
+            git("tag", "rc_20260827_validated")
+            git("tag", "0.2.0")
+
+            cmd = 'BAKED_RELEASE_VERSION=""; default_image_tag'
+            proc = self._run_install_func(cmd, cwd=repo_dir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), "0.2.0")
+        finally:
+            temp_dir.cleanup()
+
+    def test_default_image_tag_extracts_version_from_archive_directory(self):
+        """Verifies default_image_tag resolves version from unpacked archive directory name."""
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="archive-test-") as outer_dir:
+            archive_dir = pathlib.Path(outer_dir) / "kube-agents-0.2.0"
+            archive_dir.mkdir(parents=True)
+            scripts_dir = archive_dir / "k8s-operator" / "scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "installer_common.sh").write_text("# mock installer_common.sh\n")
+
+            cmd = 'BAKED_RELEASE_VERSION=""; default_image_tag'
+            proc = self._run_install_func(cmd, cwd=archive_dir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), "0.2.0")
+
+    def test_verify_local_source_ref_accepts_baked_release_in_non_git_dir(self):
+        """Verifies verify_local_source_ref succeeds for unpacked release archive without Git repository."""
+        with tempfile.TemporaryDirectory(prefix="unpacked-release-") as outer_dir:
+            archive_dir = pathlib.Path(outer_dir) / "kube-agents-0.2.0"
+            archive_dir.mkdir(parents=True)
+
+            cmd = f'BAKED_RELEASE_VERSION="0.2.0"; verify_local_source_ref "{archive_dir}" "0.2.0"'
+            proc = self._run_install_func(cmd, cwd=archive_dir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("Verified install sources match baked official release 0.2.0", proc.stdout)
+
+    def test_verify_local_source_ref_in_git_worktree_enforces_git_alignment_even_with_baked_version(self):
+        """Verifies verify_local_source_ref strictly runs Git alignment in real Git checkouts even with baked version."""
+        with tempfile.TemporaryDirectory(prefix="git-repo-") as repo_dir:
+            repo_path = pathlib.Path(repo_dir)
+            subprocess.run(["git", "init"], cwd=str(repo_path), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_path), check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_path), check=True)
+            (repo_path / "file.txt").write_text("initial\n")
+            subprocess.run(["git", "add", "file.txt"], cwd=str(repo_path), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo_path), check=True)
+            subprocess.run(["git", "tag", "0.2.0"], cwd=str(repo_path), check=True)
+
+            # Add an uncommitted modification to make working tree dirty
+            (repo_path / "file.txt").write_text("dirty uncommitted change\n")
+
+            cmd = f'BAKED_RELEASE_VERSION="0.2.0"; verify_local_source_ref "{repo_path}" "0.2.0"'
+            proc = self._run_install_func(cmd, cwd=repo_path)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("dirty checkout", proc.stdout)
 
 
 class EnsureExistingClusterNetworkPolicyTest(unittest.TestCase):
