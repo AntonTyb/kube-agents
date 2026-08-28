@@ -17,8 +17,16 @@ reach an agent before it decides to wait, so `AGENTS.md` states it and only the 
 it is here. `AGENTS.md` is loaded into every session and this page is not, so anything that has to
 fire before an agent thinks to open a link belongs on that side of the line, not this one.
 
+The split is by form, not by topic: this page owns the mechanics that are commands, and
+[`.agents/rules/`](../.agents/rules/) owns the ones that are prose. `AGENTS.md` had no budget left
+to hold prose mechanics itself, so the pre-PR passes' went to
+[`.agents/rules/pre_pr_review.md`](../.agents/rules/pre_pr_review.md) and the workflow-authoring
+rules' to [`.agents/rules/github_actions.md`](../.agents/rules/github_actions.md). A mechanic with
+no command in it goes there rather than here, whichever rule it serves.
+
 Related: [`.agents/skills/review-preflight/SKILL.md`](../.agents/skills/review-preflight/SKILL.md)
-owns the pre-PR review plumbing, and
+owns the pre-PR review plumbing,
+[`.agents/rules/`](../.agents/rules/) owns the rules an agent follows by family, and
 [`.claude/commands/pr-review-batch.md`](../.claude/commands/pr-review-batch.md) owns the mechanics of
 reviewing somebody else's pull request.
 
