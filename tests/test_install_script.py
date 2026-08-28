@@ -611,5 +611,136 @@ class EnsureExistingClusterNetworkPolicyTest(unittest.TestCase):
         self.assertEqual(self._updates(calls), [])
 
 
+class ImportGithubPemKmsKeyTest(unittest.TestCase):
+    """The KMS signing key import_github_pem creates for the token minter.
+
+    KMS refuses an import-only key created without
+    --skip-initial-version-creation -- `INVALID_ARGUMENT: Import-only keys
+    must skip initial version creation` -- which made the minter impossible
+    to provision at all. The flag sits mid-way through a five-line wrapped
+    invocation, so dropping it again would look like nothing in a diff.
+    """
+
+    def _run(self, creates_fail=False):
+        """import_github_pem against a stub gcloud that records every call.
+
+        The stub reports no ENABLED key version, so the import is not
+        short-circuited, and fails `keys describe`, which takes the
+        could-not-be-confirmed branch. That branch returns before the Minty
+        CLI clone, which is what keeps this a unit test.
+
+        creates_fail makes both `kms … create` calls exit non-zero on stderr,
+        the way KMS answers a re-run once the keyring exists. That is the only
+        path that exercises the error capture at all, so the default of 0
+        leaves it untested -- see the ERR-trap test below.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = pathlib.Path(tmp) / "bin"
+            bin_dir.mkdir()
+            log = pathlib.Path(tmp) / "gcloud.log"
+            pem = pathlib.Path(tmp) / "app.pem"
+            pem.write_text("-----BEGIN RSA PRIVATE KEY-----\n")
+            create_case = (
+                "  *'kms keyrings create'* | *'kms keys create'*)\n"
+                "    echo 'ALREADY_EXISTS: it already exists' >&2; exit 1 ;;\n"
+                if creates_fail
+                else ""
+            )
+            gcloud = bin_dir / "gcloud"
+            gcloud.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf '%s\\n' \"$*\" >> '{log}'\n"
+                'case "$*" in\n'
+                "  *'kms keys versions list'*) exit 0 ;;\n"
+                "  *'kms keys describe'*) exit 1 ;;\n"
+                f"{create_case}"
+                "esac\n"
+                "exit 0\n"
+            )
+            gcloud.chmod(gcloud.stat().st_mode | stat.S_IEXEC)
+            body = (
+                f'KUBE_AGENTS_SOURCE_ONLY=true source "{_INSTALL_SH}"\n'
+                f'source "{_INSTALLER_COMMON}"\n'
+                "GITHUB_ORG=an-org GITHUB_REPO=a-repo GITHUB_APP_ID=12345 "
+                f'GITHUB_PEM_PATH="{pem}" import_github_pem a-project us-central1-a\n'
+            )
+            proc = subprocess.run(
+                ["bash", "-c", body],
+                capture_output=True,
+                text=True,
+                env=get_isolated_test_env(bin_dir=str(bin_dir)),
+                cwd=str(_REPO_ROOT),
+            )
+            calls = log.read_text().splitlines() if log.exists() else []
+            return proc, calls
+
+    def test_the_import_only_key_is_created_skipping_the_initial_version(self):
+        proc, calls = self._run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        creates = [c for c in calls if "kms keys create" in c]
+        self.assertEqual(
+            len(creates), 1, f"expected exactly one `kms keys create`, got: {calls}"
+        )
+        create = creates[0]
+        for flag in (
+            "--skip-initial-version-creation",
+            "--import-only",
+            "--purpose=asymmetric-signing",
+        ):
+            self.assertIn(
+                flag,
+                create,
+                f"`gcloud kms keys create` must pass {flag}; KMS rejects an "
+                f"import-only key without --skip-initial-version-creation. Call: {create}",
+            )
+
+    def test_a_zonal_region_is_reduced_to_the_kms_region(self):
+        """KMS locations are regional. The caller passes install.sh's --region,
+        which may be a zone."""
+        _, calls = self._run()
+        creates = [c for c in calls if "kms keys create" in c]
+        self.assertIn("--location=us-central1 ", creates[0] + " ", creates)
+
+    def test_a_key_that_cannot_be_confirmed_warns_instead_of_importing(self):
+        """The describe assertion, not the create, is what surfaces a failure.
+
+        Without it the run continues to the PEM import and fails two steps
+        later against a key that is not there.
+        """
+        proc, calls = self._run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # install.sh's print_warning / print_info write to stdout.
+        self.assertIn("could not be confirmed to exist", proc.stdout)
+        self.assertIn("--skip-initial-version-creation", proc.stdout)
+        self.assertEqual(
+            [c for c in calls if "versions import" in c],
+            [],
+            "the PEM must not be imported into a key that could not be confirmed",
+        )
+
+    def test_a_failing_create_is_reported_without_a_spurious_abort_banner(self):
+        """"Already exists" is the expected answer on a re-run, not an abort.
+
+        install.sh:54 installs an ERR trap, and bash 3.2 -- macOS's /bin/bash,
+        the curl|bash audience -- runs an inherited ERR trap inside a command
+        substitution even when `|| true` handles the failure outside it. Without
+        `trap - ERR` in the substitution the ordinary re-run prints on_error's
+        fatal banner twice and leaves a FAILED install report behind, while the
+        install carries on regardless.
+        """
+        proc, _ = self._run(creates_fail=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn(
+            "Error encountered",
+            combined,
+            "a handled `gcloud kms ... create` failure must not fire the ERR trap; "
+            "add `trap - ERR` inside the command substitution",
+        )
+        # The other half of the hunk's purpose: the captured stderr is surfaced
+        # rather than discarded, which is what 2>/dev/null used to hide.
+        self.assertIn("ALREADY_EXISTS: it already exists", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

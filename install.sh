@@ -1187,10 +1187,56 @@ import_github_pem() {
   # after a destroy.
   print_info "Ensuring the minter's KMS keyring and import-only signing key exist..."
   gcloud services enable cloudkms.googleapis.com --project="$project_id"
-  gcloud kms keyrings create "$keyring" --location="$kms_location" --project="$project_id" 2>/dev/null || true
-  gcloud kms keys create "$key" --keyring="$keyring" --location="$kms_location" \
+
+  # Both creates keep their errors instead of discarding them. Re-running the
+  # installer is the common case and "already exists" is the expected answer to
+  # it, so the output is only surfaced when the resource is missing afterwards —
+  # which is the check that actually matters. Discarding stderr outright is what
+  # hid the bug below; tolerating one specific error would still have hidden a
+  # permission denial, a disabled API or a quota refusal, all of which end the
+  # same way: no key, and an import that fails against something that is not there.
+  #
+  # `trap - ERR` inside each substitution, for the reason spelled out at the
+  # Workload Identity probe above: bash 3.2 runs the inherited ERR trap in the
+  # subshell even though `|| true` handles the failure, so a re-run — where
+  # "already exists" is the expected answer — would print two fatal-looking
+  # abort banners and leave a FAILED install report behind mid-run.
+  local kms_ring_err="" kms_key_err=""
+  kms_ring_err="$(trap - ERR; gcloud kms keyrings create "$keyring" --location="$kms_location" \
+    --project="$project_id" 2>&1)" || true
+
+  # --skip-initial-version-creation is required, not optional: KMS answers
+  # `INVALID_ARGUMENT: Import-only keys must skip initial version creation` without
+  # it. It matches skip_initial_version_creation in terraform/modules/github-minter,
+  # which is where the key normally comes from.
+  kms_key_err="$(trap - ERR; gcloud kms keys create "$key" --keyring="$keyring" --location="$kms_location" \
     --purpose=asymmetric-signing --default-algorithm=rsa-sign-pkcs1-2048-sha256 \
-    --import-only --protection-level=software --project="$project_id" 2>/dev/null || true
+    --import-only --skip-initial-version-creation \
+    --protection-level=software --project="$project_id" 2>&1)" || true
+
+  # The assertion, not the create, is what makes a failure visible. Whatever went
+  # wrong above, the import cannot work without this key, and saying so here names
+  # the cause instead of leaving a confusing failure two steps later.
+  if ! gcloud kms keys describe "$key" --keyring="$keyring" --location="$kms_location" \
+    --project="$project_id" >/dev/null 2>&1; then
+    # Deliberately says "could not be confirmed" rather than "does not exist":
+    # describe also fails on an IAM denial for cloudkms.cryptoKeys.get or an API
+    # blip, and asserting absence from that would be stating more than was
+    # established. Whatever the cause, the import cannot safely proceed.
+    print_warning "The minter's KMS signing key ${kms_location}/${keyring}/${key} could not be confirmed to exist."
+    [ -n "$kms_ring_err" ] && print_info "Keyring create said: ${kms_ring_err}"
+    [ -n "$kms_key_err" ] && print_info "Key create said: ${kms_key_err}"
+    print_info "The PEM import needs the keyring and the key, so it is being skipped; the minter deployment stays unready until both exist."
+    # Not the README's import recipe: that one presupposes the key and only covers
+    # loading a PEM into it. What failed here is the creation, so print the two
+    # commands that create it. --skip-initial-version-creation is the one that is
+    # easy to lose and the one KMS refuses an import-only key without.
+    print_info "Create them by hand with:"
+    print_info "  gcloud kms keyrings create ${keyring} --location=${kms_location} --project=${project_id}"
+    print_info "  gcloud kms keys create ${key} --keyring=${keyring} --location=${kms_location} --purpose=asymmetric-signing --default-algorithm=rsa-sign-pkcs1-2048-sha256 --import-only --skip-initial-version-creation --protection-level=software --project=${project_id}"
+    print_info "Then import the PEM with the recipe in k8s-operator/config/integrations/github/README.md."
+    return 0
+  fi
 
   print_info "Importing the GitHub App private key into KMS via the Minty CLI..."
   local minty_dir pem_abs

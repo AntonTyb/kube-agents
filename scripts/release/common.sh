@@ -41,6 +41,99 @@ is_ci_pipeline() {
   is_truthy "${CI:-}"
 }
 
+# ─── Cluster connection ───────────────────────────────────────────────────────
+# Two scripts in this directory point kubectl at the RC cluster before doing
+# anything to it — install_pubsub_platform.sh and wait_for_gke_readiness.sh — and
+# a workflow runs them as separate steps, so each starts from a fresh shell and
+# has to resolve the target itself. The pair lives here rather than being
+# duplicated, because the resolution order below is a contract with the
+# workflows: GKE_CLUSTER_NAME/GCP_REGION/GCP_PROJECT_ID are what the `env:` blocks
+# set, and CLUSTER_NAME/REGION/PROJECT_ID are the installer's own names, which a
+# developer running these by hand after install.sh already has exported.
+#
+# Assigns to globals rather than echoing: a caller reading an echo would need
+# command substitution, and a `set -u` abort inside a subshell would leave the
+# variable empty and the script running against an unnamed target.
+#
+# None of the four get a default in CI. A pipeline that reaches here with
+# GCP_PROJECT_ID unset has a misconfigured `env:` block or a variable missing
+# from its GitHub environment; defaulting PROJECT_ID to kube-agents-rc there
+# does not rescue the run, it points a real teardown-and-reinstall at a real
+# project nobody named. Failing names the variable instead, at the first script
+# that needs it rather than several steps later against a cluster that does not
+# exist. The defaults stay for the developer path, which is what the
+# CLUSTER_NAME/REGION/PROJECT_ID half of the contract above is for.
+#
+# AGENT_NAMESPACE is in the list because the `rc` and `nightly` environments
+# both define it. A workflow that binds neither environment reaches here with
+# all four empty and fails on the targeting trio regardless, so requiring the
+# namespace costs those callers nothing — and a job that sets the other three
+# but not this one is misconfigured in exactly the way silence used to hide,
+# since `vars.AGENT_NAMESPACE` expanding to empty is indistinguishable from the
+# default being correct.
+release_resolve_target() {
+  CLUSTER_NAME="${GKE_CLUSTER_NAME:-${CLUSTER_NAME:-}}"
+  REGION="${GCP_REGION:-${REGION:-}}"
+  PROJECT_ID="${GCP_PROJECT_ID:-${PROJECT_ID:-}}"
+  AGENT_NAMESPACE="${AGENT_NAMESPACE:-}"
+
+  if is_ci_pipeline; then
+    # A string rather than an array: `${#arr[@]}` on an empty array aborts under
+    # `set -u` on bash 3.2, which is what a developer on macOS runs these with.
+    local missing=""
+    [ -n "${CLUSTER_NAME}" ] || missing="${missing} GKE_CLUSTER_NAME"
+    [ -n "${REGION}" ] || missing="${missing} GCP_REGION"
+    [ -n "${PROJECT_ID}" ] || missing="${missing} GCP_PROJECT_ID"
+    [ -n "${AGENT_NAMESPACE}" ] || missing="${missing} AGENT_NAMESPACE"
+    if [ -n "${missing}" ]; then
+      echo "❌ Unset in CI:${missing}" >&2
+      echo "   These come from the job's \`env:\` block, which reads them from the" >&2
+      echo "   workflow's GitHub environment. Set them there rather than relying on" >&2
+      echo "   a default — a release script must not guess which project it targets." >&2
+      return 1
+    fi
+  else
+    CLUSTER_NAME="${CLUSTER_NAME:-platform-agent-host}"
+    REGION="${REGION:-us-central1}"
+    PROJECT_ID="${PROJECT_ID:-kube-agents-rc}"
+    AGENT_NAMESPACE="${AGENT_NAMESPACE:-kubeagents-system}"
+  fi
+
+  export CLUSTER_NAME REGION PROJECT_ID AGENT_NAMESPACE
+}
+
+# Points kubectl at the resolved cluster, unless it is already there.
+#
+# The context test checks the cluster name AND the project: a developer with
+# several installs has more than one context whose name ends in the default
+# cluster name, and matching on the cluster alone would silently accept the
+# wrong one. Call release_resolve_target first.
+release_connect_kubectl() {
+  unset CLOUDSDK_PYTHON || true
+  unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE || true
+  export CLOUDSDK_PYTHON_SITEPACKAGES="0"
+  export PYTHONNOUSERSITE="1"
+  export USE_GKE_GCLOUD_AUTH_PLUGIN="True"
+  export CLOUDSDK_CONTAINER_USE_APPLICATION_DEFAULT_CREDENTIALS="false"
+  gcloud config set container/use_application_default_credentials false --quiet || true
+
+  if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]; then
+    gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}" --quiet || true
+  fi
+
+  local current_ctx
+  current_ctx="$(kubectl config current-context 2>/dev/null || echo "")"
+  if ! kubectl cluster-info >/dev/null 2>&1 ||
+    [[ "${current_ctx}" != *"${CLUSTER_NAME}"* || "${current_ctx}" != *"${PROJECT_ID}"* ]]; then
+    echo "Connecting kubectl to target cluster '${CLUSTER_NAME}' in project '${PROJECT_ID}'..."
+    gke_dns_endpoint_flag "${CLUSTER_NAME}" "${REGION}" "${PROJECT_ID}"
+    # Unquoted on purpose: empty must contribute no argument. See gke_dns_endpoint.sh.
+    # shellcheck disable=SC2086
+    gcloud container clusters get-credentials "${CLUSTER_NAME}" --location "${REGION}" --project "${PROJECT_ID}" \
+      ${GKE_DNS_ENDPOINT_FLAG}
+  fi
+}
+
 # Validates that a string is a valid pure numeric SemVer (X.Y.Z without 'v' prefix)
 validate_pure_numeric_semver() {
   local ver="${1:-}"
