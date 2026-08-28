@@ -77,6 +77,28 @@ KUBE_AGENTS_STATE_PREFIX="full-install/platform-agent-host" \
 - **Reader on the warm cache image**, in the `kube-agents` repository of `kube-agents-prow` — the repository at location `us`, not the project, and not `us-central1`, because that is where `hack/ci-deploy.sh`'s default `CACHE_IMAGE` lives. Both identities need `roles/artifactregistry.reader` there, and the verifier fails the project if either is missing:
   - `${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com`
   - `${PROJECT_NUMBER}-compute@developer.gserviceaccount.com`
+- **The Prow runner's access to the project.** Every other grant on this page is for an identity inside the project. This one is not: the presubmit runs on the `build-kube-agents` cluster as `prowjob-default-sa@kube-agents-prow.iam.gserviceaccount.com`, leases the project, and reaches in to fetch cluster credentials, apply the chart, submit the build and read the logs back. Nothing in the project's own configuration implies it, which is how projects 4 to 6 were provisioned, verified green and registered without it — until a lease of `kube-agents-evals-6` died on `Required "container.clusters.get" permission(s)` ([#966](https://github.com/gke-labs/kube-agents/pull/966)). Grant all twelve:
+
+  ```bash
+  for role in roles/cloudbuild.builds.editor roles/cloudbuild.builds.viewer \
+              roles/container.admin roles/container.developer \
+              roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser \
+              roles/logging.logWriter roles/logging.viewer \
+              roles/resourcemanager.projectIamAdmin \
+              roles/serviceusage.serviceUsageConsumer \
+              roles/storage.admin roles/viewer; do
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="serviceAccount:prowjob-default-sa@kube-agents-prow.iam.gserviceaccount.com" \
+      --role="${role}" --quiet >/dev/null
+  done
+  ```
+
+  `scripts/provision_ci_pool_project.sh` makes this grant for any project it onboards; the block above is for repairing one provisioned before it did. The list is what `kube-agents-evals` holds, kept as measured rather than trimmed so a new project matches one a presubmit has passed on. It is not minimal — `container.admin` subsumes `container.developer`, `viewer` subsumes `logging.viewer` and `cloudbuild.builds.viewer`. No Artifact Registry role is in it: `hack/ci-deploy.sh` builds and pushes through `gcloud builds submit`, so Cloud Build holds the registry credentials and the runner never touches the registry itself.
+
+- **The platform agent's project roles, checked in both directions.** The agent under test authenticates as `kubeagents-platform-gsa@${PROJECT_ID}`, so this is the one set on this page where an _extra_ role fails the project as well as a missing one. The eight read-only roles come from `local.read_only_roles` in [`terraform/examples/full-install`](https://github.com/gke-labs/kube-agents/tree/main/terraform/examples/full-install), which is what the install passes to the IAM module — the module's own `project_roles` default is never read on that path. The verifier hardcodes the eight so it can run without a Terraform toolchain, and a unit test asserts both the composition and the module default match it, so narrowing either fails in CI rather than failing every project weeks later.
+
+  Boskos leases at random, so a project that differs grades differently from the rest of the pool — a case can pass on the grant rather than on the agent, and only on the runs that happen to lease that project. Note that re-running the install does **not** strip roles it no longer grants; correcting an over-privileged project is the hand-swap in [Security and IAM](../reference/security-and-iam.md).
+
 - **GKE Node Service Account**:
   - `roles/artifactregistry.reader` in `${PROJECT_ID}` to pull operator and agent images. The verifier checks this against the account the host cluster's nodes actually run as, read from `nodePools[].config.serviceAccount` — `default` meaning the Compute default SA. Any role in `AR_PULLER_ROLES` satisfies it, which is `AR_WRITER_ROLES` plus the reader role, since every role that confers push already confers read. Push and pull are separate assertions: a project where only Cloud Build can push fails on this one.
 
@@ -146,10 +168,14 @@ The evaluation scenarios that exercise the GitOps workflow — the six fleet-aud
 | `kube-agents-evals-4` | `gke-agentic/kube-agents-evals-4-infra` |
 | `kube-agents-evals-5` | `gke-agentic/kube-agents-evals-5-infra` |
 | `kube-agents-evals-6` | `gke-agentic/kube-agents-evals-6-infra` |
+| `kube-agents-evals-7` | `gke-agentic/kube-agents-evals-7-infra` |
+| `kube-agents-evals-8` | `gke-agentic/kube-agents-evals-8-infra` |
+| `kube-agents-evals-9` | `gke-agentic/kube-agents-evals-9-infra` |
+| `kube-agents-evals-10` | `gke-agentic/kube-agents-evals-10-infra` |
 
 The repository is kept private: it is throwaway state a bot rewrites on every run. [`examples/gitops-repo`](https://github.com/gke-labs/kube-agents/tree/main/examples/gitops-repo) is the layout an audit expects to find, not a required seed — the current pool repositories carry only a LICENSE and a README, because an audit works against an empty tree and a `remediation.path` that does not exist degrades to a manual finding rather than failing the run.
 
-> **Every project in the table above is provisioned; not every one is leasable.** A project enters the table when both its halves are done, and gains a Boskos entry later — so which projects a presubmit can actually lease is the roster in `gke-internal/test-infra`, not this page. Everything from `kube-agents-evals-4` on was provisioned by `scripts/provision_ci_pool_project.sh` and verified before registration rather than after, the order this page prescribes. Run `scripts/verify_ci_pool_project.py --project-id <project>` for the current state of any one of them; three of the things it checks are:
+> **A row above means the project is mapped, not that it is provisioned or leasable.** The mapping comes first by necessity: Step 0 of `scripts/provision_ci_pool_project.sh` refuses to run against a project `gitops_repo_for_project()` does not know, so the row is written before the applies are. Provisioning follows it and a Boskos entry follows that — so which projects a presubmit can actually lease is the roster in `gke-internal/test-infra`, not this page. Everything from `kube-agents-evals-4` on was provisioned by `scripts/provision_ci_pool_project.sh` and verified before any Boskos entry was made rather than after, the order this page prescribes — which says the order held, not that every row has an entry. Run `scripts/verify_ci_pool_project.py --project-id <project>` for the current state of any one of them; three of the things it checks are:>
 >
 > 1. The private GitOps repository exists and is mapped in the table above.
 > 2. App `4675512` resolves to every pool repository, still `repository_selection: selected`, with `contents: write`, `issues: write`, `pull_requests: write`, `metadata: read`.
@@ -253,11 +279,13 @@ python3 scripts/verify_ci_pool_project.py --project-id kube-agents-evals-4 \
 
 It exits `0` when everything checked passed, `1` when a prerequisite failed, and **`2` when nothing failed but something could not be checked**. The third code exists because a script that prints "ALL CHECKS PASSED" over items it merely could not read gives the same false assurance that let `kube-agents-evals-3` into the pool. Treat `2` as "go and look", not as a pass.
 
+A bad command line exits `64`, not `2`, so a mistyped flag cannot be mistaken for an unverified item. One case stays ambiguous and cannot be fixed inside the script: if the _path_ to the script is wrong, Python exits `2` before the file is read. A wrapper that branches on `2` should check the path exists first.
+
 `scripts/provision_ci_pool_project.sh` runs it as its own last step, so a project provisioned by the script has been through this already.
 
 One check is not a read-only API call. `Seeded Fleet Fixtures` runs `hack/fleet-kubeconfigs.sh`, which needs `kubectl` and fetches cluster credentials into a temporary directory it removes on the way out. Without `kubectl` on `PATH` that item reports as unverified rather than failing the project.
 
-**It is not a complete reading of this page.** `REQUIRED_APIS` in the script is the list it enforces for section 1, the seeded fleet's three clusters and `gs://<project>-tf-state` from section 6 are checked by name and its planted fixtures by running `hack/fleet-kubeconfigs.sh`, and the section 3 grants it covers are the `kube-agents-prow` reader grants and the host cluster's node account's pull rights on the project's own registry — read off `nodePools[].config.serviceAccount` rather than assumed to be the Compute default — but not the host cluster's location. Read the script's check list rather than assuming a green run means every paragraph above is satisfied.
+**It is not a complete reading of this page.** Read the script's own check list rather than assuming a green run means every paragraph above is satisfied; an inventory copied here goes stale the first time a check is added, and it goes stale in the dangerous direction — a list of what _is_ checked, left behind, tells an operator to skip a verification that no longer happens. Three things running the script will not tell you: the platform agent GSA's eight read-only roles are the only set checked for extras as well as absences, the host cluster's node account's pull rights are read off `nodePools[].config.serviceAccount` rather than assumed to be the Compute Engine default, and the host cluster's location is not checked at all.
 
 Some items report `2` for a reason other than a refused read. The first two below cannot be settled from a machine at all, so they report `2` until an operator settles them by hand — for the mapping that means landing the pull request, not attesting to anything. The third reports `2` only when its probe cannot run.
 
@@ -279,9 +307,7 @@ Once the GCP project is provisioned with the prerequisites above, register the p
 - type: kube-agents-evals-project
   state: free
   names:
-    - kube-agents-evals
-    - kube-agents-evals-2
-    - kube-agents-evals-3
+    # the projects already registered, left as they are
     - <NEW_PROJECT_ID>
 ```
 

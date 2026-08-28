@@ -141,6 +141,64 @@ AR_WRITER_ROLES = {
 AR_PULLER_ROLES = AR_WRITER_ROLES | {"roles/artifactregistry.reader"}
 
 
+# Every other identity this script checks lives inside the pool project. This one
+# does not: the presubmit runs on the build-kube-agents cluster as
+# prowjob-default-sa@kube-agents-prow, leases a project, and reaches in. Nothing
+# in the project's own configuration implies the grant, which is how
+# kube-agents-evals-4 through -6 were provisioned, verified green and registered
+# without it -- until a lease of -6 died on gke-labs/kube-agents#966 with
+# `Required "container.clusters.get" permission(s)`.
+PROW_RUNNER_MEMBER = "serviceAccount:prowjob-default-sa@kube-agents-prow.iam.gserviceaccount.com"
+
+# The set kube-agents-evals holds, matched literally rather than by permission.
+# Not minimal -- container.admin subsumes container.developer, viewer subsumes
+# logging.viewer and cloudbuild.builds.viewer -- but the point is that a new
+# project matches one a presubmit has passed on, which a permission-equivalent
+# set would not. Only a missing role fails; extra roles are not reported.
+PROW_RUNNER_ROLES = {
+    "roles/cloudbuild.builds.editor",
+    "roles/cloudbuild.builds.viewer",
+    "roles/container.admin",
+    "roles/container.developer",
+    "roles/iam.serviceAccountAdmin",
+    "roles/iam.serviceAccountUser",
+    "roles/logging.logWriter",
+    "roles/logging.viewer",
+    "roles/resourcemanager.projectIamAdmin",
+    "roles/serviceusage.serviceUsageConsumer",
+    "roles/storage.admin",
+    "roles/viewer",
+}
+
+# The agent's own identity, checked in both directions -- a missing role fails
+# and so does an extra one, unlike the Prow runner above. That account is
+# infrastructure and a superset is harmless; this one is the subject under test,
+# where an extra role means a case passed on the grant rather than on the agent.
+# Boskos leases at random, so one over-privileged project flakes whichever pull
+# request happens to draw it.
+#
+# This duplicates `local.read_only_roles` in terraform/examples/full-install,
+# which is what the install passes to the IAM module. A test asserts the two are
+# equal, and that the module's own default matches, so narrowing either fails in
+# CI here rather than failing correctly-provisioned projects weeks later.
+PLATFORM_GSA_MEMBER_TEMPLATE = "serviceAccount:kubeagents-platform-gsa@{project_id}.iam.gserviceaccount.com"
+
+# Neither belongs on a pool project at all. Called out separately because the
+# two checks above scan for one literal member each and would not see these.
+_PUBLIC_MEMBERS = {"allUsers", "allAuthenticatedUsers"}
+
+PLATFORM_GSA_ROLES = {
+    "roles/container.clusterViewer",
+    "roles/container.viewer",
+    "roles/compute.viewer",
+    "roles/monitoring.viewer",
+    "roles/logging.viewer",
+    "roles/iam.serviceAccountUser",
+    "roles/iam.securityReviewer",
+    "roles/mcp.toolUser",
+}
+
+
 class CheckResult:
     def __init__(
         self,
@@ -365,13 +423,32 @@ def _mapping_function_body(text: str) -> Optional[str]:
 
 
 def _mapping_row_present(text: str, project_id: str) -> bool:
-    """Does this ci-deploy.sh text carry the project's gitops_repo_for_project() row?"""
+    """Does this ci-deploy.sh text carry the project's gitops_repo_for_project() row?
+
+    Three things the pattern has to get right, each of which a looser one gets
+    wrong in the direction of a false pass:
+
+    - The row must start its own line. Unanchored, the pattern matches inside a
+      row commented out with `#` -- and `case` ignores such a row, so a project
+      whose arm was parked behind a comment deploys to whatever the `*)` default
+      names. A longer project id is not the risk here: `kube-agents-evals)` does
+      not occur inside `kube-agents-evals-2)`, because the `)` does not line up.
+    - The repo name must end where it should. `-infra` is a prefix of
+      `-infra-old`, and a row pointing at an archived repository would pass.
+    - `echo` needs whitespace after it. `echogke-agentic/...` is a command no
+      shell resolves, and quoting does not save it -- word splitting runs
+      before quote removal -- so the row reads as mapped and never runs.
+    """
     body = _mapping_function_body(text)
     if body is None:
         return False
     expected_repo = f"gke-agentic/{project_id}-infra"
-    pattern = rf"{re.escape(project_id)}\)\s*echo\s*[\"']?{re.escape(expected_repo)}[\"']?"
-    return re.search(pattern, body) is not None
+    pattern = (
+        rf"^[ \t]*{re.escape(project_id)}\)\s*echo\s+"
+        rf"([\"']){re.escape(expected_repo)}\1|"
+        rf"^[ \t]*{re.escape(project_id)}\)\s*echo\s+{re.escape(expected_repo)}(?=[\s;&|)]|$)"
+    )
+    return re.search(pattern, body, re.MULTILINE) is not None
 
 
 def _upstream_remote() -> Optional[str]:
@@ -391,10 +468,34 @@ def _upstream_remote() -> Optional[str]:
         parts = line.split()
         if len(parts) < 3 or parts[2] != "(fetch)":
             continue
-        url = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
-        if url.endswith(_UPSTREAM_SLUG):
+        if _is_upstream_url(parts[1]):
             return parts[0]
     return None
+
+
+def _is_upstream_url(url: str) -> bool:
+    """Does this remote URL address gke-labs/kube-agents on GitHub?
+
+    Host and path are both matched, because a suffix test on the slug alone
+    accepts two URLs that are not this repository, and returning either one
+    means reading a stranger's main and reporting the verdict with the same
+    confidence as a correct one:
+
+    - `git@github.com:not-gke-labs/kube-agents` -- any owner ending in the
+      real one, which is a name anybody can register.
+    - `git@example.com:gke-labs/kube-agents` -- the right path on a host that
+      has nothing to do with GitHub, such as an internal mirror.
+
+    Two forms must keep matching, since rejecting one drops the comparison to a
+    warning: a port, which would otherwise parse as the head of the path, and
+    an owner in any casing, because GitHub resolves `GKE-Labs`.
+    """
+    url = url[:-4] if url.endswith(".git") else url
+    m = re.match(r"^(?:[\w.+-]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/](.+)$", url)
+    if not m:
+        return False
+    host, path = m.group(1), m.group(2).strip("/")
+    return host.lower() == "github.com" and path.lower() == _UPSTREAM_SLUG
 
 
 def _ref_committed_at(remote: str) -> str:
@@ -566,11 +667,12 @@ def check_project_and_apis(project_id: str) -> Tuple[Optional[str], CheckResult]
 
 
 def check_iam_and_service_accounts(project_id: str, project_number: str) -> CheckResult:
-    """Verify Workload Identity and the cross-project Artifact Registry reader grants."""
+    """Verify Workload Identity, the Prow runner's and platform GSA's project roles, and the cross-project AR reader grants."""
     details = []
     warnings: List[str] = []
     passed = True
     wi_checked = False
+    roles_checked = False
     prow_checked = False
 
     gsa_email = f"kubeagents-platform-gsa@{project_id}.iam.gserviceaccount.com"
@@ -605,6 +707,95 @@ def check_iam_and_service_accounts(project_id: str, project_number: str) -> Chec
         except Exception as exc:
             passed = False
             details.append(f"Failed parsing policy for {gsa_email}: {exc}")
+
+    # Read off the project's own policy, which is not the effective one. Two
+    # things it hides from a literal-member scan: a role inherited from an
+    # ancestor (checked 2026-08-26, the pool projects sit directly under the
+    # organization with no folder between), and a binding whose member is a group
+    # holding the GSA. Both make the extra-role check below a floor rather than
+    # the closed set it reads as.
+    rc, out, err = run_cmd(["gcloud", "projects", "get-iam-policy", project_id, "--format=json"])
+    if rc != 0:
+        if not _record_unreadable(
+            err,
+            f"Failed reading the IAM policy for {project_id}: {err.strip()[:160]}",
+            f"Could not read the project IAM policy on {project_id}, so the Prow runner's twelve roles, "
+            "the platform agent GSA's read-only set and any public binding were not checked",
+            details,
+            warnings,
+        ):
+            passed = False
+    else:
+        roles_checked = True
+        try:
+            policy = _load_json(out)
+            platform_member = PLATFORM_GSA_MEMBER_TEMPLATE.format(project_id=project_id)
+            prow_held = set()
+            platform_held = set()
+            public_held = set()
+            for b in policy.get("bindings", []):
+                members = b.get("members", [])
+                # Reported whatever the condition, unlike the two below: a
+                # condition narrows when the grant applies, not who holds it.
+                if _PUBLIC_MEMBERS.intersection(members):
+                    public_held.add(b.get("role"))
+                # A conditional binding grants nothing outside its condition, so
+                # counting it would pass a project the runner still cannot use.
+                # For the platform GSA the same skip is a blind spot rather than
+                # a safe error: container.admin conditioned on `request.time <
+                # 2030` is write access every day until then, and platform_extra
+                # below would not see it. Nothing in this repository grants a
+                # conditional role and the pool projects hold none, so this is a
+                # gap to close before one does rather than a live hole.
+                if b.get("condition"):
+                    continue
+                if PROW_RUNNER_MEMBER in members:
+                    prow_held.add(b.get("role"))
+                if platform_member in members:
+                    platform_held.add(b.get("role"))
+
+            missing = PROW_RUNNER_ROLES - prow_held
+            if missing:
+                passed = False
+                details.append(
+                    f"The Prow runner ({PROW_RUNNER_MEMBER.split(':', 1)[1]}) is missing "
+                    f"{len(missing)} role(s) on {project_id}: {', '.join(sorted(missing))}. "
+                    "A presubmit authenticates as this account after leasing the project, so it "
+                    "will fail on the first gcloud call rather than at registration"
+                )
+
+            platform_missing = PLATFORM_GSA_ROLES - platform_held
+            platform_extra = platform_held - PLATFORM_GSA_ROLES
+            if platform_missing:
+                passed = False
+                details.append(
+                    f"The platform agent GSA is missing {len(platform_missing)} role(s) on "
+                    f"{project_id}: {', '.join(sorted(platform_missing))}. The agent under test "
+                    "authenticates as this account, so eval cases on this project fail on a "
+                    "credential the agent lacks rather than on the agent's reasoning"
+                )
+            if platform_extra:
+                passed = False
+                details.append(
+                    f"The platform agent GSA holds {len(platform_extra)} role(s) on {project_id} "
+                    f"beyond the read-only set: {', '.join(sorted(platform_extra))}. What they "
+                    "grant is not inspected -- the set is closed because the agent is the subject "
+                    "under test and Boskos leases at random, so any project that differs grades "
+                    "differently. Swap them per "
+                    "docs/site/src/content/docs/reference/security-and-iam.md -- re-running the "
+                    "install does not strip roles it no longer grants"
+                )
+            if public_held:
+                passed = False
+                details.append(
+                    f"{project_id} grants {len(public_held)} role(s) to allUsers or "
+                    f"allAuthenticatedUsers: {', '.join(sorted(public_held))}. The pool holds "
+                    "an App signing key and every lease's build artifacts, so a public binding "
+                    "reaches further than the one project it is on"
+                )
+        except Exception as exc:
+            passed = False
+            details.append(f"Failed parsing the IAM policy for {project_id}: {exc}")
 
     # The warm cache image hack/ci-deploy.sh defaults CACHE_IMAGE to lives in the
     # `us` multi-region repository of kube-agents-prow, not in us-central1.
@@ -652,6 +843,7 @@ def check_iam_and_service_accounts(project_id: str, project_number: str) -> Chec
     partial = _partial_summary(
         [
             ("the Workload Identity binding", wi_checked),
+            ("the Prow runner and platform GSA project roles", roles_checked),
             ("the cross-project AR reader grants", prow_checked),
         ]
     )
@@ -660,7 +852,10 @@ def check_iam_and_service_accounts(project_id: str, project_number: str) -> Chec
     elif partial:
         message = partial
     else:
-        message = "Workload Identity and cross-project AR reader grants verified"
+        message = (
+            "Workload Identity, Prow runner and platform GSA project roles, "
+            "and cross-project AR reader grants verified"
+        )
 
     return CheckResult(
         "Service Accounts & IAM Grants",
@@ -760,11 +955,10 @@ def check_artifact_registry(project_id: str, project_number: str, location: str 
             passed = False
             details.append(f"Failed parsing Artifact Registry repository: {exc}")
 
-    # Which identity Cloud Build runs as is project-dependent -- the legacy
-    # <number>@cloudbuild SA for older projects, the Compute Engine default SA
-    # for newer ones -- so accept upload rights on either rather than
-    # manufacturing a failure with no correct remediation. A grant can sit on
-    # the project or directly on the repository, so both policies are consulted.
+    # All six pool projects build as the Compute Engine default SA (measured
+    # 2026-08-26), but the legacy <number>@cloudbuild SA is accepted too so a
+    # project that defaults the other way is not failed with no remediation. A
+    # grant can sit on the project or on the repository, so both are consulted.
     build_sas = {
         f"serviceAccount:{project_number}@cloudbuild.gserviceaccount.com",
         f"serviceAccount:{project_number}-compute@developer.gserviceaccount.com",
@@ -1654,14 +1848,17 @@ def check_token_minter(
         details.append(
             f"The chart deploys cryptoKeyVersion {pinned_version} of {key}, which does not exist "
             f"(present: {', '.join(sorted(version_states)) or 'none'}). Every lease would deploy a minter "
-            "that cannot sign."
+            "that cannot sign. The pin is read from this checkout, so try `git fetch && git rebase` "
+            "first -- a stale tree reports a version main has already moved past."
         )
     elif version_states[pinned_version] != "ENABLED":
         passed = False
         details.append(
             f"The chart deploys cryptoKeyVersion {pinned_version} of {key}, whose state is "
             f"{version_states[pinned_version]}. Every lease would deploy a minter that cannot sign, and "
-            "helm --wait would kill the run at its fifteen-minute timeout without naming the key."
+            "helm --wait would kill the run at its fifteen-minute timeout without naming the key. "
+            "The pin is read from this checkout, so try `git fetch && git rebase` first -- a stale "
+            "tree reports a version main has already moved past."
         )
     else:
         probe_version = pinned_version
@@ -1753,6 +1950,22 @@ EXIT_FAILED = 1
 # script exists to prevent, so it does not get to share an exit code with a
 # clean run.
 EXIT_UNVERIFIED = 2
+# argparse exits 2 on a bad command line, which would be indistinguishable from
+# a run that completed with unverified items -- a typo in a flag would read as
+# "nothing failed, go confirm these by hand". 64 is EX_USAGE from sysexits.h.
+#
+# Python itself also exits 2 when the script path does not exist, and that one
+# cannot be fixed from in here: it happens before this file is read. A caller
+# that must tell the two apart has to check the path exists first.
+EXIT_USAGE = 64
+
+
+class _Parser(argparse.ArgumentParser):
+    """An ArgumentParser that exits EXIT_USAGE rather than argparse's own 2."""
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE, f"{self.prog}: error: {message}\n")
 
 
 def report(project_id: str, checks: List[CheckResult]) -> int:
@@ -1848,7 +2061,7 @@ def verify_project(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         description="Verify CI pool project prerequisites before Boskos registration.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -1856,6 +2069,9 @@ def main() -> int:
             "  0  every prerequisite checked and passed\n"
             "  1  a prerequisite failed -- do not register this project\n"
             "  2  nothing failed, but something could not be checked automatically\n"
+            " 64  bad command line. Note that Python exits 2, not 64, when the\n"
+            "     script path itself does not exist -- that happens before this\n"
+            "     file runs, so a caller must check the path separately.\n"
         ),
     )
     parser.add_argument("--project-id", required=True, help="GCP project ID to verify (e.g. kube-agents-evals-3)")
