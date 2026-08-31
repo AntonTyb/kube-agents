@@ -81,10 +81,11 @@ Three behaviours worth knowing before the first run:
   pull-request path works in every set. See the site's
   [security and IAM reference](docs/site/src/content/docs/reference/security-and-iam.md).
 - **The agent runs sandboxed under gVisor**, because it executes model-authored commands and an
-  unsandboxed pod shares the node kernel with everything else on the node. On a Standard cluster
-  that provisions a `gvisor-pool` node pool (one `e2-standard-4` per zone); Autopilot ships the
-  RuntimeClass and needs no pool, from GKE `1.27.4-gke.800` on. Pass `--gvisor=false` to run on the
-  standard container runtime.
+  unsandboxed pod shares the node kernel with everything else on the node. Autopilot, the shape a
+  fresh install creates, ships the RuntimeClass and needs no node pool, from GKE `1.27.4-gke.800`
+  on — so the sandbox costs nothing there. On a Standard cluster it provisions a `gvisor-pool`
+  node pool of one `e2-standard-4` per zone. Pass `--gvisor=false` to run on the standard
+  container runtime.
 
 ### Non-Interactive & AI Agent Execution Mode
 
