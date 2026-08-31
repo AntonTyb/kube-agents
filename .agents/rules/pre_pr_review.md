@@ -21,8 +21,8 @@ The rule, and the requirement to fill in the template's **Self-Review** section,
   holds the plumbing and the rules for what to do with what comes back. Read the skill directly if
   your harness has no slash commands. Invoking the command is also the request to delegate that an
   agent is otherwise told to wait for — coding agents are instructed not to spawn subagents on
-  their own initiative, so an agent that reads only the rule in `AGENTS.md` finds its one route
-  closed and takes the silent fallback.
+  their own initiative, which is why `AGENTS.md` names the command in the rule itself rather than
+  leaving the only route to it on this page, which an agent reaches only after deciding to look.
 - **If your harness will not spawn one without a human's approval, go and get the approval.** A
   setting that requires sign-off before starting a subagent blocks this step; it does not waive
   it. Ask when you hit it, not after the review, and say what you are blocked on. Quietly running

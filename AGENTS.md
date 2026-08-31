@@ -239,8 +239,8 @@ map (`docs/README.md`), and this file plus `CLAUDE.md` stay inside the context b
   comment** (`uses: actions/checkout@3d3c42e… # v7.0.1`), and **guard automatically-triggered
   credentialed workflows against forks** with `if: github.repository == 'gke-labs/kube-agents'` on
   every job. A mutable tag lets a retagged release change what CI runs; an unguarded job fails on
-  every fork sync and mails the fork owner. Nothing in CI checks either one, and both have
-  exemptions — local reusable workflows need no pin, a `workflow_call`- or
+  every fork sync and mails the fork owner. No check in this repository blocks either one, and
+  both have exemptions — local reusable workflows need no pin, a `workflow_call`- or
   `workflow_dispatch`-only workflow needs no guard, and `docs-deploy.yml` is unguarded on purpose
   so a fork can publish its own Pages site. Open
   [`.agents/rules/github_actions.md`](.agents/rules/github_actions.md) whenever you touch a
@@ -258,16 +258,20 @@ map (`docs/README.md`), and this file plus `CLAUDE.md` stay inside the context b
   answers "what happened", and the supporting detail follows it.
 - **Adversarial self-review before opening a PR, and record it in the PR body.** Run the
   `review-adversarial` skill (`.agents/skills/review-adversarial/SKILL.md`) against your branch
-  diff, fix what it confirms, and fill in the template's **Self-Review** section with what you
-  looked for, what it found, and the disposition of each finding. This is a required pre-PR step
-  for AI agents working in this repository: you are the change's first hostile reader, and a
-  reviewer who has to find what you could have found spends their attention on the wrong things.
+  diff **in a context that did not write the change** — a subagent or a fresh session handed the
+  diff range and nothing else, which `/pr-preflight` spawns for you. Invoking it is also the
+  request to delegate that an agent is otherwise told to wait for, so an agent that skips it
+  reviews the diff in the context that argued for it. Fix what the pass confirms, and fill in the
+  template's **Self-Review** section with what you looked for, what it found, and the disposition
+  of each finding. This is a required pre-PR step for AI agents working in this repository: you
+  are the change's first hostile reader, and a reviewer who has to find what you could have found
+  spends their attention on the wrong things.
   The section carries every pre-PR pass, not this one alone — the docs-drift pass below runs on
   every change too — merged into one list, so a reviewer reads what was looked for in one place
   rather than inferring which passes ran from which findings appeared.
   This bullet and [`.agents/rules/pre_pr_review.md`](.agents/rules/pre_pr_review.md) are together
-  the canonical statement — the requirement here, the mechanics there (`/pr-preflight` as the route
-  to a clean context, what to do when your harness will not spawn one, and the disposition every
+  the canonical statement — the requirement here, the mechanics there (why the clean context has
+  to be a real one, what to do when your harness will not spawn one, and the disposition every
   finding owes). The site's [contributing guide](docs/site/src/content/docs/contributing.md) and
   the comment in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) summarise
   the pair — change this bullet or `pre_pr_review.md`, whichever owns what you are changing, then
