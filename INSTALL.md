@@ -199,10 +199,14 @@ KUBE_AGENTS_STATE_BUCKET=auto ./lifecycle.sh apply
   rather than reading the previous one, then regenerate `terraform.tfvars` from it and let
   `terraform apply` reconcile whatever changed. Anything you do not re-supply falls back to its
   default — including `--gvisor`, which defaults to `true`, so a bare re-run moves an unsandboxed
-  install onto the sandbox. To re-run with what the install already has, source
-  `k8s-operator/scripts/vars.sh` first — its entries are `export`ed, so a child `./install.sh` sees
-  them. To change one setting, `./install.sh --menu` reads the existing state and Save & Apply
-  re-applies through the same engine; for a hand-driven install, edit your tfvars and re-apply.
+  install onto the sandbox. `./install.sh --menu` is the re-run that carries the previous choices:
+  it reads the existing state, and Save & Apply re-applies through the same engine. Sourcing
+  `k8s-operator/scripts/vars.sh` before a flag-driven re-run gets most of the way — its entries are
+  `export`ed, so a child `./install.sh` sees them — but not all of it. The file records the memory
+  choice as `MEMORY_PROVIDER` and the dashboard as `HERMES_DASHBOARD_ENABLED`, while `install.sh`
+  reads `MEMORY` and `ENABLE_WEBUI`, so both revert to their defaults (file-backed memory, dashboard
+  off) unless you also pass `--memory` and `--enable-web-ui`. For a hand-driven install, edit your
+  tfvars and re-apply.
 
 - **Private Container Registry**: If your GKE clusters may only pull from an approved registry, see
   [Private container registry](#private-container-registry) below for the full recipe. Mirroring

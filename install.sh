@@ -2534,7 +2534,17 @@ main() {
   fi
   if [ "${PARAM_ENABLE_WEBUI:-false}" = "true" ] || [ "${HERMES_DASHBOARD_ENABLED:-false}" = "true" ]; then
     echo -e "  • ${C_CYAN}Hermes Web UI (Port 9119):${C_RESET} ${C_GREEN}Enabled${C_RESET}"
-    echo -e "    ${C_YELLOW}Workstation Access Command:${C_RESET} kubectl port-forward deploy/platform-agent-gateway -n kubeagents-system 9119:9119"
+    # A sandboxed pod cannot be reached with `kubectl port-forward`: the forward
+    # is established in the host-side CNI netns while the dashboard listens in
+    # the sandbox's own network stack, so the connection is refused. The relay
+    # in scripts/exec_tunnel.py goes through `kubectl exec` instead; print
+    # whichever one will actually work here.
+    if [ "${enable_gvisor:-false}" = "true" ]; then
+      echo -e "    ${C_YELLOW}Workstation Access Command:${C_RESET} ${repo_dir}/scripts/hermes-dashboard-tunnel.py"
+      echo -e "      (the agent is sandboxed under gVisor, which kubectl port-forward cannot reach)"
+    else
+      echo -e "    ${C_YELLOW}Workstation Access Command:${C_RESET} kubectl port-forward deploy/platform-agent-gateway -n kubeagents-system 9119:9119"
+    fi
     echo -e "    ${C_YELLOW}Browser Dashboard URL:${C_RESET} ${C_UNDERLINE}http://localhost:9119${C_RESET}"
   fi
 
