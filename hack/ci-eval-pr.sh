@@ -1216,9 +1216,44 @@ print(m.group(1).strip('\'\"') if m else '')
 # measured evidence, so it arms rung 4 but leaves rung 6 quiet and contributes
 # nothing to main's side of the aggregate. Screening replaces it.
 #
-# agent-kanban-smoke is deliberately NOT named: it has redded pull requests it
-# has nothing to do with, and un-arming it is half the point of the change.
-export BOOTSTRAP_ADMITTED="${BOOTSTRAP_ADMITTED:-gpu-stress-test-diagnosis}"
+# This roster is what blocks a pull request once the Prow job stops being
+# optional. Thirteen of the seventeen active cases are admitted: the ones
+# whose recent record shows failures only on their own regressions or on
+# infra classes the harness already excludes from the verdict. Four are
+# held out -- they still run and report on every pull request, and they
+# cannot red one on a GRADED failure. The scope of that promise is rungs
+# 4 and 6: rungs 1-3 (a forbidden mutation, an erroring check, a record
+# that is not a real run) stay blocking for every case by design,
+# admitted or not -- see grade_case, which evaluates them before it reads
+# admission. security-overgrant-remediation-proposal (#1066) is simply
+# new: it earns its record like any case, then enters. The other three
+# each have a filed issue naming the exit condition:
+#
+#   capacity-pinned-pool-probe            -- #1010: worker completes its
+#     card at fan-out ("Awaiting synthesis" as the final answer). The
+#     failure is correlated across repetitions when the agent chooses to
+#     fan out, so the collapse rule does not absorb it. Enters when the
+#     fix merges.
+#   cluster-agent-healthy-workload-no-finding -- #1100: the agent invents
+#     a finding on a healthy workload ~1 run in 8. Main's own trait, so a
+#     collapse would tax an innocent PR. Enters when the false-positive
+#     rate drops or when rung-6 screening can compare against main.
+#   autoops-warning-event-triage          -- #1101: 0/5 graded repetitions
+#     on record; admitting it reds every pull request today. Enters when
+#     the lettered-options bar is settled and it has a clean record.
+#
+# If an admitted case reds a pull request its diff cannot explain on a
+# graded failure, demote it here and reference its issue. Demotion is a
+# one-line same-day edit to this list -- this file, not the Prow config,
+# is deliberately the fast lever. It is the lever for rung-4 reds ONLY: a
+# rung-1-3 red (mutation, erroring verifier, empty record) does not stop
+# when its case leaves this list, because those classes signal a broken
+# case or install, not flake, and the fix is on that side.
+#
+# agent-kanban-smoke earned its seat back after the 08-27 redesign (a real
+# SRE question graded on kanban_create plus cluster names); the reds that
+# once argued for un-arming it belonged to the old vocabulary check.
+export BOOTSTRAP_ADMITTED="${BOOTSTRAP_ADMITTED:-reliability-pdb-probe,security-overgrant-probe,upgrades-lagging-master-probe,consistency-authorized-networks-probe,cost-idle-pool-probe,obtainability-remediation-proposal,rca-remediation-pr,compliance-rbac-overgrant,cluster-agent-crashloop-debug,cluster-agent-crashloop-misleading-symptom,cluster-agent-crashloop-evidence-chain,gpu-stress-test-diagnosis,agent-kanban-smoke}"
 
 # Where the evidence itself lives. Unset means bench/baselines/ in the
 # checkout: hermetic, no credential, no network -- and no way for this job to
