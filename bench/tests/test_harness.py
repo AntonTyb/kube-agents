@@ -1228,6 +1228,44 @@ def test_an_agent_side_error_is_still_graded(stub_agent: _StubAgentServer) -> No
     assert len(stub_agent.requests) == 1
 
 
+def test_a_saturated_endpoint_is_infra_not_an_answer(
+    stub_agent: _StubAgentServer, recorded_pf_resets: list[int]
+) -> None:
+    """A 429 on every attempt gives up as a run class, not as the agent's text.
+
+    "Too many concurrent runs" is the endpoint's admission control: no agent
+    executed, and the condition clears when a slot frees. Before 429 joined
+    ``_RETRYABLE_STATUSES`` the error body was recorded as the agent's output
+    and graded NOT_A_REAL_RUN, failing seven tasks at once on build
+    2094714569262895104.
+    """
+    stub_agent.fail_with = 429
+
+    result = KubeAgentsHarness().run("Provision operator agent in cluster mercury-09.")
+
+    assert result.has_errors()
+    assert result.errors[0].startswith(harness.INFRA_FAILURE_MARKER)
+    assert "HTTP 429" in result.errors[0]
+    assert result.output == ""
+    assert result.trajectory == []
+    assert len(stub_agent.requests) == harness._MAX_TRANSPORT_FAILURES
+    assert len(recorded_pf_resets) == harness._MAX_TRANSPORT_FAILURES - 1
+
+
+def test_a_transient_429_is_retried_to_the_answer(
+    stub_agent: _StubAgentServer, recorded_pf_resets: list[int]
+) -> None:
+    """One rejected admission, then a slot frees: the retry gets the answer."""
+    stub_agent.fail_on = frozenset({1})
+    stub_agent.fail_on_status = 429
+
+    result = KubeAgentsHarness().run("Provision operator agent in cluster mercury-09.")
+
+    assert not result.has_errors()
+    assert result.output == _FINAL_TEXT
+    assert len(stub_agent.requests) == 2
+
+
 def test_a_well_formed_answer_that_reports_a_failure_is_untouched(
     stub_agent: _StubAgentServer,
 ) -> None:
@@ -1934,6 +1972,63 @@ def test_a_status_turn_gateway_storm_is_infrastructure_not_an_answer(
     assert _TASK_ID in purges[0]
 
 
+def test_a_status_turn_429_storm_is_infrastructure_not_an_answer(
+    stub_agent: _StubAgentServer,
+    instant_polls: None,
+    recorded_pf_resets: list[int],
+    no_cluster_exec: list[str],
+) -> None:
+    """Admission control refusing every status poll gives up as a run class too.
+
+    This is the retryable set's second call site: unlike the opening turn, the
+    delegating agent has already run and filed cards here, so the temptation
+    is to settle whatever finished into the record before giving up. That
+    record is replaced wholesale by ``_infra_failure`` (see
+    ``_DelegationTransportExhausted``), so anything settled into it would be
+    discarded unread -- and grading the partial record instead is exactly
+    build 2093030474753511424's failure, a 0.0 for a worker that had filed the
+    real answer. INFRA hands the whole repetition back to be rerun; the purge
+    is what keeps that rerun from reading this attempt's leavings.
+    """
+    stub_agent.turns = [_create_turn(), _show_turn("done")]
+    stub_agent.fail_on = frozenset(range(2, 2 + harness._MAX_TRANSPORT_FAILURES))
+    stub_agent.fail_on_status = 429
+
+    result = KubeAgentsHarness().run("Find the root cause.")
+
+    assert result.has_errors()
+    assert result.errors[0].startswith(harness.INFRA_FAILURE_MARKER)
+    assert _TASK_ID in result.errors[0]
+    assert "failed in transport" in result.errors[0]
+    assert result.output == ""
+    assert result.trajectory == []
+    assert len(stub_agent.requests) == 1 + harness._MAX_TRANSPORT_FAILURES
+    port = stub_agent.server_address[1]
+    assert recorded_pf_resets == [port] * (harness._MAX_TRANSPORT_FAILURES - 1)
+    purges = [s for s in no_cluster_exec if "rm -rf" in s]
+    assert len(purges) == 1
+    assert _TASK_ID in purges[0]
+
+
+def test_a_status_turn_429_clears_to_the_delegated_answer(
+    stub_agent: _StubAgentServer, instant_polls: None, recorded_pf_resets: list[int]
+) -> None:
+    """One refused poll while the slots are full costs a retry, not the result.
+
+    The likeliest occupants of the slots a mid-wait 429 reports full are this
+    very conversation's workers. When one frees, the next poll reads the board
+    and the delegated answer survives into the graded output.
+    """
+    stub_agent.turns = [_create_turn(), _show_turn("done", body=_RCA_RESULT)]
+    stub_agent.fail_on = frozenset({2})
+    stub_agent.fail_on_status = 429
+
+    result = KubeAgentsHarness().run("Find the root cause.")
+
+    assert not result.has_errors()
+    assert result.output.endswith(_RCA_RESULT)
+
+
 def test_a_status_turn_502_recovers_through_a_fresh_tunnel(
     stub_agent: _StubAgentServer, instant_polls: None, recorded_pf_resets: list[int]
 ) -> None:
@@ -2008,7 +2103,8 @@ def test_status_turns_the_endpoint_answered_still_grade_the_partial_record(
 ) -> None:
     """A 500 storm is the endpoint answering, so it keeps the old behaviour.
 
-    The INFRA class is only for retries that never got an HTTP answer. An
+    The INFRA class is only for retries that never reached an agent -- no
+    HTTP answer at all, or a 429 refused at the admission door. An
     endpoint that keeps answering badly is the agent's own failure: the wait
     still ends, the error is recorded (which stops devops-bench promoting the
     receipt as a validated deliverable), the first turn's work survives, and
