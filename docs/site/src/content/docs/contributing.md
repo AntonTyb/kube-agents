@@ -86,7 +86,7 @@ where a new one belongs, `docs/testing-map.md` maps the nine test homes to their
 
 The checks above tell you the code compiles, the docs resolve, and the unit tests agree with themselves. None of them tell you whether the operator reconciled your change or the agent pod picked it up — this project's failure mode is a green build that configures nothing. So every pull request fills in the template's **Testing → Live validation** section with how the change was exercised against a real, running kube-agents installation. If you don't have one, [INSTALL.md](https://github.com/gke-labs/kube-agents/blob/main/INSTALL.md) stands one up.
 
-[`AGENTS.md`](https://github.com/gke-labs/kube-agents/blob/main/AGENTS.md) states this requirement in full and is canonical; what follows summarises it, so trust it over this page if the two ever differ.
+[`AGENTS.md`](https://github.com/gke-labs/kube-agents/blob/main/AGENTS.md) states this requirement and [`.agents/rules/pre_pr_review.md`](https://github.com/gke-labs/kube-agents/blob/main/.agents/rules/pre_pr_review.md) holds its mechanics; together they are canonical. What follows summarises the pair, so trust them over this page if they ever differ.
 
 What that section should say:
 
@@ -115,7 +115,7 @@ there; `status` reports all of them either way. [`docs/designs/live-test-lease.m
 
 Nobody reads a change as cheaply as the person who wrote it, and right now the first hostile reader of most pull requests here is a reviewer who has never seen the code. So every pull request is reviewed by its author first, and the template's **Self-Review** section carries what those passes found — merged into one list, since more than one pass is required.
 
-[`AGENTS.md`](https://github.com/gke-labs/kube-agents/blob/main/AGENTS.md) states this requirement in full and is canonical; what follows summarises it, so trust it over this page if the two ever differ.
+[`AGENTS.md`](https://github.com/gke-labs/kube-agents/blob/main/AGENTS.md) states this requirement and [`.agents/rules/pre_pr_review.md`](https://github.com/gke-labs/kube-agents/blob/main/.agents/rules/pre_pr_review.md) holds its mechanics; together they are canonical. What follows summarises the pair, so trust them over this page if they ever differ.
 
 The method is the repository's own review skill, [`.agents/skills/review-adversarial/SKILL.md`](https://github.com/gke-labs/kube-agents/blob/main/.agents/skills/review-adversarial/SKILL.md) — run it against your branch diff with whatever agent you use. It works ten angles over the change, then re-derives each candidate from the source as a hostile second reader and throws out what it cannot defend.
 
