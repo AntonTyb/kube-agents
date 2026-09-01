@@ -159,6 +159,7 @@ identifier appears, add its source here.
 | Provisioning image-tag attachment (`qualify_image_ref`) | `k8s-operator/scripts/common.sh` |
 | GKE host-discovery label | `k8s-operator/scripts/common.sh` |
 | GitOps clone layout (`/opt/data/gitops/...`) and leases | `agents/platform/scripts/gitops_workspace.py` |
+| Chat platforms an install posts to, the order, and the fallback | `agents/platform/scripts/chat_platforms.py` |
 | fleet-audit finding-id pattern and rendering caps | `agents/platform/skills/fleet-audit/scripts/audit_report.py` |
 | Helm chart value defaults (KSA/secret names, image repos, tag rules) | `charts/kube-agents/values.yaml` |
 | Release tag families (`rc_*`, `rc_*_validated`, `staging_<ts>_<sha>`, GA `X.Y.Z`) and the shared lookups over them | `scripts/release/common.sh` |
