@@ -26,6 +26,7 @@ import importlib
 import inspect
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -73,7 +74,12 @@ class SweepRegistryTest(unittest.TestCase):
         """
         seen = []
         with mock.patch.dict(
-            gate.SWEEPS, {"issues": lambda dry_run=False: seen.append(dry_run) or gate.SweepResult()},
+            gate.SWEEPS,
+            {
+                "issues": lambda dry_run=False, _claimed=None: (
+                    seen.append(dry_run) or gate.SweepResult()
+                )
+            },
             clear=True,
         ), mock.patch.object(gate, "SWEEP_ORDER", ("issues",)):
             gate.main(["--dry-run"])
@@ -83,15 +89,26 @@ class SweepRegistryTest(unittest.TestCase):
     def test_every_registered_sweep_accepts_the_flag(self):
         """Against the real callables, which the stub above cannot check.
 
-        `main` passes `dry_run` positionally. A sweep declared without the
-        parameter raises `TypeError`, and the deliberately broad `except` turns
-        that into a `⚠️` line — so the job would announce itself broken every
-        ten minutes and never poll, while every test that drives `SWEEPS`
-        through a stub carried on passing.
+        `main` passes `dry_run` and the tick's claim set positionally. A sweep
+        declared without either parameter raises `TypeError`, and the
+        deliberately broad `except` turns that into a `⚠️` line — so the job
+        would announce itself broken every ten minutes and never poll, while
+        every test that drives `SWEEPS` through a stub carried on passing.
         """
         for name, sweep in gate.SWEEPS.items():
             with self.subTest(sweep=name):
-                inspect.signature(sweep).bind(False)
+                inspect.signature(sweep).bind(False, set())
+
+    def test_the_update_sweep_runs_before_the_comment_sweep(self):
+        """Registry order is the ordering guarantee, so it is asserted.
+
+        `pr_updates` claims the pull requests it cards and `pr_comments` skips
+        what is claimed. Registered the other way round the claim arrives after
+        the sweep that reads it, both sweeps card the same pull request, and two
+        workers push to one branch. Nothing else in the file would fail.
+        """
+        order = list(gate.SWEEP_ORDER)
+        self.assertLess(order.index("pr_updates"), order.index("pr_comments"))
 
 
 class SelectedSweepsTest(unittest.TestCase):
@@ -437,7 +454,7 @@ class MainTest(unittest.TestCase):
 
     def test_idle_tick_prints_nothing(self):
         """The property the whole job exists for: silence costs nothing."""
-        rc, out, filed = self._run({"issues": lambda _dry=False: gate.SweepResult()})
+        rc, out, filed = self._run({"issues": lambda _dry=False, _claimed=None: gate.SweepResult()})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
         self.assertEqual(filed, [])
@@ -446,7 +463,7 @@ class MainTest(unittest.TestCase):
         """Work is handed to a worker, not announced. The card is the message."""
         card = gate.Card(title="t", body="b", idempotency_key="k")
         rc, out, filed = self._run(
-            {"issues": lambda _dry=False: gate.SweepResult(cards=[card])}
+            {"issues": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[card])}
         )
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
@@ -454,7 +471,7 @@ class MainTest(unittest.TestCase):
 
     def test_warnings_reach_stdout(self):
         rc, out, _ = self._run(
-            {"issues": lambda _dry=False: gate.SweepResult(warnings=["⚠️ broken"])}
+            {"issues": lambda _dry=False, _claimed=None: gate.SweepResult(warnings=["⚠️ broken"])}
         )
         self.assertEqual(rc, 0)
         self.assertIn("⚠️ broken", out)
@@ -462,12 +479,15 @@ class MainTest(unittest.TestCase):
     def test_a_raising_sweep_does_not_stop_its_sibling(self):
         """Sweep isolation — what two separate cron jobs used to give for free."""
 
-        def boom(_dry=False):
+        def boom(_dry=False, _claimed=None):
             raise RuntimeError("kaboom")
 
         card = gate.Card(title="t", body="b", idempotency_key="k")
         rc, out, filed = self._run(
-            {"broken": boom, "working": lambda _dry=False: gate.SweepResult(cards=[card])}
+            {
+                "broken": boom,
+                "working": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[card]),
+            }
         )
         self.assertEqual(rc, 0)
         self.assertEqual(filed, [card])
@@ -475,7 +495,7 @@ class MainTest(unittest.TestCase):
         self.assertIn("`broken` sweep failed", out)
 
     def test_a_raising_sweep_is_reported_not_swallowed(self):
-        def boom(_dry=False):
+        def boom(_dry=False, _claimed=None):
             raise RuntimeError("kaboom")
 
         rc, out, filed = self._run({"broken": boom})
@@ -489,8 +509,8 @@ class MainTest(unittest.TestCase):
         unwanted = gate.Card(title="unwanted", body="b", idempotency_key="k2")
         rc, out, filed = self._run(
             {
-                "issues": lambda _dry=False: gate.SweepResult(cards=[wanted]),
-                "pr_comments": lambda _dry=False: gate.SweepResult(cards=[unwanted]),
+                "issues": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[wanted]),
+                "pr_comments": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[unwanted]),
             },
             env={gate.SWEEPS_ENV: "issues"},
         )
@@ -501,7 +521,8 @@ class MainTest(unittest.TestCase):
     def test_dry_run_files_nothing(self):
         card = gate.Card(title="t", body="b", idempotency_key="k")
         rc, out, filed = self._run(
-            {"issues": lambda _dry=False: gate.SweepResult(cards=[card])}, argv=["--dry-run"]
+            {"issues": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[card])},
+            argv=["--dry-run"],
         )
         self.assertEqual(rc, 0)
         self.assertEqual(filed, [])
@@ -510,9 +531,13 @@ class MainTest(unittest.TestCase):
     def test_dry_run_reaches_the_sweep_itself(self):
         """Card filing is not the only write. Refusals and 👀 are the sweep's."""
         seen = []
-        self._run({"issues": lambda dry=False: (seen.append(dry), gate.SweepResult())[1]},
-                  argv=["--dry-run"])
-        self._run({"issues": lambda dry=False: (seen.append(dry), gate.SweepResult())[1]})
+
+        def watch(dry=False, _claimed=None):
+            seen.append(dry)
+            return gate.SweepResult()
+
+        self._run({"issues": watch}, argv=["--dry-run"])
+        self._run({"issues": watch})
         self.assertEqual(seen, [True, False])
 
 
@@ -645,11 +670,25 @@ class FakeProvider:
 
     supports_acknowledge = True
 
-    def __init__(self, prs=None, comments=None, viewer=SELF, fail_on=()):
+    def __init__(
+        self,
+        prs=None,
+        comments=None,
+        viewer=SELF,
+        fail_on=(),
+        conflicted=False,
+        failing=None,
+        health_fail_on=(),
+    ):
         self.prs = prs or []
         self.comments = comments or {}
         self._viewer = viewer
         self.fail_on = set(fail_on)
+        # Per-PR when a dict, uniform when a scalar: most tests care about one
+        # pull request's condition, a few about how two differing ones sort.
+        self.conflicted = conflicted
+        self.failing = failing if failing is not None else {}
+        self.health_fail_on = set(health_fail_on)
         self.posted = []
         self.acknowledged = []
         self.preflighted = False
@@ -676,8 +715,22 @@ class FakeProvider:
         self.acknowledged.append(comment.node_id)
         return True
 
+    def _per_pr(self, value, pr):
+        return value.get(pr.number) if isinstance(value, dict) else value
+
+    def conflict_state(self, repo, pr):
+        if pr.number in self.health_fail_on:
+            raise forge.ForgeError("REPO_UNREACHABLE", f"#{pr.number}")
+        return self._per_pr(self.conflicted, pr)
+
+    def failing_checks(self, repo, pr):
+        if pr.number in self.health_fail_on:
+            raise forge.ForgeError("REPO_UNREACHABLE", f"#{pr.number}")
+        return list(self._per_pr(self.failing, pr) or [])
+
 
 REPO = "acme/toolkit"
+HEAD_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 
 
 def make_pr(
@@ -686,6 +739,8 @@ def make_pr(
     labels=(),
     author=f"{SELF}[bot]",
     head_repo=REPO,
+    head_sha=HEAD_SHA,
+    base_ref="main",
 ):
     return forge.PullRequest(
         number=number,
@@ -693,6 +748,8 @@ def make_pr(
         author=author,
         labels=labels,
         head_repo=head_repo,
+        head_sha=head_sha,
+        base_ref=base_ref,
     )
 
 
@@ -1277,6 +1334,392 @@ class PrCommentsSweepTest(unittest.TestCase):
         provider = FakeProvider()
         self._sweep(provider)
         self.assertTrue(provider.preflighted)
+
+
+def red(name="unit", conclusion="failure", register="check_run"):
+    return forge.CheckRun(name=name, conclusion=conclusion, register=register)
+
+
+def attempt(sha, author=SELF):
+    """A comment recording one update attempt against `sha`."""
+    return make_comment(
+        f"IC_{sha[:8]}",
+        f"Tried.\n\n{pr_triggers.marker(sha, pr_triggers.UPDATED_MARKER)}",
+        author=author,
+    )
+
+
+class PrUpdatesSweepTest(unittest.TestCase):
+    def _sweep(
+        self, provider, repo=REPO, env=None, dry_run=False, claimed=None, repos=None
+    ):
+        managed = mock.Mock(
+            return_value=list(repos) if repos is not None else ([repo] if repo else [])
+        )
+        with mock.patch(
+            "gitops_workspace.get_managed_github_repos", managed
+        ), mock.patch.object(
+            forge, "provider_for", return_value=provider
+        ), mock.patch.dict(
+            "os.environ", env or {}, clear=False
+        ):
+            for key in (gate.PR_MAX_PER_TICK_ENV, gate.PR_MAX_UPDATE_ATTEMPTS_ENV):
+                if not env or key not in env:
+                    os.environ.pop(key, None)
+            return gate.sweep_pr_updates(dry_run, claimed)
+
+    # -- the quiet paths ---------------------------------------------------
+    def test_a_healthy_pull_request_costs_nothing(self):
+        result = self._sweep(FakeProvider(prs=[make_pr()]))
+        self.assertEqual((result.cards, result.warnings), ([], []))
+
+    def test_no_repo_configured_is_silence_not_a_fault(self):
+        result = self._sweep(FakeProvider(), repo=None)
+        self.assertEqual((result.cards, result.warnings), ([], []))
+
+    # -- the two conditions ------------------------------------------------
+    def test_a_conflicted_pull_request_is_carded(self):
+        result = self._sweep(FakeProvider(prs=[make_pr()], conflicted=True))
+        self.assertEqual(len(result.cards), 1)
+        self.assertIn("merge conflict", result.cards[0].title)
+        self.assertIn("`main`", result.cards[0].body)
+
+    def test_a_red_pull_request_is_carded(self):
+        result = self._sweep(
+            FakeProvider(prs=[make_pr()], failing=[red("lint"), red("unit")])
+        )
+        self.assertEqual(len(result.cards), 1)
+        self.assertIn("2 failing checks", result.cards[0].title)
+        self.assertIn("`lint`", result.cards[0].body)
+
+    def test_both_conditions_are_named_on_one_card(self):
+        result = self._sweep(
+            FakeProvider(prs=[make_pr()], conflicted=True, failing=[red()])
+        )
+        self.assertEqual(len(result.cards), 1)
+        self.assertIn("merge conflict, 1 failing check", result.cards[0].title)
+
+    def test_an_uncomputed_merge_with_nothing_red_files_nothing(self):
+        """`None` is "the forge has not finished", not "conflicted".
+
+        Carding on it would hand a worker a branch that may be perfectly clean,
+        every tick from the moment of a push until GitHub caught up.
+        """
+        result = self._sweep(FakeProvider(prs=[make_pr()], conflicted=None))
+        self.assertEqual(result.cards, [])
+        self.assertEqual(result.warnings, [])
+
+    def test_an_uncomputed_merge_does_not_hide_a_red_check(self):
+        """The two conditions are independent, and CI is readable either way."""
+        result = self._sweep(
+            FakeProvider(prs=[make_pr()], conflicted=None, failing=[red()])
+        )
+        self.assertEqual(len(result.cards), 1)
+        self.assertNotIn("Merge conflict", result.cards[0].body)
+
+    # -- scope -------------------------------------------------------------
+    def test_a_pull_request_the_agent_did_not_author_is_out_of_scope(self):
+        provider = FakeProvider(prs=[make_pr(head_ref="feat/human-work")], conflicted=True)
+        self.assertEqual(self._sweep(provider).cards, [])
+
+    def test_the_ignore_label_opts_a_pull_request_out(self):
+        provider = FakeProvider(
+            prs=[make_pr(labels=(forge.IGNORE_LABEL,))], conflicted=True
+        )
+        self.assertEqual(self._sweep(provider).cards, [])
+
+    def test_a_pull_request_with_no_head_sha_is_reported_not_guessed(self):
+        """Every bound here is keyed on the tip.
+
+        Without one the marker would name nothing and the attempt would repeat
+        forever, so the pull request is skipped and the tick says so.
+        """
+        provider = FakeProvider(prs=[make_pr(head_sha="")], conflicted=True)
+        result = self._sweep(provider)
+        self.assertEqual(result.cards, [])
+        self.assertIn("could not check", result.warnings[0])
+
+    def test_an_unreadable_pull_request_warns_rather_than_stopping_the_sweep(self):
+        provider = FakeProvider(
+            prs=[make_pr(number=12), make_pr(number=13)],
+            conflicted=True,
+            health_fail_on=(12,),
+        )
+        result = self._sweep(provider)
+        self.assertEqual(len(result.cards), 1)
+        self.assertIn("acme/toolkit#13", result.cards[0].title)
+        self.assertIn("acme/toolkit#12", result.warnings[0])
+
+    # -- the bounds that make the loop terminate ---------------------------
+    def test_a_head_already_attempted_is_not_carded_again(self):
+        provider = FakeProvider(
+            prs=[make_pr()], conflicted=True, comments={12: [attempt(HEAD_SHA)]}
+        )
+        self.assertEqual(self._sweep(provider).cards, [])
+
+    def test_a_new_tip_after_a_failed_fix_is_carded_once_more(self):
+        """The retry the per-tip marker deliberately allows.
+
+        A fix that did not work moves the head, and the next tick gets one more
+        go at it — bounded only by the attempt budget below.
+        """
+        provider = FakeProvider(
+            prs=[make_pr(head_sha="b" * 40)],
+            conflicted=True,
+            comments={12: [attempt(HEAD_SHA)]},
+        )
+        self.assertEqual(len(self._sweep(provider).cards), 1)
+
+    def test_the_attempt_budget_stops_the_loop(self):
+        """What the per-tip marker cannot do on a branch being pushed to.
+
+        Each failed fix mints a fresh tip, so the tip test passes every time
+        and only the count terminates the loop.
+        """
+        provider = FakeProvider(
+            prs=[make_pr(head_sha="c" * 40)],
+            conflicted=True,
+            comments={12: [attempt("a" * 40), attempt("b" * 40)]},
+        )
+        result = self._sweep(provider, env={gate.PR_MAX_UPDATE_ATTEMPTS_ENV: "2"})
+        self.assertEqual(result.cards, [])
+        # stderr, not chat: the agent has already written two comments on this
+        # pull request saying what happened.
+        self.assertEqual(result.warnings, [])
+
+    def test_a_marker_somebody_else_wrote_does_not_spend_the_budget(self):
+        provider = FakeProvider(
+            prs=[make_pr()],
+            conflicted=True,
+            comments={12: [attempt(HEAD_SHA, author="passer-by")]},
+        )
+        self.assertEqual(len(self._sweep(provider).cards), 1)
+
+    def test_the_per_tick_cap_prefers_the_oldest_pull_request(self):
+        """The cap must not let a burst of new ones starve the stalest branch."""
+        provider = FakeProvider(
+            prs=[make_pr(number=n) for n in (31, 7, 19)], conflicted=True
+        )
+        result = self._sweep(provider, env={gate.PR_MAX_PER_TICK_ENV: "1"})
+        self.assertIn("#7", result.cards[0].title)
+
+    # -- the claim `pr_comments` reads -------------------------------------
+    def test_a_carded_pull_request_is_claimed(self):
+        claimed = set()
+        self._sweep(FakeProvider(prs=[make_pr()], conflicted=True), claimed=claimed)
+        self.assertEqual(claimed, {(REPO, 12)})
+
+    def test_the_claim_is_repo_qualified(self):
+        """So a multi-repo watcher cannot silence `repoB#7` for `repoA#7`.
+
+        A bare number would, and it would do it without writing anything
+        anywhere: the comment sweep's skip is silent by design.
+        """
+        provider = FakeProvider(
+            prs=[make_pr()],
+            comments={12: [make_comment("IC_1", "/agent fix it")]},
+        )
+        with mock.patch(
+            "gitops_workspace.get_managed_github_repos", mock.Mock(return_value=[REPO])
+        ), mock.patch.object(forge, "provider_for", return_value=provider):
+            result = gate.sweep_pr_comments(False, {("other/repo", 12)})
+        self.assertEqual(len(result.cards), 1)
+
+    def test_a_healthy_pull_request_is_not_claimed(self):
+        claimed = set()
+        self._sweep(FakeProvider(prs=[make_pr()]), claimed=claimed)
+        self.assertEqual(claimed, set())
+
+    def test_a_claim_holds_through_a_dry_run(self):
+        """Withholding it would put a second worker on the branch.
+
+        Nothing is filed either way, so the claim costs at most the card's hour
+        bucket of delay on that pull request's comments and buys the ordering
+        guarantee.
+        """
+        claimed = set()
+        self._sweep(
+            FakeProvider(prs=[make_pr()], conflicted=True),
+            dry_run=True,
+            claimed=claimed,
+        )
+        self.assertEqual(claimed, {(REPO, 12)})
+
+    def test_the_comment_sweep_skips_what_this_one_claimed(self):
+        """The whole point of the ordering in `SWEEPS`.
+
+        Both sweeps would otherwise card the same pull request in one tick, and
+        the two workers would race each other's pushes to one branch.
+        """
+        provider = FakeProvider(
+            prs=[make_pr()],
+            conflicted=True,
+            comments={12: [make_comment("IC_1", "/agent fix it")]},
+        )
+        claimed = set()
+        update = self._sweep(provider, claimed=claimed)
+        with mock.patch(
+            "gitops_workspace.get_managed_github_repos", mock.Mock(return_value=[REPO])
+        ), mock.patch.object(forge, "provider_for", return_value=provider):
+            comments = gate.sweep_pr_comments(False, claimed)
+        self.assertEqual(len(update.cards), 1)
+        self.assertEqual(comments.cards, [])
+
+    # -- card keying -------------------------------------------------------
+    def test_the_key_carries_the_head_sha_and_the_hour(self):
+        item = gate._Unhealthy(repo=REPO, pr=make_pr(), conflicted=True, failing=[])
+        key = gate._update_card(
+            item, REPO, now=datetime(2026, 8, 12, 3, 0, tzinfo=timezone.utc)
+        ).idempotency_key
+        self.assertIn(HEAD_SHA[: gate.UPDATE_KEY_SHA_CHARS], key)
+        self.assertTrue(key.endswith("20260812T03"), key)
+
+    def test_two_ticks_in_one_hour_on_one_tip_share_a_key(self):
+        """The board dedupes on it, so a crashed turn is not re-dispatched
+        every ten minutes."""
+        item = gate._Unhealthy(repo=REPO, pr=make_pr(), conflicted=True, failing=[])
+        keys = {
+            gate._update_card(
+                item, REPO, now=datetime(2026, 8, 12, 3, minute, tzinfo=timezone.utc)
+            ).idempotency_key
+            for minute in (0, 50)
+        }
+        self.assertEqual(len(keys), 1)
+
+    def test_the_next_hour_mints_a_new_key_on_one_tip(self):
+        """Why this is not the day bucket the retry interval would prefer.
+
+        The sweep re-claims an unhealthy pull request every tick and
+        `pr_comments` skips what is claimed, so the bucket is also how long a
+        worker that died before recording can keep a reviewer waiting.
+        """
+        item = gate._Unhealthy(repo=REPO, pr=make_pr(), conflicted=True, failing=[])
+        keys = {
+            gate._update_card(
+                item, REPO, now=datetime(2026, 8, 12, hour, tzinfo=timezone.utc)
+            ).idempotency_key
+            for hour in (3, 4)
+        }
+        self.assertEqual(len(keys), 2)
+
+    def test_a_moved_tip_mints_a_new_key(self):
+        now = datetime(2026, 8, 12, 3, 0, tzinfo=timezone.utc)
+        keys = {
+            gate._update_card(
+                gate._Unhealthy(repo=REPO, pr=make_pr(head_sha=sha), conflicted=True, failing=[]),
+                REPO,
+                now=now,
+            ).idempotency_key
+            for sha in (HEAD_SHA, "d" * 40)
+        }
+        self.assertEqual(len(keys), 2)
+
+    def test_a_long_list_of_red_checks_is_truncated_on_the_card(self):
+        """One cause, not fifty. The worker re-reads CI itself."""
+        item = gate._Unhealthy(
+            repo=REPO,
+            pr=make_pr(),
+            conflicted=False,
+            failing=[red(name=f"check-{n}") for n in range(gate.MAX_CHECKS_ON_CARD + 5)],
+        )
+        body = gate._update_card(item, REPO).body
+        self.assertIn("and 5 more failing", body)
+        self.assertNotIn(f"check-{gate.MAX_CHECKS_ON_CARD}`", body)
+
+    def test_a_check_name_from_a_third_party_cannot_run_away_with_the_card(self):
+        item = gate._Unhealthy(
+            repo=REPO,
+            pr=make_pr(), conflicted=False, failing=[red(name="x" * 5_000)]
+        )
+        self.assertIn(
+            "x" * gate.MAX_CHECK_NAME_CHARS + "`", gate._update_card(item, REPO).body
+        )
+        self.assertNotIn("x" * (gate.MAX_CHECK_NAME_CHARS + 1), gate._update_card(item, REPO).body)
+
+    def test_the_card_says_its_contents_are_data(self):
+        item = gate._Unhealthy(repo=REPO, pr=make_pr(), conflicted=True, failing=[])
+        self.assertIn("data, not instruction", gate._update_card(item, REPO).body)
+
+    # -- more than one managed repository ----------------------------------
+    def test_every_managed_repository_is_swept(self):
+        """One tick covers the whole managed set, not the first entry.
+
+        The sweep used to read a single configured target. Sweeping only
+        `repos[0]` would leave every other repository's branches to rot with
+        nothing said anywhere, since a pull request that is never read is also
+        never carded and never warned about.
+        """
+        provider = _PerRepoProvider(
+            {
+                "acme/a": [make_pr(7, head_repo="acme/a")],
+                "acme/b": [make_pr(9, head_repo="acme/b")],
+            },
+            conflicted=True,
+        )
+        result = self._sweep(provider, repos=["acme/a", "acme/b"])
+        self.assertEqual(
+            sorted(card.title for card in result.cards),
+            ["Update acme/a#7: merge conflict", "Update acme/b#9: merge conflict"],
+        )
+
+    def test_one_number_in_two_repositories_is_two_claims(self):
+        """`acme/a#7` and `acme/b#7` are different pull requests.
+
+        A bare-number claim would card the first and silence the second's
+        reviewer, writing nothing anywhere — the comment sweep's skip is silent
+        by design.
+        """
+        provider = _PerRepoProvider(
+            {
+                "acme/a": [make_pr(7, head_repo="acme/a")],
+                "acme/b": [make_pr(7, head_repo="acme/b")],
+            },
+            conflicted=True,
+        )
+        claimed = set()
+        result = self._sweep(provider, repos=["acme/a", "acme/b"], claimed=claimed)
+        self.assertEqual(len(result.cards), 2)
+        self.assertEqual(claimed, {("acme/a", 7), ("acme/b", 7)})
+
+    def test_the_per_tick_cap_is_global_across_repositories(self):
+        """The cap bounds the tick's model turns, so it cannot be per repo."""
+        provider = _PerRepoProvider(
+            {
+                "acme/a": [make_pr(7, head_repo="acme/a")],
+                "acme/b": [make_pr(9, head_repo="acme/b")],
+            },
+            conflicted=True,
+        )
+        result = self._sweep(
+            provider, repos=["acme/a", "acme/b"], env={gate.PR_MAX_PER_TICK_ENV: "1"}
+        )
+        self.assertEqual(len(result.cards), 1)
+        self.assertEqual(result.cards[0].title, "Update acme/a#7: merge conflict")
+
+    def test_an_unreadable_pull_request_is_named_with_its_repository(self):
+        """`#12` alone does not say which branch was skipped."""
+        provider = _PerRepoProvider(
+            {
+                "acme/a": [make_pr(12, head_repo="acme/a")],
+                "acme/b": [make_pr(12, head_repo="acme/b")],
+            },
+            conflicted=True,
+            fail_on=(12,),
+        )
+        result = self._sweep(provider, repos=["acme/a", "acme/b"])
+        self.assertIn("acme/a#12", result.warnings[0])
+        self.assertIn("acme/b#12", result.warnings[0])
+
+
+class _PerRepoProvider(FakeProvider):
+    """A `FakeProvider` whose open pull requests differ by repository."""
+
+    def __init__(self, by_repo, **kwargs):
+        super().__init__(prs=[], **kwargs)
+        self._by_repo = by_repo
+
+    def list_open_prs(self, repo):
+        return list(self._by_repo.get(repo, []))
 
 
 if __name__ == "__main__":

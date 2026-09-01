@@ -189,6 +189,11 @@ class ForgeProvider(Protocol):
 `Commit` carries the committer date beside the sha because a list of shas cannot express the bound
 the claim check enforces — see step 4 of the worker skill below.
 
+The protocol has since grown two more operations — `conflict_state` and `failing_checks`, the two
+reads that decide whether a pull request can still merge. They are not part of this feature and
+[`pr-update-sweep.md`](pr-update-sweep.md) §2 owns them; what belongs here is that a second
+implementation of this protocol owes them too.
+
 `GitHubProvider` implements it over the proxied `gh`, merging GitHub's three comment endpoints
 (`issues/N/comments`, `pulls/N/comments`, `pulls/N/reviews`) into one normalised list. Selection
 dispatches on the host in `SETTINGS.md`'s `Git Repo:` line. Every provider call goes through one
@@ -284,7 +289,10 @@ deterministic lives here, so an idle tick still costs no model at all.
   authenticates as, a head branch starting with `platform-agent/` — written in code only by
   `audit_report.group_branch_for`, and instructed rather than enforced for `submit-suggestion`,
   whose `check_branch` rejects an empty or protected branch name and nothing more — and a head that
-  lives in the configured repository rather than a fork. Minus any carrying `agent:ignore`.
+  lives in the configured repository rather than a fork. Minus any carrying `agent:ignore`, and
+  minus any the `pr_updates` sweep claimed earlier in the same tick — that pull request already has
+  a worker, and answering these comments is its stage 2. [`pr-update-sweep.md`](pr-update-sweep.md)
+  §3 owns the claim.
 
   The plan scoped on the branch prefix alone, which is attacker-chosen: anyone may fork the
   repository, push `platform-agent/anything`, and open a pull request from it. Every comment on that
