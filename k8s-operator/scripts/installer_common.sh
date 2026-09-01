@@ -667,6 +667,12 @@ write_tfvars_from_state() {
   # fresh clone that has none. Defaulting on for that caller would let the
   # Autopilot version-floor check below abort a destroy, leaving an install
   # with no working way to remove itself.
+  #
+  # The fallback only reaches the teardown that has no vars.sh, which is not
+  # the ordinary one — a teardown from the checkout that installed sources a
+  # vars.sh saying ENABLE_GVISOR="true". uninstall.sh therefore exports false
+  # itself before calling this, and the comment there is where that argument
+  # lives. Do not read the fallback as protecting the teardown on its own.
   local gvisor_node_pool="false" agent_runtime_class=""
   if is_truthy "${ENABLE_GVISOR:-false}"; then
     agent_runtime_class="gvisor"
@@ -706,6 +712,7 @@ write_tfvars_from_state() {
       elif ! gke_version_at_least "$master_version" "$GVISOR_AUTOPILOT_MIN_VERSION"; then
         print_error "Autopilot cluster '${CLUSTER_NAME}' runs GKE ${master_version}, and its gvisor RuntimeClass needs ${GVISOR_AUTOPILOT_MIN_VERSION} or later."
         print_info "Upgrade the cluster, or run the agent on the standard runtime: install.sh takes --gvisor=false, and upgrade.sh reads the choice from ENABLE_GVISOR in k8s-operator/scripts/vars.sh. Continuing would apply every GCP and Helm resource and then fail on a missing agent Deployment."
+        print_info "Tearing down instead? uninstall.sh forces ENABLE_GVISOR=false and is never blocked by this check; if you reach it from some other caller, export ENABLE_GVISOR=false first."
         return 1
       fi
       print_info "Cluster '${CLUSTER_NAME}' is Autopilot: using its built-in gvisor RuntimeClass, with no sandbox node pool to provision."

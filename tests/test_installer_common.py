@@ -430,6 +430,20 @@ class InstallerCommonTest(unittest.TestCase):
         self.assertIn("--gvisor=false", proc.stderr)
         self.assertIn("vars.sh", proc.stderr)
 
+    def test_tfvars_gvisor_off_clears_the_floor_on_a_sub_floor_autopilot(self):
+        # The composition uninstall.sh relies on: an explicit false must skip
+        # the floor check, not merely the tfvars values. The unset case above
+        # only covers a teardown from a fresh clone with no vars.sh; the
+        # ordinary teardown sources one saying "true" and uninstall.sh exports
+        # false over it, which is this row.
+        proc = self._run(
+            'rc=0; write_tfvars_from_state /dev/null || rc=$?; echo "rc=$rc"',
+            env={"API_SERVER_KEY": "k", "ENABLE_GVISOR": "false"},
+            describe_stub=_autopilot_describe_stub("1.26.9-gke.9999"),
+        )
+        self.assertIn("rc=0", proc.stdout, proc.stderr)
+        self.assertNotIn("1.27.4-gke.800", proc.stderr)
+
     def test_tfvars_with_gvisor_off_sets_neither(self):
         with tempfile.TemporaryDirectory() as out_dir:
             dest = pathlib.Path(out_dir) / "terraform.tfvars"

@@ -446,7 +446,12 @@ platformAgent:
       #
       # The Terraform composition always passes this explicitly (from
       # agent_runtime_class, which install.sh derives from --gvisor), so this
-      # default is what a direct `helm install` gets.
+      # default is what a direct `helm install` gets -- and what a `helm
+      # upgrade` of a release that never set the key adopts, since Helm merges
+      # the new chart's defaults. That upgrade path fails quietly where the
+      # RuntimeClass is missing: the operator stops before reconciling the
+      # workload, so the previous unsandboxed Deployment keeps running while
+      # .status says Degraded. See the chart README's Usage section.
       runtimeClassName: "gvisor"
     # Extra environment for the agent container, applied after the operator's own
     # values so it overrides them. Telemetry is the case this exists for, though

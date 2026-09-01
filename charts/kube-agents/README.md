@@ -68,6 +68,19 @@ add `--set platformAgent.deployment.availability.runtimeClassName=""` to run on
 the standard container runtime. See
 [Agent runtime knobs](#agent-runtime-knobs) for what the sandbox needs.
 
+**Upgrading an existing release picks this up too.** Helm applies the new
+chart's defaults for any key your release does not already set, so a release
+installed before this default and upgraded without pinning the value starts
+asking for the sandbox. On a cluster with no `gvisor` RuntimeClass that upgrade
+is quiet rather than loud: the operator stops at its RuntimeClass check before
+touching the workload, so the agent Deployment from the previous reconcile keeps
+running on the standard runtime — and every later change to the CR goes
+unapplied — while `.status` reports `Degraded` with `RuntimeClassNotFound`.
+`helm upgrade` itself reports success. Pass the same `--set …runtimeClassName=""`
+to stay on the standard runtime, or check
+`kubectl get platformagent -n kubeagents-system -o jsonpath='{.items[0].status}'`
+after the upgrade.
+
 ### Installing from a repository checkout
 
 The `appVersion` in a checkout's `Chart.yaml` is a placeholder that never
@@ -490,6 +503,7 @@ helm uninstall kube-agents -n kubeagents-system
   `terraform/examples/full-install` does both in one apply.
 
   Two behaviours worth knowing before you enable them:
+
   - **`failurePolicy` defaults to `Ignore`, where the kustomize path uses
     `Fail`.** Helm applies the webhook configurations before both the
     `Certificate` and the `PlatformAgent` CR, so under `Fail` the API server
