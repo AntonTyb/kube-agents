@@ -71,10 +71,13 @@ held it level with a `resolver.py` function that is also gone.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import re
 import subprocess
+import tempfile
 import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Protocol, Sequence
@@ -136,11 +139,33 @@ REASON_HOST_UNSUPPORTED = "FORGE_HOST_UNSUPPORTED"
 #: resubmission. See `PullRequestExists`.
 REASON_PULL_REQUEST_EXISTS = "PULL_REQUEST_EXISTS"
 
+#: Reason code for a forge that refused to open a change for a reason that is
+#: not "one is already open". Distinct from `REPO_UNREACHABLE` because by the
+#: time this can be raised the branch has just been pushed to that repository
+#: over the same credential, so the reachability reading is provably wrong and
+#: sends an operator to check the two things already known to work.
+REASON_PULL_REQUEST_REFUSED = "PULL_REQUEST_REFUSED"
+
 #: What `gh pr create` says when the branch already has an open pull request,
 #: matched case-insensitively against the merged output. Recognising the phrase
 #: is GitHub-shaped and so belongs to `GitHubProvider`; deciding that it is not
 #: a failure is harness policy and belongs to the caller.
 _PR_EXISTS_MARKER = "already exists"
+
+#: How much of a forge's complaint a `ForgeError` carries. The detail lands in
+#: a one-line operator-facing warning, so it is a line's worth and not a log.
+_DETAIL_CHARS = 200
+
+#: Mode for a body staged on disk for `--body-file`. The sandbox writes it and
+#: the credential sidecar's `gh` reads it, and since #955 those are different
+#: uids sharing the mount through `agentFSGroup` — `tempfile`'s 0600 default is
+#: unreadable to the reader. `audit_report.py` and `github_scan_gate.py` staged
+#: bodies this way before this module did.
+_BODY_FILE_MODE = 0o664
+
+#: Suffix for a staged body. `gh` does not care; a human who finds one left
+#: behind after a crash does.
+_BODY_FILE_SUFFIX = ".md"
 
 
 class ForgeError(Exception):
@@ -319,6 +344,58 @@ class ForgeProvider(Protocol):
     def pull_request_url(self, repo: str, *, head: str) -> str: ...
 
 
+@contextlib.contextmanager
+def body_file(body: str, directory: str):
+    """Stage `body` on disk for `--body-file`, and delete it either way.
+
+    Never `--body`. A description here runs to thousands of characters, and
+    `--body` puts all of them on a command line that crosses the credential
+    proxy with two shells' quoting rules in between; `post_comment` documents
+    the same rule for the same reason.
+
+    The mode is the part that is not obvious. Since #955 the sandbox writing
+    this file and the sidecar `gh` reading it are different uids sharing the
+    mount through `agentFSGroup`, so `tempfile`'s owner-only 0600 default
+    produces a file the reader cannot open — and the failure lands *after* a
+    push, where it reads as "the submission failed" rather than "the body was
+    unreadable". `_BODY_FILE_MODE` says the rest.
+
+    `directory` must be on the volume both containers share. `/tmp` is a
+    per-container emptyDir, so a body staged there names a file the sidecar
+    cannot open — #1030, and there is deliberately no fallback to it, because
+    that fallback turns a fixable mount problem into a guaranteed failure that
+    reads as a graceful degrade.
+
+    Lives here rather than beside a caller because every consumer
+    `docs/designs/multi-forge-support.md` §4 still has to migrate needs it, and
+    the invariant was already stated in two places before this was one.
+    `github_scan_gate._post_body` and `audit_report._write_temp` are those two;
+    they also create and police their own scratch directory, so folding them in
+    belongs with the migration that §4 schedules rather than here.
+    """
+    try:
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", suffix=_BODY_FILE_SUFFIX, dir=str(directory), delete=False, encoding="utf-8"
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"cannot stage a body file in {directory} (uid {os.getuid()}): {exc}. "
+            "The credential sidecar resolves body-file paths in its own "
+            "filesystem, so this directory has to be on the shared volume — "
+            "fix the mount or its permissions (see gke-labs/kube-agents#1030)."
+        ) from exc
+    try:
+        handle.write(body)
+        handle.close()
+        os.chmod(handle.name, _BODY_FILE_MODE)
+        yield handle.name
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+
+
 def normalise_login(login: str) -> str:
     """Reduce every spelling of one account to a single key.
 
@@ -444,17 +521,27 @@ class GitHubProvider:
         self._viewer: Optional[str] = None
 
     # -- the seam ---------------------------------------------------------
-    def _call(self, argv: Sequence[str], *, expect_json: bool = True):
+    def _call(self, argv: Sequence[str], *, expect_json: bool = True, check: bool = True):
         """Every forge round trip goes through here. See the module docstring.
 
         Returns parsed JSON, or None for a call made only for its effect. A
         non-zero exit raises `REPO_UNREACHABLE`, which is the honest reading of
         a `gh` failure that survived the preflight: the credential works
         somewhere, just not here.
+
+        `check=False` hands the raw result back instead, for the one caller
+        where the exit code is an answer rather than a failure — see
+        `create_pull_request`. It is a parameter rather than a second path to
+        the runner because the module docstring's invariant is that a provider
+        talking to a `/v1/<forge>/…` route replaces this method and nothing
+        else; a method reaching `self._run` directly would silently keep
+        shelling `gh` under such a provider.
         """
         result = self._run(list(argv))
+        if not check:
+            return result
         if result.returncode != 0:
-            raise ForgeError("REPO_UNREACHABLE", (result.stderr or "").strip()[:200])
+            raise ForgeError("REPO_UNREACHABLE", (result.stderr or "").strip()[:_DETAIL_CHARS])
         if not expect_json:
             return None
         text = (result.stdout or "").strip()
@@ -744,18 +831,23 @@ class GitHubProvider:
         able to tell it from a real failure — a protected base, a credential
         without permission — and only the text distinguishes them.
 
-        This is the one method that reads `self._run`'s result rather than going
-        through `_call`, because `_call`'s contract is to raise on any non-zero
-        exit and this is the case where the exit code is not the answer. Both
-        reach the forge the same way, so a test's injected runner still sees it.
+        This is the one caller of `_call(check=False)` — the exit code is an
+        answer here rather than a failure — but it still goes through `_call`,
+        so a provider that replaces that method replaces this one's transport
+        too.
 
-        `--body-file` for the same reason `post_comment` uses it: a description
-        runs to thousands of characters and `--body` would put all of them on a
-        command line, through the credential proxy, with the quoting rules of
-        two shells in between. `-R` is always passed, so the call does not
-        depend on the process being inside a clone of `repo`.
+        Any other refusal raises `PULL_REQUEST_REFUSED` rather than
+        `REPO_UNREACHABLE`: the push has just succeeded against this repository
+        over this credential, so reachability is the one explanation already
+        ruled out. The detail carries the exit code and both streams, because
+        `gh` puts a protected-base rejection on stdout and the credential
+        proxy's block message on stderr.
+
+        `--body-file` for the reason `body_file` documents. `-R` is always
+        passed, so the call does not depend on the process being inside a clone
+        of `repo`.
         """
-        result = self._run(
+        result = self._call(
             [
                 "pr", "create",
                 "-R", repo,
@@ -763,16 +855,27 @@ class GitHubProvider:
                 "--head", head,
                 "--title", title,
                 "--body-file", body_file,
-            ]
+            ],
+            check=False,
         )
         if result.returncode != 0:
-            merged = f"{result.stdout or ''}\n{result.stderr or ''}"
+            merged = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
             if _PR_EXISTS_MARKER in merged.lower():
-                raise PullRequestExists(head, merged.strip()[:200])
-            raise ForgeError("REPO_UNREACHABLE", (result.stderr or "").strip()[:200])
-        # `gh` prints the URL, but a version that printed nothing would
-        # otherwise return "" as though the pull request had no address.
-        return (result.stdout or "").strip() or self.pull_request_url(repo, head=head)
+                raise PullRequestExists(head, merged[:_DETAIL_CHARS])
+            raise ForgeError(
+                REASON_PULL_REQUEST_REFUSED,
+                f"exit {result.returncode}: {merged}"[:_DETAIL_CHARS],
+            )
+        url = (result.stdout or "").strip()
+        if url:
+            return url
+        # A `gh` that printed nothing still opened the pull request, so a failed
+        # read-back must not turn that success into a reported failure. The
+        # caller re-pushing on a false failure is the wasted round this avoids.
+        try:
+            return self.pull_request_url(repo, head=head)
+        except ForgeError:
+            return ""
 
     def update_pull_request(
         self, repo: str, *, head: str, title: str, body_file: str
@@ -794,12 +897,17 @@ class GitHubProvider:
         )
 
     def pull_request_url(self, repo: str, *, head: str) -> str:
-        """The open pull request's address, or "" when it has none.
+        """The open pull request's address for `head`.
+
+        A branch with no open pull request is a `ForgeError`, not `""` — `gh pr
+        view` exits non-zero for it and `_call` raises. `""` is reserved for the
+        narrower case of an answer that parsed but carried no `url`, which is a
+        forge that replied strangely rather than a branch with nothing open.
 
         `--json url` rather than `--jq`: the projection is one field either way,
         and reading it here keeps the parse in Python where a malformed answer
         raises `FORGE_RESPONSE_UNREADABLE` instead of arriving as an empty
-        string that looks like "no pull request".
+        string.
         """
         row = self._call(["pr", "view", head, "-R", repo, "--json", "url"])
         if not isinstance(row, dict):

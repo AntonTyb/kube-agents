@@ -19,12 +19,10 @@ this script takes one, and refuses to write in anyone else's.
 """
 
 import argparse
-import contextlib
 import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # Append global scripts path to allow importing the shared helpers
@@ -246,37 +244,21 @@ def create_pull_request(
     """
     log(f"Submitting GitOps Pull Request for branch '{branch}'...")
     provider = forge.provider_for(repo)
-    with _body_file(body, workspace) as body_file:
+    with forge.body_file(body, workspace) as path:
         try:
-            return provider.create_pull_request(
-                repo, head=branch, base=base, title=title, body_file=body_file
+            url = provider.create_pull_request(
+                repo, head=branch, base=base, title=title, body_file=path
             )
         except forge.PullRequestExists:
             log(f"A pull request for '{branch}' is already open; updating it in place.")
             return update_pull_request(branch, title, body, workspace, repo)
-
-
-@contextlib.contextmanager
-def _body_file(body: str, workspace: str):
-    """The description on disk, deleted whether or not the call succeeded.
-
-    A file rather than an argv string: the body crosses the credential proxy and
-    two shells' quoting rules on its way to the forge, which `forge.post_comment`
-    documents at length. Written inside the leased workspace so it is covered by
-    the same cleanup as the clone.
-    """
-    handle = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", dir=str(workspace), delete=False, encoding="utf-8"
-    )
-    try:
-        handle.write(body)
-        handle.close()
-        yield handle.name
-    finally:
-        try:
-            os.unlink(handle.name)
-        except OSError:
-            pass
+    if not url:
+        raise RuntimeError(
+            f"the forge opened a pull request for '{branch}' but did not return its "
+            "address, and reading it back failed too. The push and the pull request "
+            "both landed; find it on the forge rather than resubmitting."
+        )
+    return url
 
 
 def update_pull_request(
@@ -284,10 +266,8 @@ def update_pull_request(
 ) -> str:
     """Point the existing pull request for `branch` at the work just pushed."""
     provider = forge.provider_for(repo)
-    with _body_file(body, workspace) as body_file:
-        provider.update_pull_request(
-            repo, head=branch, title=title, body_file=body_file
-        )
+    with forge.body_file(body, workspace) as path:
+        provider.update_pull_request(repo, head=branch, title=title, body_file=path)
     url = provider.pull_request_url(repo, head=branch)
     if not url:
         raise RuntimeError(
@@ -370,6 +350,16 @@ def main():
         # The foreign-lease refusal. Distinct from the generic failure below
         # because it is the one an agent can act on without an operator.
         log(f"REFUSED: {e}")
+        sys.exit(1)
+    except forge.ForgeError as e:
+        # The forge refused, with a reason code naming which layer did. Kept
+        # ahead of the generic handler because `ForgeError` is not a
+        # `CalledProcessError` and would otherwise print as one bare line;
+        # `create_pull_request` folds the exit code and both streams into
+        # the error's value, and that is the whole diagnosis.
+        log(f"FATAL ERROR: the forge refused the request [{e.reason}]")
+        if e.value:
+            log(f"Detail:\n{e.value}")
         sys.exit(1)
     except subprocess.CalledProcessError as e:
         log("FATAL ERROR: GitOps subprocess execution failed!")

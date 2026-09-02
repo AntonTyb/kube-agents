@@ -29,6 +29,7 @@ Four properties carry most of the weight:
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1085,15 +1086,31 @@ class CreatePullRequestTest(unittest.TestCase):
         self.assertEqual(caught.exception.head, "platform-agent/x")
         self.assertIn("pull/7", caught.exception.value)
 
-    def test_every_other_refusal_stays_a_plain_forge_error(self):
+    def test_every_other_refusal_is_a_refusal_not_an_unreachable_repository(self):
+        """The push has already landed against this repository over this
+        credential, so `REPO_UNREACHABLE` would send an operator to check the
+        two things known to work."""
         gh = FakeGh(default=(1, "", "HTTP 403: Resource not accessible by integration"))
         with self.assertRaises(forge.ForgeError) as caught:
             self._provider(gh).create_pull_request(
                 "acme/fleet", head="platform-agent/x", base="main", title="t",
                 body_file="/tmp/body.md",
             )
-        self.assertEqual(caught.exception.reason, "REPO_UNREACHABLE")
+        self.assertEqual(caught.exception.reason, "PULL_REQUEST_REFUSED")
         self.assertNotIsInstance(caught.exception, forge.PullRequestExists)
+
+    def test_the_detail_carries_the_exit_code_and_both_streams(self):
+        """`gh` puts a protected-base rejection on stdout and the credential
+        proxy's block message on stderr, and the old handler logged both."""
+        gh = FakeGh(default=(2, "base branch is protected", "and the token cannot override it"))
+        with self.assertRaises(forge.ForgeError) as caught:
+            self._provider(gh).create_pull_request(
+                "acme/fleet", head="platform-agent/x", base="main", title="t",
+                body_file="/tmp/body.md",
+            )
+        self.assertIn("exit 2", caught.exception.value)
+        self.assertIn("base branch is protected", caught.exception.value)
+        self.assertIn("cannot override", caught.exception.value)
 
     def test_a_silent_success_is_read_back_rather_than_returned_empty(self):
         """`gh` prints the URL today. A version that did not would otherwise
@@ -1107,6 +1124,34 @@ class CreatePullRequestTest(unittest.TestCase):
             body_file="/tmp/body.md",
         )
         self.assertEqual(url, "https://x/pull/9")
+
+    def test_a_failed_read_back_does_not_turn_a_success_into_a_failure(self):
+        """The pull request was opened. Raising here would have the caller
+        re-push a branch whose change is already up."""
+        gh = FakeGh(responses={"pr view": (1, "", "not found")}, default=(0, "", ""))
+        url = self._provider(gh).create_pull_request(
+            "acme/fleet", head="platform-agent/x", base="main", title="t",
+            body_file="/tmp/body.md",
+        )
+        self.assertEqual(url, "")
+
+    def test_it_reaches_the_forge_through_the_one_overridable_seam(self):
+        """The module docstring's invariant: a provider that replaces `_call`
+        replaces every round trip. `create_pull_request` reads an exit code, so
+        it is the method most likely to grow a second path to the runner."""
+        calls = []
+
+        class Overridden(forge.GitHubProvider):
+            def _call(self, argv, **kwargs):
+                calls.append(list(argv))
+                return super()._call(argv, **kwargs)
+
+        Overridden(run=FakeGh(default=(0, "https://x/pull/1", ""))).create_pull_request(
+            "acme/fleet", head="platform-agent/x", base="main", title="t",
+            body_file="/tmp/body.md",
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:2], ["pr", "create"])
 
 
 class UpdatePullRequestTest(unittest.TestCase):
@@ -1129,6 +1174,46 @@ class UpdatePullRequestTest(unittest.TestCase):
                 "acme/fleet", head="platform-agent/x", title="t",
                 body_file="/tmp/body.md",
             )
+
+
+class BodyFileTest(unittest.TestCase):
+    def test_the_body_file_is_group_readable_across_the_uid_split(self):
+        """Since #955 the sandbox writes this file and the sidecar's `gh` reads
+        it as a different uid, sharing the mount through `agentFSGroup`.
+        `tempfile`'s 0600 default is unreadable to the reader, and the failure
+        lands after a push — which reads as "the submission failed"."""
+        with tempfile.TemporaryDirectory() as directory:
+            with forge.body_file("body", directory) as path:
+                mode = os.stat(path).st_mode & 0o777
+        self.assertTrue(mode & stat.S_IRGRP, f"{oct(mode)} is not group-readable")
+
+    def test_the_body_reaches_disk_before_the_call_sees_the_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with forge.body_file("the description", directory) as path:
+                with open(path, encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "the description")
+
+    def test_it_is_deleted_even_when_the_call_raises(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(RuntimeError):
+                with forge.body_file("body", directory) as path:
+                    seen = path
+                    raise RuntimeError("the forge refused")
+            self.assertFalse(os.path.exists(seen))
+            self.assertEqual(os.listdir(directory), [])
+
+    def test_it_stages_inside_the_directory_it_is_given(self):
+        """Never the system temp directory: that is a per-container emptyDir the
+        sidecar resolving the path cannot see (#1030)."""
+        with tempfile.TemporaryDirectory() as directory:
+            with forge.body_file("body", directory) as path:
+                self.assertEqual(os.path.dirname(path), directory)
+
+    def test_an_unwritable_directory_names_the_mount_rather_than_raising_oserror(self):
+        with self.assertRaises(RuntimeError) as caught:
+            with forge.body_file("body", "/nonexistent/shared/volume"):
+                pass
+        self.assertIn("shared volume", str(caught.exception))
 
 
 class PullRequestUrlTest(unittest.TestCase):

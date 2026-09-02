@@ -18,6 +18,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -492,8 +493,10 @@ class TestSubmit(SubmitSuggestionTestCase):
     def test_a_gh_failure_that_is_not_an_existing_pr_still_raises(self):
         # The fallback must not swallow "not authenticated" or "base branch is
         # protected" — those are real failures and the run has to stop. The
-        # provider reports them as REPO_UNREACHABLE rather than as the one
-        # refusal the caller is allowed to treat as success.
+        # provider reports them as PULL_REQUEST_REFUSED rather than as the one
+        # refusal the caller is allowed to treat as success — and not as
+        # REPO_UNREACHABLE either, since the push to this repository over this
+        # credential succeeded moments earlier.
         payload = self.prepare()
         self.commit(payload["workspace"])
 
@@ -505,7 +508,7 @@ class TestSubmit(SubmitSuggestionTestCase):
 
         with self.assertRaises(forge.ForgeError) as caught:
             self.submit(payload["branch"], payload["workspace"])
-        self.assertEqual(caught.exception.reason, "REPO_UNREACHABLE")
+        self.assertEqual(caught.exception.reason, "PULL_REQUEST_REFUSED")
         self.assertNotIsInstance(caught.exception, forge.PullRequestExists)
 
     def test_submit_without_a_lease_or_a_session_says_what_to_pass(self):
@@ -668,17 +671,26 @@ class _GhStub:
             return self._view(argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    @staticmethod
-    def _read(argv, flag):
+    def _read(self, argv, flag):
         """The value of `flag`, reading `--body-file` off disk.
 
         Reading it here is what proves the file still exists at call time: the
         skill writes it into a context manager that deletes it on the way out,
         and a body deleted one line too early is an empty pull request nobody
         would notice in a mock that only recorded the path.
+
+        The mode is checked for the same reason. This stub runs as the process
+        that wrote the file, so it can open a 0600 one and a suite that only
+        read the bytes would stay green while the real sidecar `gh` — a
+        different uid since #955 — could not open it at all.
         """
         value = argv[argv.index(flag) + 1]
         if flag.endswith("-file"):
+            mode = os.stat(value).st_mode & 0o777
+            self._test.assertTrue(
+                mode & stat.S_IRGRP,
+                f"{flag} staged {oct(mode)}; the sidecar gh runs as another uid",
+            )
             return Path(value).read_text(encoding="utf-8")
         return value
 
