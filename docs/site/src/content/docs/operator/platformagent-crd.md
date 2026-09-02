@@ -26,7 +26,7 @@ spec:
   security: { ... } # service account + Workload Identity
   telemetry: { ... } # OTLP collector endpoint (optional)
   networkPolicy: { ... } # generated egress NetworkPolicy (optional)
-  integration: { ... } # Google Chat, Slack, GitHub
+  integration: { ... } # Google Chat, Slack, git forge
 ```
 
 `spec.deployment`, `spec.security`, `spec.telemetry`, and `spec.networkPolicy` are inlined from the shared `AgentSpec`, so they are common to every agent type. `spec.harness` is required; `spec.integration`, `spec.telemetry`, and `spec.networkPolicy` are optional.
@@ -469,7 +469,8 @@ Enables external integrations. Only the enabled ones need to be present.
 
 - **`googleChat`** — `enabled` (default `false`), `projectId`, `topicName`, `subscriptionName`, `allowedUsers`, `homeChannel`, and `mode` (`default` or `debug`, default `default`). When `enabled`, `projectId`, `topicName`, and `subscriptionName` are required (enforced by a CEL validation rule). Populated by the installer when Google Chat is enabled.
 - **`slack`** — `enabled` (default `false`), `botTokenSecretRef` and `appTokenSecretRef` (Secret refs, required when enabled), `allowedUsers`, `homeChannel`, and `homeChannelName`. Populated by the installer when Slack is enabled.
-- **`github`** — `gitRepo`, the target GitOps repository URL for the agent environment (up to 2048 characters). Supports HTTPS/HTTP (`https://`, `http://`), SCP-style SSH (`git@...`), SSH/Git protocols (`ssh://`, `git://`), and bare `owner/repo` shorthand (e.g. `gke-labs/kube-agents`). Rejects URLs containing whitespace, control characters, or invalid syntax at admission (`failurePolicy: Fail`). If an invalid URL is encountered during reconciliation, `SETTINGS.md` defaults to `None` and a `Degraded` condition (`Reason: InvalidGitRepoURL`) is surfaced on the resource status. Populated by the installer when a GitOps repository is connected.
+- **`git`** — the forge holding the GitOps repository. `provider` (currently `github` only, default `github`), `host` (optional; defaults to the provider's own), `repository` (the target GitOps repository, up to 2048 characters), and `namespace` (the owning organisation, user, or group; supplies the missing half when `repository` is a bare name). `repository` accepts HTTPS/HTTP (`https://`, `http://`), SCP-style SSH (`git@...`), SSH/Git protocols (`ssh://`, `git://`), and bare `owner/repo` shorthand (e.g. `gke-labs/kube-agents`). The webhook rejects whitespace, control characters, invalid syntax, and a host the declared provider does not serve (`failurePolicy: Fail`) — a repository on another forge is refused rather than rewritten onto the declared one. Reconciliation re-runs the same validation, since a chart install runs with `ENABLE_WEBHOOKS=false`: an invalid repository leaves the repository out of the `managed_repos` state ConfigMap and surfaces `Ready: False` and `Degraded: True` (`Reason: InvalidGitRepoURL`) on the resource status.
+- **`github`** — deprecated alias for `git` with `provider: github`. `gitRepo` maps onto `git.repository` and `org` onto `git.namespace`, and the two resolve identically. Set at most one of `git` and `github`; a resource setting both is rejected by the webhook, and marked `Degraded` with no repository seeded when the webhook is disabled. This is still the spelling `install.sh` and the `full-install` Terraform composition write.
 
 See [`k8s-operator/api/v1alpha1/platformagent_types.go`](https://github.com/gke-labs/kube-agents/blob/main/k8s-operator/api/v1alpha1/platformagent_types.go) for the exact struct definitions.
 

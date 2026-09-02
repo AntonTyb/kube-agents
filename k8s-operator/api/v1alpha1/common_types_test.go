@@ -197,7 +197,15 @@ func TestCleanRepoURLWithOrg(t *testing.T) {
 		{"kube-agents", "gke-labs", "https://github.com/gke-labs/kube-agents", false},
 		{"gke-labs/kube-agents", "", "https://github.com/gke-labs/kube-agents", false},
 		{"https://github.com/gke-labs/kube-agents", "", "https://github.com/gke-labs/kube-agents", false},
-		{"https://gitlab.com/gke-labs/kube-agents.git", "", "https://gitlab.com/gke-labs/kube-agents", false},
+		// This row used to expect "https://gitlab.com/gke-labs/kube-agents", and
+		// it was the pinned half of the defect. CleanRepoURLWithOrg returned an
+		// https URL verbatim while CleanRepoSlugWithOrg on the same value
+		// discarded the host and returned "gke-labs/kube-agents" — so a GitLab
+		// URL was admitted, and the operator wrote a managed_repos entry whose
+		// `type` said github and whose `url` said gitlab.com. Both helpers are
+		// GitHub-bound now and refuse the host together.
+		{"https://gitlab.com/gke-labs/kube-agents.git", "", "", true},
+		{"git@gitlab.com:group/project.git", "", "", true},
 		{"invalid", "", "", true},
 	}
 
