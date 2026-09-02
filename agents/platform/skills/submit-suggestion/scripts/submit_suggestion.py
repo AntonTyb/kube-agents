@@ -19,10 +19,12 @@ this script takes one, and refuses to write in anyone else's.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Append global scripts path to allow importing the shared helpers
@@ -31,6 +33,7 @@ sys.path.append("/opt/data/scripts")
 # The same directory in a source checkout, where nothing is staged into /opt.
 sys.path.append(str(Path(__file__).resolve().parents[3] / "scripts"))
 
+import forge
 import gitops_workspace
 from github_token_refresh import refresh_git_credentials, log
 
@@ -219,64 +222,78 @@ def create_pull_request(
 ) -> str:
     """Open the pull request — or refresh the one that is already open.
 
-    `gh pr create` fails with "a pull request for branch … already exists"
-    every time a card comes back for a second round, and it fails *after* the
-    push has landed. Read as an error that is the worst possible shape: the
-    branch was updated and the reviewer will see the new commits, but the skill
-    reports the whole submission as failed, so the agent retries, pushes again,
-    and fails again — for as many rounds of feedback as the pull request gets.
-    An existing pull request is the success case for a resubmission.
+    Opening one fails with "a pull request for branch … already exists" every
+    time a card comes back for a second round, and it fails *after* the push has
+    landed. Read as an error that is the worst possible shape: the branch was
+    updated and the reviewer will see the new commits, but the skill reports the
+    whole submission as failed, so the agent retries, pushes again, and fails
+    again — for as many rounds of feedback as the pull request gets. An existing
+    pull request is the success case for a resubmission, and that judgement is
+    made here rather than in the provider: another caller opening a change for
+    the first time would read the same refusal as a genuine conflict.
 
     It is refreshed rather than merely located. Step 5 of the SKILL hands this
     function a title and body written for the commits it just pushed; leaving
     the old description in place would describe work the branch no longer
     contains. `audit_report.open_remediation_pr` edits its own pull requests
     for the same reason.
+
+    `workspace` is no longer where the forge call runs — the provider always
+    passes `-R <repo>`, so it does not need to be inside a clone — but it is
+    still where the body file is written, which keeps a description that may run
+    to thousands of characters on the leased volume rather than in the sidecar's
+    temp directory.
     """
     log(f"Submitting GitOps Pull Request for branch '{branch}'...")
+    provider = forge.provider_for(repo)
+    with _body_file(body, workspace) as body_file:
+        try:
+            return provider.create_pull_request(
+                repo, head=branch, base=base, title=title, body_file=body_file
+            )
+        except forge.PullRequestExists:
+            log(f"A pull request for '{branch}' is already open; updating it in place.")
+            return update_pull_request(branch, title, body, workspace, repo)
 
-    cmd = [
-        "gh", "pr", "create",
-        "--repo", repo,
-        "--title", title,
-        "--body", body,
-        "--base", base,
-        "--head", branch
-    ]
 
-    res = subprocess.run(
-        cmd, cwd=workspace, capture_output=True, text=True, check=False
+@contextlib.contextmanager
+def _body_file(body: str, workspace: str):
+    """The description on disk, deleted whether or not the call succeeded.
+
+    A file rather than an argv string: the body crosses the credential proxy and
+    two shells' quoting rules on its way to the forge, which `forge.post_comment`
+    documents at length. Written inside the leased workspace so it is covered by
+    the same cleanup as the clone.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", dir=str(workspace), delete=False, encoding="utf-8"
     )
-    if res.returncode == 0:
-        return res.stdout.strip()
-
-    if "already exists" not in f"{res.stdout}\n{res.stderr}".lower():
-        # Anything else — no permission, a protected base, gh not authenticated
-        # — is a real failure and keeps the shape `main` already handles.
-        raise subprocess.CalledProcessError(res.returncode, cmd, res.stdout, res.stderr)
-
-    log(f"A pull request for '{branch}' is already open; updating it in place.")
-    return update_pull_request(branch, title, body, workspace, repo)
+    try:
+        handle.write(body)
+        handle.close()
+        yield handle.name
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
 
 
 def update_pull_request(
     branch: str, title: str, body: str, workspace: str, repo: str
 ) -> str:
     """Point the existing pull request for `branch` at the work just pushed."""
-    subprocess.run(
-        ["gh", "pr", "edit", branch, "--repo", repo, "--title", title, "--body", body],
-        cwd=workspace, capture_output=True, text=True, check=True,
-    )
-    res = subprocess.run(
-        ["gh", "pr", "view", branch, "--repo", repo, "--json", "url", "--jq", ".url"],
-        cwd=workspace, capture_output=True, text=True, check=True,
-    )
-    url = res.stdout.strip()
+    provider = forge.provider_for(repo)
+    with _body_file(body, workspace) as body_file:
+        provider.update_pull_request(
+            repo, head=branch, title=title, body_file=body_file
+        )
+    url = provider.pull_request_url(repo, head=branch)
     if not url:
         raise RuntimeError(
-            f"`gh pr view {branch}` returned no URL for the pull request it just "
-            "reported as already existing. The push landed; find the pull request "
-            "on GitHub rather than resubmitting."
+            f"the forge returned no URL for the pull request on '{branch}' that it "
+            "had just reported as already existing. The push landed; find the pull "
+            "request on the forge rather than resubmitting."
         )
     return url
 

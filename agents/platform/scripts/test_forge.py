@@ -1035,6 +1035,129 @@ class PermissionUnknownTest(unittest.TestCase):
         self.assertTrue(comments[0].can_write)
 
 
+class CreatePullRequestTest(unittest.TestCase):
+    """Opening a change, and the one refusal that is not a failure."""
+
+    def _provider(self, gh):
+        return forge.GitHubProvider(run=gh)
+
+    def test_it_names_the_repository_and_passes_the_body_as_a_file(self):
+        gh = FakeGh(default=(0, "https://github.com/acme/fleet/pull/7\n", ""))
+        url = self._provider(gh).create_pull_request(
+            "acme/fleet",
+            head="platform-agent/x",
+            base="main",
+            title="t",
+            body_file="/tmp/body.md",
+        )
+        self.assertEqual(url, "https://github.com/acme/fleet/pull/7")
+        argv = gh.argv_containing("pr create")
+        # `-R` is what makes the call independent of the process's directory,
+        # which is the whole reason the caller no longer has to be in a clone.
+        self.assertEqual(argv[argv.index("-R") + 1], "acme/fleet")
+        self.assertEqual(argv[argv.index("--head") + 1], "platform-agent/x")
+        self.assertEqual(argv[argv.index("--base") + 1], "main")
+        self.assertEqual(argv[argv.index("--body-file") + 1], "/tmp/body.md")
+        self.assertNotIn("--body", argv)
+
+    def test_an_existing_pull_request_is_its_own_error_type(self):
+        """Distinct from a failure, because the caller decides which it is.
+
+        A resubmission gets here after the push has already landed. Reported as
+        REPO_UNREACHABLE it is indistinguishable from a credential that cannot
+        reach the repository at all, and the skill's answer to those two is
+        opposite.
+        """
+        gh = FakeGh(
+            default=(
+                1,
+                "",
+                'a pull request for branch "platform-agent/x" into branch "main" '
+                "already exists:\nhttps://github.com/acme/fleet/pull/7\n",
+            )
+        )
+        with self.assertRaises(forge.PullRequestExists) as caught:
+            self._provider(gh).create_pull_request(
+                "acme/fleet", head="platform-agent/x", base="main", title="t",
+                body_file="/tmp/body.md",
+            )
+        self.assertEqual(caught.exception.reason, forge.REASON_PULL_REQUEST_EXISTS)
+        self.assertEqual(caught.exception.head, "platform-agent/x")
+        self.assertIn("pull/7", caught.exception.value)
+
+    def test_every_other_refusal_stays_a_plain_forge_error(self):
+        gh = FakeGh(default=(1, "", "HTTP 403: Resource not accessible by integration"))
+        with self.assertRaises(forge.ForgeError) as caught:
+            self._provider(gh).create_pull_request(
+                "acme/fleet", head="platform-agent/x", base="main", title="t",
+                body_file="/tmp/body.md",
+            )
+        self.assertEqual(caught.exception.reason, "REPO_UNREACHABLE")
+        self.assertNotIsInstance(caught.exception, forge.PullRequestExists)
+
+    def test_a_silent_success_is_read_back_rather_than_returned_empty(self):
+        """`gh` prints the URL today. A version that did not would otherwise
+        return "" — a pull request that exists, reported as having no address."""
+        gh = FakeGh(
+            responses={"pr view": (0, json.dumps({"url": "https://x/pull/9"}), "")},
+            default=(0, "", ""),
+        )
+        url = self._provider(gh).create_pull_request(
+            "acme/fleet", head="platform-agent/x", base="main", title="t",
+            body_file="/tmp/body.md",
+        )
+        self.assertEqual(url, "https://x/pull/9")
+
+
+class UpdatePullRequestTest(unittest.TestCase):
+    def test_it_edits_the_title_and_the_body(self):
+        gh = FakeGh(default=(0, "", ""))
+        forge.GitHubProvider(run=gh).update_pull_request(
+            "acme/fleet", head="platform-agent/x", title="round two",
+            body_file="/tmp/body.md",
+        )
+        argv = gh.argv_containing("pr edit")
+        self.assertEqual(argv[2], "platform-agent/x")
+        self.assertEqual(argv[argv.index("-R") + 1], "acme/fleet")
+        self.assertEqual(argv[argv.index("--title") + 1], "round two")
+        self.assertEqual(argv[argv.index("--body-file") + 1], "/tmp/body.md")
+
+    def test_a_failed_edit_raises_rather_than_reporting_success(self):
+        gh = FakeGh(default=(1, "", "no pull requests found"))
+        with self.assertRaises(forge.ForgeError):
+            forge.GitHubProvider(run=gh).update_pull_request(
+                "acme/fleet", head="platform-agent/x", title="t",
+                body_file="/tmp/body.md",
+            )
+
+
+class PullRequestUrlTest(unittest.TestCase):
+    def test_it_reads_the_url_out_of_the_json_projection(self):
+        gh = FakeGh(default=(0, json.dumps({"url": "https://x/pull/3"}), ""))
+        self.assertEqual(
+            forge.GitHubProvider(run=gh).pull_request_url(
+                "acme/fleet", head="platform-agent/x"
+            ),
+            "https://x/pull/3",
+        )
+        argv = gh.argv_containing("pr view")
+        self.assertEqual(argv[argv.index("--json") + 1], "url")
+
+    def test_an_answer_without_a_url_is_empty_not_a_crash(self):
+        gh = FakeGh(default=(0, json.dumps({}), ""))
+        self.assertEqual(
+            forge.GitHubProvider(run=gh).pull_request_url("acme/fleet", head="x"), ""
+        )
+
+    def test_a_non_json_answer_is_reported_rather_than_read_as_absent(self):
+        """"" means "no pull request" to every caller, so an unreadable answer
+        must not arrive spelled the same way."""
+        gh = FakeGh(default=(0, "<html>proxy error</html>", ""))
+        with self.assertRaises(forge.ForgeError) as caught:
+            forge.GitHubProvider(run=gh).pull_request_url("acme/fleet", head="x")
+        self.assertEqual(caught.exception.reason, "FORGE_RESPONSE_UNREADABLE")
+
+
 class ProtocolConformanceTest(unittest.TestCase):
     def test_github_provider_implements_every_operation(self):
         provider = forge.GitHubProvider(run=FakeGh())
@@ -1044,9 +1167,30 @@ class ProtocolConformanceTest(unittest.TestCase):
             "list_comments",
             "post_comment",
             "acknowledge",
+            "list_commits",
+            "create_pull_request",
+            "update_pull_request",
+            "pull_request_url",
         ):
             self.assertTrue(callable(getattr(provider, name)), name)
         self.assertTrue(provider.supports_acknowledge)
+
+    def test_the_protocol_names_nothing_the_provider_lacks(self):
+        """The Protocol is the contract a second forge implements, so a method
+        declared there and absent here would only fail at the first GitLab
+        install rather than in this suite."""
+        declared = {
+            name
+            for name, value in vars(forge.ForgeProvider).items()
+            if callable(value) and not name.startswith("_")
+        } | set(getattr(forge.ForgeProvider, "__annotations__", {}))
+        self.assertIn("create_pull_request", declared)
+        self.assertIn("supports_acknowledge", declared)
+        for name in sorted(declared):
+            self.assertTrue(
+                hasattr(forge.GitHubProvider, name),
+                f"ForgeProvider declares {name}, GitHubProvider does not have it",
+            )
 
 
 if __name__ == "__main__":

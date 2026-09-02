@@ -29,6 +29,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import forge  # noqa: E402
 import gitops_workspace  # noqa: E402
 
 SUBJECT = (
@@ -116,9 +117,11 @@ class SubmitSuggestionTestCase(unittest.TestCase):
         gitops_workspace.forget_base_branch()
         self.addCleanup(gitops_workspace.forget_base_branch)
 
-        # `gh pr create` needs a GitHub. Record the call instead.
+        # `gh pr create` needs a GitHub. Record the call instead, at the seam
+        # the provider reaches the forge through.
         self.gh_calls = []
-        self.patch_attr(submit_suggestion, "subprocess", _GhStub(self))
+        self.gh = _GhStub(self)
+        self.patch_attr(forge, "run_gh", self.gh)
 
     def seed_origin(self) -> Path:
         origin = self.tmp_path / "origin.git"
@@ -353,13 +356,19 @@ class TestSubmit(SubmitSuggestionTestCase):
         self.assertEqual(url, "https://github.com/acme/fleet/pull/1")
         self.assertIn("platform-agent/fix-netpol", self.origin_branches())
         self.assertEqual(len(self.gh_calls), 1)
-        argv, cwd = self.gh_calls[0]
-        self.assertEqual(argv[:3], ["gh", "pr", "create"])
-        self.assertEqual(cwd, payload["workspace"])
-        self.assertIn("--repo", argv)
-        self.assertEqual(argv[argv.index("--repo") + 1], "acme/fleet")
+        argv = self.gh_calls[0]
+        self.assertEqual(argv[:2], ["pr", "create"])
+        # `-R` rather than a working directory. The call used to be made inside
+        # the leased clone; naming the repository is what makes that
+        # unnecessary, and it is the only thing standing between this and a
+        # pull request opened against whatever repository the process is in.
+        self.assertIn("-R", argv)
+        self.assertEqual(argv[argv.index("-R") + 1], "acme/fleet")
         self.assertEqual(argv[argv.index("--head") + 1], "platform-agent/fix-netpol")
         self.assertEqual(argv[argv.index("--base") + 1], "main")
+        # The description crosses the credential proxy as a path, never as argv.
+        self.assertIn("--body-file", argv)
+        self.assertNotIn("--body", argv)
 
     def test_submit_inherits_target_repo_from_prepare_lease(self):
         """When prepare leases a non-default repo, submit without --repo uses it."""
@@ -380,8 +389,8 @@ class TestSubmit(SubmitSuggestionTestCase):
         with redirect_stdout(out):
             submit_suggestion.dispatch(args)
 
-        argv, _ = self.gh_calls[0]
-        self.assertEqual(argv[argv.index("--repo") + 1], "acme/secondary-repo")
+        argv = self.gh_calls[0]
+        self.assertEqual(argv[argv.index("-R") + 1], "acme/secondary-repo")
 
     def test_another_agents_workspace_is_refused(self):
         # The check the credential proxy cannot make. The audit's tree holds a
@@ -470,31 +479,34 @@ class TestSubmit(SubmitSuggestionTestCase):
         second = self.submit(again["branch"], again["workspace"], title="round two")
 
         self.assertEqual(second, first)
-        verbs = [argv[1:3] for argv, _ in self.gh_calls]
+        verbs = [argv[:2] for argv in self.gh_calls]
         self.assertEqual(
             verbs,
             [["pr", "create"], ["pr", "create"], ["pr", "edit"], ["pr", "view"]],
         )
         # Refreshed, not merely located: the title and body describe the
         # commits just pushed, and the old ones are no longer on the branch.
-        stub = submit_suggestion.subprocess
-        self.assertEqual(stub.titles["platform-agent/fix-netpol"], "round two")
+        self.assertEqual(self.gh.titles["platform-agent/fix-netpol"], "round two")
+        self.assertEqual(self.gh.bodies["platform-agent/fix-netpol"], "b")
 
     def test_a_gh_failure_that_is_not_an_existing_pr_still_raises(self):
         # The fallback must not swallow "not authenticated" or "base branch is
-        # protected" — those are real failures and the run has to stop.
+        # protected" — those are real failures and the run has to stop. The
+        # provider reports them as REPO_UNREACHABLE rather than as the one
+        # refusal the caller is allowed to treat as success.
         payload = self.prepare()
         self.commit(payload["workspace"])
 
-        stub = submit_suggestion.subprocess
-        original = stub._create
-        stub._create = lambda argv: subprocess.CompletedProcess(
+        original = self.gh._create
+        self.gh._create = lambda argv: subprocess.CompletedProcess(
             argv, 1, "", "HTTP 403: Resource not accessible by integration\n"
         )
-        self.addCleanup(setattr, stub, "_create", original)
+        self.addCleanup(setattr, self.gh, "_create", original)
 
-        with self.assertRaises(subprocess.CalledProcessError):
+        with self.assertRaises(forge.ForgeError) as caught:
             self.submit(payload["branch"], payload["workspace"])
+        self.assertEqual(caught.exception.reason, "REPO_UNREACHABLE")
+        self.assertNotIsInstance(caught.exception, forge.PullRequestExists)
 
     def test_submit_without_a_lease_or_a_session_says_what_to_pass(self):
         """The unrecoverable loop, turned into one line of instruction.
@@ -623,11 +635,13 @@ class TestArgvCompatibility(unittest.TestCase):
 
 
 class _GhStub:
-    """Stand in for the `subprocess` module inside submit_suggestion.
+    """A scripted `gh`, injected as `forge.run_gh`.
 
-    Only `gh` is intercepted — it is the one tool that needs a real GitHub.
-    Everything else is handed to the real module so the git in these tests
-    stays real.
+    The skill no longer shells `gh` itself — every forge call goes through
+    `forge.GitHubProvider`, whose runner is a module-level function this
+    replaces. So the argv recorded here has no leading `gh` and no `cwd`: the
+    provider always passes `-R <repo>`, which is what makes the call independent
+    of where the process happens to be. Git stays real throughout.
 
     It models one behaviour beyond recording, because that behaviour is the
     bug: GitHub refuses a second `pr create` for a branch that already has an
@@ -640,16 +654,12 @@ class _GhStub:
         self._test = test
         self.open_prs: dict[str, str] = {}
         self.titles: dict[str, str] = {}
+        self.bodies: dict[str, str] = {}
 
-    def __getattr__(self, name):
-        return getattr(subprocess, name)
-
-    def run(self, cmd, **kwargs):
-        argv = list(cmd)
-        if argv[:1] != ["gh"]:
-            return subprocess.run(cmd, **kwargs)
-        self._test.gh_calls.append((argv, kwargs.get("cwd")))
-        verb = argv[1:3]
+    def __call__(self, argv):
+        argv = list(argv)
+        self._test.gh_calls.append(argv)
+        verb = argv[:2]
         if verb == ["pr", "create"]:
             return self._create(argv)
         if verb == ["pr", "edit"]:
@@ -657,6 +667,20 @@ class _GhStub:
         if verb == ["pr", "view"]:
             return self._view(argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
+
+    @staticmethod
+    def _read(argv, flag):
+        """The value of `flag`, reading `--body-file` off disk.
+
+        Reading it here is what proves the file still exists at call time: the
+        skill writes it into a context manager that deletes it on the way out,
+        and a body deleted one line too early is an empty pull request nobody
+        would notice in a mock that only recorded the path.
+        """
+        value = argv[argv.index(flag) + 1]
+        if flag.endswith("-file"):
+            return Path(value).read_text(encoding="utf-8")
+        return value
 
     def _create(self, argv):
         branch = argv[argv.index("--head") + 1]
@@ -669,21 +693,25 @@ class _GhStub:
             )
         url = f"https://github.com/acme/fleet/pull/{len(self.open_prs) + 1}"
         self.open_prs[branch] = url
-        self.titles[branch] = argv[argv.index("--title") + 1]
+        self.titles[branch] = self._read(argv, "--title")
+        self.bodies[branch] = self._read(argv, "--body-file")
         return subprocess.CompletedProcess(argv, 0, url + "\n", "")
 
     def _edit(self, argv):
-        branch = argv[3]
+        branch = argv[2]
         if branch not in self.open_prs:
             return subprocess.CompletedProcess(argv, 1, "", "no pull requests found\n")
-        self.titles[branch] = argv[argv.index("--title") + 1]
+        self.titles[branch] = self._read(argv, "--title")
+        self.bodies[branch] = self._read(argv, "--body-file")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     def _view(self, argv):
-        branch = argv[3]
+        branch = argv[2]
         if branch not in self.open_prs:
             return subprocess.CompletedProcess(argv, 1, "", "no pull requests found\n")
-        return subprocess.CompletedProcess(argv, 0, self.open_prs[branch] + "\n", "")
+        return subprocess.CompletedProcess(
+            argv, 0, json.dumps({"url": self.open_prs[branch]}), ""
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
