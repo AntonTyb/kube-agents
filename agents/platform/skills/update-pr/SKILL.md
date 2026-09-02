@@ -116,8 +116,13 @@ you share one volume with every other agent in this pod, and a bare
 
 ```bash
 "$HERMES_HOME"/skills/submit-suggestion/scripts/submit_suggestion.py prepare \
-  --branch "<head_ref from Step 1>"
+  --repo <owner/repo> --branch "<head_ref from Step 1>"
 ```
+
+`--repo` is the `repository` from the Step 1 row, and it is not optional here.
+Without it `prepare` falls back to the ConfigMap, which refuses to guess when
+the install manages more than one repository — the configuration this sweep
+exists for.
 
 Because the branch already exists on the remote, `prepare` bases it on
 `origin/<head_ref>` and the commits already under review are still there.
@@ -167,7 +172,8 @@ and commit:
 git add <resolved_file_1> <resolved_file_2>
 git commit -m "chore(<scope>): merge <base_ref> into <head_ref>"
 "$HERMES_HOME"/skills/submit-suggestion/scripts/submit_suggestion.py submit \
-  --workspace "<workspace>" --lease "<lease>" --branch "<head_ref>" \
+  --repo <owner/repo> --workspace "<workspace>" --lease "<lease>" \
+  --branch "<head_ref>" \
   --title "<the pull request's existing title>" \
   --body "<the pull request's existing body>"
 ```
@@ -188,7 +194,8 @@ what counts as a request that addressed you, whose requests may be acted on, and
 the marker that records each one as answered. Duplicating any of that here would
 give the same bounds two implementations and let a budget be spent twice.
 
-Start at its Step 1 (`pr_conversation.py poll --pr <N>`). If it reports
+Start at its Step 1 (`pr_conversation.py poll --repo <owner/repo> --pr <N>`,
+the same repository Step 1 named). If it reports
 `NO_REQUESTS`, this stage is done — that is the common case, and this sweep
 carded the pull request for the conflict or the CI, not for a comment.
 
@@ -305,6 +312,12 @@ match.
 **A run that does not reach `record` will be handed to you again**, and the
 attempt budget it should have spent will not have been spent. If everything
 failed, that is still a `record` — with `--no-change` and a body saying so.
+
+If `record` refuses a run that has already pushed, it posts the marker anyway
+and says on the thread that it could not record the attempt. Do not try to fix
+the arguments and run it again: the tip is marked, so the second call is
+refused as already recorded. Read the error, and if commits landed that should
+not have, say so on the pull request.
 
 ### Step 7: Complete the card
 

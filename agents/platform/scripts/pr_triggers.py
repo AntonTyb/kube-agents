@@ -385,9 +385,17 @@ def updated_head_shas(comments, self_login: str) -> set[str]:
     commit, so each one is a new tip that would otherwise qualify afresh.
 
     A run the agent abandoned before posting leaves no marker, and is therefore
-    retried. That is deliberate: the card's own idempotency key already holds
-    the retry to once a day, and the alternative — treating an unrecorded
-    attempt as an attempt — would let one crashed turn park a pull request for
-    good with nothing said to anyone.
+    retried, and neither bound above has counted it. That is deliberate for a
+    run that pushed nothing — the card's idempotency key holds the retry to
+    once an hour, and the alternative, treating an unrecorded attempt as an
+    attempt, would let one crashed turn park a pull request for good with
+    nothing said to anyone.
+
+    It is not free for a run that pushed. The commit moves the tip, so the key
+    carries a new sha and mints immediately rather than waiting out the hour,
+    and the retry is every sweep. `update_pr.py record` closes the part of that
+    it can reach, by writing the marker on any refusal that comes after the
+    push; a turn reaped before `record` runs at all is the residue, and its
+    module docstring says what closing that one would cost.
     """
     return _marked_node_ids(comments, self_login, ("updated",))

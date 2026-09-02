@@ -40,6 +40,18 @@ comment — it would produce an unbounded fix loop. So it is appended here, from
 commits first: a mistyped one produces a marker matching nothing, which is the
 same runaway by a slower road.
 
+Both bounds count markers, so they only bind on a run that reaches this
+command. That is why every refusal below, on a run whose commits are already on
+the branch, posts the marker before it exits rather than leaving the thread
+untouched: a pushed branch with no marker spends nothing from the budget while
+minting a fresh tip, and the sweep hands it straight back. What that does not
+cover is a turn that dies before ``record`` is invoked at all — a reaped turn,
+a crashed container. Those still leave a pushed branch unmarked, and the loop is
+bounded there only by whoever notices. Closing it would mean writing the marker
+before the work rather than after, which trades this bound against the one
+``pr_triggers.updated_head_shas`` chose deliberately: that a crashed turn must
+not park a pull request for good with nothing said to anyone.
+
 ``record`` also refuses to post a claim it cannot check. ``--pushed`` names a
 commit the run made, and it must be on the pull request and must come after the
 tip the run started from; ``--no-change`` says the branch was not touched. One
@@ -305,10 +317,65 @@ def handle_record(args) -> int:
     # saw: between the two, another worker may have recorded an attempt.
     already = pr_triggers.updated_head_shas(comments, viewer)
     if attempted_sha in already:
+        # The one refusal below that does not go through `refuse`: the marker
+        # this run owes is already on the thread, so the tip is marked and the
+        # attempt is counted whatever else is wrong with the call.
         pr_skill.fail(
             f"an update attempt against {attempted_sha[:SHA_MIN_LEN]} is already "
             f"recorded on {repo}#{args.pr}. Nothing was posted."
         )
+
+    # Whether this run has already moved the branch, which is what makes every
+    # refusal below dangerous rather than merely unhelpful.
+    #
+    # Both bounds on this loop are counted off `agent-updated` markers, and
+    # `record` is the only writer of one. So a run that pushed and then exited
+    # here leaves the branch moved and the thread unchanged: the new tip is not
+    # in `updated_head_shas`, `len()` of that set has not grown, and
+    # `_update_card`'s idempotency key carries the head sha, so it mints afresh
+    # rather than waiting out its hour. None of the three binds, the next tick
+    # cards the pull request again, and `pr_comments` skips it again because
+    # `pr_updates` claims what it cards — so the reviewer waiting on that
+    # branch is never answered either.
+    #
+    # A pushed branch therefore gets its marker whatever else is wrong with the
+    # call. That is what §4 of the design means by "a run that could not fix
+    # what it found still writes one, so it is not repeated every ten minutes".
+    branch_moved = attempted_at < len(commits) - 1
+
+    def refuse(message: str):
+        """Fail — marking the tip first, if the branch has already moved."""
+        if branch_moved:
+            # "Commits landed", not "I pushed": `branch_moved` says the branch
+            # is ahead of `--attempted-sha`, and on the paths that reach here
+            # by way of a wrong `--attempted-sha` that is a commit from an
+            # earlier run rather than this one. Marking it anyway is the
+            # conservative reading — it spends one attempt on a run that may
+            # have done nothing, which stops after five, where the alternative
+            # does not stop at all.
+            note = (
+                f"Commits have landed on `{pr.head_ref}` since "
+                f"`{attempted_sha[:SHA_MIN_LEN]}`, and I could not record the "
+                f"attempt against it: {message}\n\n"
+                "Nothing has been reverted. That tip is marked as attempted, "
+                "so it counts against the update budget and the sweep will "
+                "not hand the branch straight back. Somebody should read what "
+                "landed."
+            )
+            try:
+                pr_skill.post_body(
+                    provider,
+                    repo,
+                    pr,
+                    f"{note}\n\n"
+                    f"{pr_triggers.marker(attempted_sha, pr_triggers.UPDATED_MARKER)}\n",
+                )
+            except forge.ForgeError as error:
+                pr_skill.fail(
+                    f"{message} The attempt could not be marked either "
+                    f"({error}), so this pull request will be carded again."
+                )
+        pr_skill.fail(message)
 
     pushed = []
     positions = set()
@@ -320,10 +387,10 @@ def handle_record(args) -> int:
             # for a commit that predates the run entirely. What makes a commit
             # this run's work is that it landed after the tip the run started
             # from.
-            pr_skill.fail(
+            refuse(
                 f"--pushed {value} is not newer than the tip this run started "
                 f"from ({attempted_sha[:SHA_MIN_LEN]}), so it is not a commit "
-                "this run made. Nothing was posted."
+                "this run made."
             )
         positions.add(position)
         pushed.append(sha)
@@ -346,11 +413,11 @@ def handle_record(args) -> int:
         if index not in positions
     ]
     if undeclared:
-        pr_skill.fail(
+        refuse(
             f"--attempted-sha {attempted_sha[:SHA_MIN_LEN]} is not the tip this "
             f"run started from: {', '.join(undeclared)} came after it and is not "
             "in --pushed. Name the tip `poll` reported as `head_sha`, and pass "
-            "every commit this run made. Nothing was posted."
+            "every commit this run made."
         )
 
     # Marker syntax is stripped out of the model's body before the real marker
@@ -361,9 +428,20 @@ def handle_record(args) -> int:
     # pull request nobody has looked at. The model holds both halves: SKILL.md
     # prints the syntax in full in order to forbid it, and `poll` carries every
     # sha. A line of prose is not the boundary that belongs in front of that.
-    body = pr_triggers.strip_markers(pr_skill.confined_body(args.body_file))
+    #
+    # `confined_body` refuses by calling `pr_skill.fail`, which exits — and its
+    # docstring promises that nothing has been written by the time the model
+    # reads the error. On a run that has already pushed, that promise is the
+    # bug: the write happened before `record` was invoked at all. Catching the
+    # exit is how the refusal reaches `refuse`, which marks the tip and then
+    # fails the same way. The specific reason is already on stderr by then.
+    try:
+        raw = pr_skill.confined_body(args.body_file)
+    except SystemExit:
+        refuse(f"the comment body {args.body_file} could not be read (see above).")
+    body = pr_triggers.strip_markers(raw)
     if not body:
-        pr_skill.fail(f"Comment body {args.body_file} is nothing but marker syntax.")
+        refuse(f"Comment body {args.body_file} is nothing but marker syntax.")
     stamped = (
         f"{body}\n\n{pr_triggers.marker(attempted_sha, pr_triggers.UPDATED_MARKER)}\n"
     )

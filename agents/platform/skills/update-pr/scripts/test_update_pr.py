@@ -460,18 +460,24 @@ class RecordTest(_Harness):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out)["pushed"], [FIX_SHA])
 
-    def test_a_pushed_commit_that_predates_the_run_posts_nothing(self):
+    def test_a_pushed_commit_that_predates_the_run_is_refused(self):
         """Membership on the branch is not evidence the run made the commit.
 
         Every commit the agent ever pushed is on this branch, including the one
         that opened the pull request — so a claim naming an old one would pass a
         membership test while the run had changed nothing.
+
+        The claim is refused, but the branch is ahead of the attempted tip, so
+        the marker goes on anyway: see `test_a_refusal_after_the_branch_moved`.
         """
         provider = FakeProvider(commits=COMMITS_AFTER_FIX)
         rc, _, err = self.record(provider, extra=("--pushed", BASE_SHA))
         self.assertEqual(rc, 1)
-        self.assertEqual(provider.posted, [])
         self.assertIn("not newer than the tip", err)
+        # The marker names the tip the run started from, never the sha the
+        # rejected claim named — that one is quoted in the prose as the reason.
+        self.assertIn(f"<!-- agent-updated:{HEAD_SHA} -->", provider.posted[0][1])
+        self.assertNotIn(f"agent-updated:{BASE_SHA}", provider.posted[0][1])
 
     def test_one_commit_per_stage_can_be_claimed(self):
         provider = FakeProvider(
@@ -497,11 +503,10 @@ class RecordTest(_Harness):
             provider, sha=BASE_SHA, extra=("--pushed", FIX_SHA)
         )
         self.assertEqual(rc, 1)
-        self.assertEqual(provider.posted, [])
         self.assertIn("is not the tip this run started from", err)
         self.assertIn(HEAD_SHA[: helper.SHA_MIN_LEN], err)
 
-    def test_an_undeclared_commit_after_the_tip_posts_nothing(self):
+    def test_an_undeclared_commit_after_the_tip_is_refused(self):
         """A forgotten `--pushed` fails here rather than in the thread.
 
         The invariant is that every commit after `--attempted-sha` is one the
@@ -512,7 +517,6 @@ class RecordTest(_Harness):
         )
         rc, _, err = self.record(provider, extra=("--pushed", FIX_SHA))
         self.assertEqual(rc, 1)
-        self.assertEqual(provider.posted, [])
         self.assertIn("dddddd", err)
 
     def test_no_change_requires_the_attempted_sha_to_be_the_tip(self):
@@ -520,8 +524,56 @@ class RecordTest(_Harness):
         provider = FakeProvider(commits=COMMITS_AFTER_FIX)
         rc, _, err = self.record(provider)
         self.assertEqual(rc, 1)
-        self.assertEqual(provider.posted, [])
         self.assertIn("is not the tip this run started from", err)
+
+    def test_a_refusal_after_the_branch_moved_still_marks_the_tip(self):
+        """The bound is counted off markers, so a pushed branch owes one.
+
+        Every refusal below the `--attempted-sha` resolution can fire on a run
+        whose commits are already on the branch. Exiting there without posting
+        would leave the tip moved and the thread untouched: the new head is not
+        in the marker set, the set has not grown, and `_update_card`'s key
+        carries the head sha, so it mints again on the next tick rather than
+        waiting out its hour. Neither bound binds and the sweep re-cards
+        forever — which also silences `pr_comments`, since `pr_updates` claims
+        what it cards.
+        """
+        provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+        rc, _, _ = self.record(provider)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(provider.posted), 1)
+        body = provider.posted[0][1]
+        self.assertIn(f"<!-- agent-updated:{HEAD_SHA} -->", body)
+        self.assertIn("could not record the attempt", body)
+        # Named so a human reading the thread knows the branch is ahead of the
+        # commit that was marked, rather than that the run pushed nothing.
+        self.assertIn(HEAD_SHA[: helper.SHA_MIN_LEN], body)
+
+    def test_the_marker_a_refusal_writes_closes_a_second_attempt(self):
+        """One marker per tip, whether the run recorded or was refused.
+
+        Otherwise a model that reads the error and re-runs `record` with fixed
+        arguments spends a second attempt on the same tip.
+        """
+        provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+        self.record(provider)
+        provider.comments[12] = [make_comment("IC_refusal", provider.posted[0][1])]
+        rc, _, err = self.record(provider, extra=("--pushed", FIX_SHA))
+        self.assertEqual(rc, 1)
+        self.assertIn("already recorded", err)
+        self.assertEqual(len(provider.posted), 1)
+
+    def test_a_refusal_on_an_unmoved_branch_posts_nothing(self):
+        """No push, no marker — the case `updated_head_shas` protects.
+
+        A run that changed nothing and was then refused has to stay retryable,
+        or one bad argument parks a pull request for good with nothing said.
+        """
+        provider = FakeProvider()
+        rc, _, err = self.record(provider, extra=("--pushed", "0" * 40))
+        self.assertEqual(rc, 1)
+        self.assertEqual(provider.posted, [])
+        self.assertIn("not a commit on this pull request", err)
 
     def test_a_claim_is_required(self):
         provider = FakeProvider()

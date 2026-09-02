@@ -823,6 +823,13 @@ def _update_card(item: _Unhealthy, repo: str, now: datetime | None = None) -> Ca
             f"- **Merge conflict** with the base branch `{pr.base_ref}`."
         )
     for check in item.failing[:MAX_CHECKS_ON_CARD]:
+        # `check.name` is third-party text — whoever holds `checks:write` on the
+        # repository chose it — and this bullet list is a prompt. It is safe to
+        # interpolate because `forge.plain_check_name` has already taken out
+        # everything that could end this bullet and start something else, the
+        # way `_pr_card` leans on `find_trigger`'s guarantee rather than
+        # re-checking here. The slice is a width, not a defence: ten names at
+        # 120 characters is as much of the list as a board entry can carry.
         lines.append(
             f"- **Failing check** `{check.name[:MAX_CHECK_NAME_CHARS]}` "
             f"({check.conclusion})."

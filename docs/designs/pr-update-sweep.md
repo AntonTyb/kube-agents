@@ -144,6 +144,25 @@ The marker is written by `update_pr.py record`, never by the model, and the sha 
 against the pull request's own commits first. A mistyped sha would produce a marker matching
 nothing, which is the same runaway by a slower road.
 
+### Both bounds count markers, so a run has to reach `record`
+
+Neither bound is a counter the sweep increments. Both are read off the thread, and only `record`
+writes there — so a run that pushes a commit and then exits before posting has moved the tip
+without recording anything. The new tip is not in the marker set, the set has not grown, and the
+key carries the sha rather than only the hour, so it mints straight away. Nothing binds, and the
+claim in §3 means the reviewer on that branch is not answered either.
+
+`record` therefore writes the marker on any refusal that comes after the push — a `--pushed` sha
+that predates the run, a commit nobody declared, an unreadable body — rather than exiting with the
+thread untouched. The comment says what went wrong, which is the same thing §4 above asks of a run
+that could not fix what it found.
+
+What that leaves is a turn reaped or crashed before `record` is invoked at all. It stays unbounded,
+and the reason it is not fixed the obvious way — writing the marker before the work — is that doing
+so is exactly what `updated_head_shas` decided against: an attempt that is counted before it is
+made lets one crashed turn park a pull request for good with nothing said to anyone. Which of the
+two is worse depends on how often turns are reaped here, which nothing measures yet.
+
 ## 5. What the worker may claim
 
 `record` requires either `--pushed <sha>` or `--no-change`, and checks the first. A pushed sha must

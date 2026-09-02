@@ -180,6 +180,22 @@ CHECK_PAGE_SIZE = 100
 MAX_CHECK_NAME_CHARS = 120
 MAX_CHECK_URL_CHARS = 300
 
+#: What a check name may still carry once it leaves this module. Word
+#: characters — Unicode, so a job named in a non-Latin script survives — spaces,
+#: and the punctuation real names use: `build (ubuntu-latest, 3.12)`,
+#: `e2e/kind`, `pull-kube-agents-smoke-test`.
+#:
+#: An allowlist rather than a denylist, because the characters that matter in
+#: third-party text on its way to a prompt are the ones that end one context and
+#: begin another, and the set of those grows every time a caller changes its
+#: markup. A newline forges a second entry in the bullet list `_update_card`
+#: builds; a backtick closes the code span the name sits inside; `<`, `[` and
+#: `]` are the delimiters `pr_triggers` refuses outright in a slash request
+#: (`HIDING_CHARS`) and `resolver.py` neutralises in an issue title. Truncation
+#: is no substitute and stays where it is: cutting a name at 120 characters does
+#: nothing about a newline in its first ten.
+CHECK_NAME_DISALLOWED_RE = re.compile(r"[^\w .:/#+,()@'-]", re.UNICODE)
+
 #: `gh api` puts the HTTP status in its stderr line: `gh: Not Found (HTTP 404)`.
 #: A 404 from the collaborator endpoint is an answer; every other failure is not.
 HTTP_STATUS_RE = re.compile(r"\(HTTP (\d{3})\)")
@@ -307,6 +323,10 @@ class CheckRun:
     branches on it.
     """
 
+    #: Already reduced by `plain_check_name`, so every consumer — a card body,
+    #: a `poll` row, a report — gets the same constrained string and none of
+    #: them has to remember to constrain it. `_pr_card` leans on `find_trigger`
+    #: the same way rather than re-checking at the card.
     name: str
     #: The forge's own word for the failure: a check-run conclusion
     #: (`failure`, `timed_out`, …) or a status state (`failure`, `error`).
@@ -316,6 +336,21 @@ class CheckRun:
     details_url: str = ""
     #: "check_run" | "status"
     register: str = "check_run"
+
+
+def plain_check_name(name: str) -> str:
+    """`name` with everything `CHECK_NAME_DISALLOWED_RE` rejects taken out.
+
+    Applied at ingest, where the name enters the process, rather than at each
+    of the places it leaves it. A check name reaches a board entry that wakes a
+    model holding a workspace lease, and whoever posted the check needs only
+    `checks:write` or `statuses:write` on the repository — which an integration
+    with no write access to the code still has.
+
+    Disallowed characters become spaces and runs of whitespace collapse, so a
+    name broken across two lines reads as one line rather than as one word.
+    """
+    return " ".join(CHECK_NAME_DISALLOWED_RE.sub(" ", name or "").split())
 
 
 class ForgeProvider(Protocol):
@@ -846,7 +881,7 @@ class GitHubProvider:
                 continue
             found.append(
                 CheckRun(
-                    name=str(row.get("name") or ""),
+                    name=plain_check_name(str(row.get("name") or "")),
                     conclusion=conclusion,
                     details_url=str(row.get("details_url") or ""),
                     register="check_run",
@@ -866,7 +901,7 @@ class GitHubProvider:
                 continue
             found.append(
                 CheckRun(
-                    name=str(row.get("context") or ""),
+                    name=plain_check_name(str(row.get("context") or "")),
                     conclusion=state,
                     details_url=str(row.get("target_url") or ""),
                     register="status",
