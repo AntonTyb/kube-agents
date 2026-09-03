@@ -256,6 +256,23 @@ backfill_session_kv_keys() {
   fi
 }
 
+matches_release_bundle_ref() {
+  local repo_dir="$1"
+  local expected_ref="$2"
+  local bundle_file="${repo_dir}/.release-bundle"
+
+  if [ -f "$bundle_file" ]; then
+    local bundle_version bundle_tag
+    bundle_version="$(grep -E "^version=" "$bundle_file" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]' || echo "")"
+    bundle_tag="$(grep -E "^tag=" "$bundle_file" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]' || echo "")"
+    if [ -n "$bundle_version" ] && { [ "$bundle_version" = "$expected_ref" ] || [ "$bundle_tag" = "$expected_ref" ]; }; then
+      echo "$bundle_version"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 # The two refusals that do not need a ref to make sense: an unversioned source
 # directory, and a dirty one. Split out of verify_local_source_ref because a
 # tagless run still applies this checkout's Terraform and charts to a live
@@ -305,6 +322,11 @@ verify_local_source_ref() {
     # In official stamped release archives (unpacked tarball/zip outside Git),
     # BAKED_RELEASE_VERSION is stamped during release automation.
     if [ -n "${BAKED_RELEASE_VERSION:-}" ] && [ "${BAKED_RELEASE_VERSION}" = "${expected_ref}" ]; then
+      local bundle_version=""
+      if bundle_version="$(matches_release_bundle_ref "$repo_dir" "$expected_ref")"; then
+        print_success "Verified upgrade sources match official release bundle ${bundle_version}."
+        return 0
+      fi
       print_success "Verified upgrade sources match baked official release ${BAKED_RELEASE_VERSION}."
       return 0
     fi

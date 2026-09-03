@@ -838,6 +838,34 @@ source "{_COMMON_SH}"
                 )
                 self.assertIn("commit_messages_have_breaking_change", body, f"{script} does not call the helper")
 
+    def test_release_bundle_registries(self):
+        """Verifies common.sh exports release bundle directories, root files, and charts."""
+        script = """
+echo "DIRS:${RELEASE_BUNDLE_DIRECTORIES[*]}"
+echo "CHARTS:${RELEASE_HELM_CHARTS[*]}"
+echo "FILES:${RELEASE_BUNDLE_ROOT_FILES[*]}"
+"""
+        proc = self._run_common_func(script)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("DIRS:terraform k8s-operator deploy charts scripts examples", proc.stdout)
+        self.assertIn("CHARTS:charts/kube-agents", proc.stdout)
+        self.assertIn("FILES:install.sh uninstall.sh upgrade.sh install.defaults.env install.env.example images.json Makefile INSTALL.md README.md LICENSE", proc.stdout)
+
+    def test_extract_commit_tree(self):
+        """Verifies extract_commit_tree extracts exact committed files to target directory."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            head_commit = subprocess.check_output(
+                ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"], text=True
+            ).strip()
+            target_dir = pathlib.Path(temp_dir) / "extracted"
+            proc = self._run_common_func(
+                f'extract_commit_tree "{head_commit}" "{target_dir}" "README.md"',
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            extracted_file = target_dir / "README.md"
+            self.assertTrue(extracted_file.exists())
+            self.assertEqual(extracted_file.read_text(), (_REPO_ROOT / "README.md").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

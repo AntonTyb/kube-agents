@@ -24,6 +24,58 @@ export REQUIRED_RELEASE_IMAGES=(
   "gke-stockout-investigator"
 )
 
+# Declarative registry of release bundle directories, root files, and Helm charts
+export RELEASE_BUNDLE_DIRECTORIES=(
+  "terraform"
+  "k8s-operator"
+  "deploy"
+  "charts"
+  "scripts"
+  "examples"
+)
+
+export RELEASE_HELM_CHARTS=(
+  "charts/kube-agents"
+)
+
+export RELEASE_BUNDLE_ROOT_FILES=(
+  "install.sh"
+  "uninstall.sh"
+  "upgrade.sh"
+  "install.defaults.env"
+  "install.env.example"
+  "images.json"
+  "Makefile"
+  "INSTALL.md"
+  "README.md"
+  "LICENSE"
+)
+
+# ─── Git Commit Extraction ───────────────────────────────────────────────────
+# Extracts specific paths (or the full tree) from a Git commit directly into a
+# target directory using git archive. Ensures extraction reflects only tracked
+# files at the target commit SHA, excluding dirty working-tree state or ignored files.
+extract_commit_tree() {
+  local commit_sha="$1"
+  local target_dir="$2"
+  shift 2
+  local paths=("$@")
+
+  mkdir -p "${target_dir}"
+
+  if [ "${#paths[@]}" -gt 0 ]; then
+    if ! git -C "${REPO_ROOT}" archive "${commit_sha}" "${paths[@]}" | tar -x -C "${target_dir}"; then
+      echo "❌ ERROR: Failed to extract ${paths[*]} from commit ${commit_sha:0:7}!" >&2
+      return 1
+    fi
+  else
+    if ! git -C "${REPO_ROOT}" archive "${commit_sha}" | tar -x -C "${target_dir}"; then
+      echo "❌ ERROR: Failed to extract git archive from commit ${commit_sha:0:7}!" >&2
+      return 1
+    fi
+  fi
+}
+
 # ─── Boolean Parsing ──────────────────────────────────────────────────────────
 # Interpret a value as a boolean toggle. Returns 0 (success) for common
 # affirmative spellings and 1 otherwise. Matching is case-insensitive and

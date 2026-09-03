@@ -18,6 +18,10 @@ from tests.testing.common import (
     VALID_IMMUTABLE_REFS,
     get_isolated_test_env,
 )
+from tests.testing.release import (
+    MOCK_RELEASE_BUNDLE_VERSION,
+    create_mock_release_bundle_marker,
+)
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 _UPGRADE_SH = _REPO_ROOT / "upgrade.sh"
@@ -86,6 +90,32 @@ KUBE_AGENTS_SOURCE_ONLY=true source "{_UPGRADE_SH}"
             proc = self._run_upgrade_func(cmd, cwd=archive_dir)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("Verified upgrade sources match baked official release 0.2.0", proc.stdout)
+
+    def test_verify_local_source_ref_accepts_release_bundle_marker_in_non_git_dir(self):
+        """Verifies verify_local_source_ref in upgrade.sh logs bundle provenance attribution when .release-bundle matches baked version."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="unpacked-upgrade-bundle-") as outer_dir:
+            archive_dir = pathlib.Path(outer_dir) / f"kube-agents-{MOCK_RELEASE_BUNDLE_VERSION}"
+            create_mock_release_bundle_marker(archive_dir)
+
+            cmd = f'BAKED_RELEASE_VERSION="{MOCK_RELEASE_BUNDLE_VERSION}"; verify_local_source_ref "{archive_dir}" "{MOCK_RELEASE_BUNDLE_VERSION}"'
+            proc = self._run_upgrade_func(cmd, cwd=archive_dir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn(f"Verified upgrade sources match official release bundle {MOCK_RELEASE_BUNDLE_VERSION}", proc.stdout)
+
+    def test_verify_local_source_ref_rejects_unbaked_release_bundle_marker_in_non_git_dir(self):
+        """Verifies .release-bundle marker cannot bypass unversioned source directory rejection in upgrade.sh when baked version is empty."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="unpacked-unbaked-upgrade-") as outer_dir:
+            archive_dir = pathlib.Path(outer_dir) / f"kube-agents-{MOCK_RELEASE_BUNDLE_VERSION}"
+            create_mock_release_bundle_marker(archive_dir)
+
+            cmd = f'BAKED_RELEASE_VERSION=""; verify_local_source_ref "{archive_dir}" "{MOCK_RELEASE_BUNDLE_VERSION}"'
+            proc = self._run_upgrade_func(cmd, cwd=archive_dir)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Refusing to upgrade from an unversioned source directory", proc.stdout)
 
     def test_verify_local_source_ref_in_git_worktree_enforces_git_alignment(self):
         """Verifies verify_local_source_ref in upgrade.sh enforces clean git status in real git checkouts."""
