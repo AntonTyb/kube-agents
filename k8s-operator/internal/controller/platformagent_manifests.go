@@ -396,6 +396,19 @@ func renderManagedEnv(agent *agentv1alpha1.PlatformAgent) string {
 		add("SLACK_ALLOW_ALL_USERS", strconv.FormatBool(allowAllUsers(slack.AllowedUsers)))
 	}
 
+	if teams := integration.Teams; teams != nil && teams.Enabled != nil && *teams.Enabled {
+		add("TEAMS_RELAY_URL", credentialProxyBaseURL(agent))
+		add("TEAMS_ALLOWED_USERS", strings.Join(teams.AllowedUsers, ","))
+		allowAll := false
+		if teams.AllowAllUsers != nil {
+			allowAll = *teams.AllowAllUsers
+		}
+		add("TEAMS_ALLOW_ALL_USERS", strconv.FormatBool(allowAll))
+		if teams.TenantId != "" {
+			add("TEAMS_TENANT_ID", teams.TenantId)
+		}
+	}
+
 	if len(lines) == platformStart {
 		return strings.Join(lines, "\n") + "\n"
 	}
@@ -1340,6 +1353,11 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 				// untouched. Carries `rich_blocks` — see the note where it is set.
 				Extra map[string]any `json:"extra,omitempty"`
 			} `json:"slack"`
+			Teams struct {
+				Enabled          bool           `json:"enabled"`
+				TypingStatusText string         `json:"typing_status_text,omitempty"`
+				Extra            map[string]any `json:"extra,omitempty"`
+			} `json:"teams"`
 		} `json:"platforms"`
 		// Chat verbosity, keyed by platform. Read by the gateway's chat adapters
 		// and inert on a profile that receives no chat ingress, so it meets the
@@ -1388,6 +1406,7 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 	// whichever path ends up turning Slack on. Kept in sync with the same block in
 	// agents/chat/config.yaml, which carries the full note.
 	cfg.Platforms.Slack.Extra = map[string]any{"rich_blocks": true}
+	cfg.Platforms.Teams.Extra = map[string]any{"adaptive_cards": true}
 
 	if agent.Spec.Integration != nil {
 		if gchat := agent.Spec.Integration.GoogleChat; gchat != nil {
@@ -1403,6 +1422,15 @@ func renderConfigYAML(agent *agentv1alpha1.PlatformAgent, agentPlugins []*agentv
 		}
 		if slack := agent.Spec.Integration.Slack; slack != nil && slack.Enabled != nil {
 			cfg.Platforms.Slack.Enabled = *slack.Enabled
+		}
+		if teams := agent.Spec.Integration.Teams; teams != nil && teams.Enabled != nil {
+			cfg.Platforms.Teams.Enabled = *teams.Enabled
+			if *teams.Enabled {
+				cfg.Platforms.Teams.TypingStatusText = "Kage is thinking…"
+				if teams.AdaptiveCards != nil {
+					cfg.Platforms.Teams.Extra["adaptive_cards"] = *teams.AdaptiveCards
+				}
+			}
 		}
 	}
 
@@ -1979,6 +2007,44 @@ func buildPodTemplateSpec(agent *agentv1alpha1.PlatformAgent, configHash, fluent
 				envVars = append(envVars, corev1.EnvVar{
 					Name:  "GITHUB_ORG",
 					Value: org,
+				})
+			}
+		}
+		if teams := integration.Teams; teams != nil && teams.Enabled != nil && *teams.Enabled {
+			allowAll := false
+			if teams.AllowAllUsers != nil {
+				allowAll = *teams.AllowAllUsers
+			}
+			envVars = append(envVars, []corev1.EnvVar{
+				{
+					Name:  "TEAMS_RELAY_URL",
+					Value: credentialProxyBaseURL(agent),
+				},
+				{
+					Name:  "TEAMS_ALLOWED_USERS",
+					Value: strings.Join(teams.AllowedUsers, ","),
+				},
+				{
+					Name:  "TEAMS_ALLOW_ALL_USERS",
+					Value: strconv.FormatBool(allowAll),
+				},
+			}...)
+			if teams.TenantId != "" {
+				envVars = append(envVars, corev1.EnvVar{
+					Name:  "TEAMS_TENANT_ID",
+					Value: teams.TenantId,
+				})
+			}
+			if teams.HomeChannel != "" {
+				envVars = append(envVars, corev1.EnvVar{
+					Name:  "TEAMS_HOME_CHANNEL",
+					Value: teams.HomeChannel,
+				})
+			}
+			if teams.HomeChannelName != "" {
+				envVars = append(envVars, corev1.EnvVar{
+					Name:  "TEAMS_HOME_CHANNEL_NAME",
+					Value: teams.HomeChannelName,
 				})
 			}
 		}
@@ -2842,6 +2908,15 @@ kubectl config set-context "$KUBE_CONTEXT_NAME" --namespace="$KUBE_DEFAULT_NAMES
 				corev1.EnvVar{Name: "SLACK_BOT_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: defaultSecretRef(slack.BotTokenSecretRef, defaultPlatformAgentSecrets, "SLACK_BOT_TOKEN")}},
 				corev1.EnvVar{Name: "SLACK_APP_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: defaultSecretRef(slack.AppTokenSecretRef, defaultPlatformAgentSecrets, "SLACK_APP_TOKEN")}},
 			)
+		}
+		if teams := integration.Teams; teams != nil && teams.Enabled != nil && *teams.Enabled {
+			envVars = append(envVars,
+				corev1.EnvVar{Name: "TEAMS_APP_ID", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: defaultSecretRef(teams.AppIdSecretRef, defaultPlatformAgentSecrets, "TEAMS_APP_ID")}},
+				corev1.EnvVar{Name: "TEAMS_APP_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: defaultSecretRef(teams.AppPasswordSecretRef, defaultPlatformAgentSecrets, "TEAMS_APP_PASSWORD")}},
+			)
+			if teams.TenantId != "" {
+				envVars = append(envVars, corev1.EnvVar{Name: "TEAMS_TENANT_ID", Value: teams.TenantId})
+			}
 		}
 	}
 	if agent.Spec.Deployment != nil {
@@ -4054,6 +4129,10 @@ func buildFQDNNetworkPolicy(agent *agentv1alpha1.PlatformAgent) *unstructured.Un
 		"*.slack.com",
 		"*.slack-edge.com",
 		"*.slack-msgs.com",
+		"login.microsoftonline.com",
+		"*.login.microsoftonline.com",
+		"botframework.com",
+		"*.botframework.com",
 	}
 
 	matches := make([]interface{}, 0, len(patterns))
@@ -4657,4 +4736,3 @@ func buildPluginStagingContainerName(pluginName string) string {
 	}
 	return name
 }
-

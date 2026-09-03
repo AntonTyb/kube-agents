@@ -329,6 +329,10 @@ data:
         enabled: false
         extra:
           rich_blocks: true
+      teams:
+        enabled: false
+        extra:
+          adaptive_cards: true
   managed.env: |
     API_SERVER_KEY=cluster-internal-trusted
     KUBEAGENTS_MODE=today

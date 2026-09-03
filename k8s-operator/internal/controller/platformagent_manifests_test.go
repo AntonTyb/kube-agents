@@ -1770,6 +1770,8 @@ func TestFQDNPatternList_MatchesRealHostnames(t *testing.T) {
 		"api.github.com",
 		"objects.githubusercontent.com",
 		"slack.com",
+		"login.microsoftonline.com",
+		"smba.botframework.com",
 	}
 
 	for _, host := range hostnames {
@@ -2014,6 +2016,194 @@ func TestBuildConfigMapSlackRichBlocks(t *testing.T) {
 			}
 			if got := cfg.Platforms.Slack.Extra["rich_blocks"]; got != true {
 				t.Errorf("platforms.slack.extra.rich_blocks = %v, want true; got:\n%s", got, raw)
+			}
+		})
+	}
+}
+
+func TestBuildDeploymentTeamsIntegration(t *testing.T) {
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-agent",
+			Namespace: "my-ns",
+		},
+		Spec: agentv1alpha1.PlatformAgentSpec{
+			Integration: &agentv1alpha1.PlatformAgentIntegrationSpec{
+				Teams: &agentv1alpha1.TeamsSpec{
+					Enabled: ptr.To(true),
+					AppIdSecretRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "custom-teams-secret"},
+						Key:                  "teams-app-id",
+					},
+					AppPasswordSecretRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "custom-teams-secret"},
+						Key:                  "teams-app-pwd",
+					},
+					TenantId:        "teams-tenant-guid",
+					AllowedUsers:    []string{"user-aad-123", "admin-aad-456"},
+					HomeChannel:     "19:channel-id@thread.tacv2",
+					HomeChannelName: "operations",
+				},
+			},
+		},
+	}
+
+	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456", nil, renderOptions{imageVolumeSupported: true})
+	container := dep.Spec.Template.Spec.Containers[0]
+	envMap := make(map[string]corev1.EnvVar)
+	for _, env := range container.Env {
+		envMap[env.Name] = env
+	}
+
+	if _, ok := envMap["TEAMS_APP_ID"]; ok {
+		t.Error("expected TEAMS_APP_ID to be absent from sandbox")
+	}
+	if _, ok := envMap["TEAMS_APP_PASSWORD"]; ok {
+		t.Error("expected TEAMS_APP_PASSWORD to be absent from sandbox")
+	}
+	if envMap["TEAMS_RELAY_URL"].Value != "http://127.0.0.1:8765" {
+		t.Errorf("expected credential-free Teams relay URL, got %v", envMap["TEAMS_RELAY_URL"])
+	}
+	if envMap["TEAMS_ALLOWED_USERS"].Value != "user-aad-123,admin-aad-456" {
+		t.Errorf("expected TEAMS_ALLOWED_USERS user-aad-123,admin-aad-456, got %s", envMap["TEAMS_ALLOWED_USERS"].Value)
+	}
+	if envMap["TEAMS_ALLOW_ALL_USERS"].Value != "false" {
+		t.Errorf("expected TEAMS_ALLOW_ALL_USERS false by default, got %s", envMap["TEAMS_ALLOW_ALL_USERS"].Value)
+	}
+	if envMap["TEAMS_TENANT_ID"].Value != "teams-tenant-guid" {
+		t.Errorf("expected TEAMS_TENANT_ID teams-tenant-guid, got %s", envMap["TEAMS_TENANT_ID"].Value)
+	}
+	if envMap["TEAMS_HOME_CHANNEL"].Value != "19:channel-id@thread.tacv2" {
+		t.Errorf("expected TEAMS_HOME_CHANNEL 19:channel-id@thread.tacv2, got %s", envMap["TEAMS_HOME_CHANNEL"].Value)
+	}
+	if envMap["TEAMS_HOME_CHANNELName"].Value != "operations" && envMap["TEAMS_HOME_CHANNEL_NAME"].Value != "operations" {
+		t.Errorf("expected TEAMS_HOME_CHANNEL_NAME operations, got %s", envMap["TEAMS_HOME_CHANNEL_NAME"].Value)
+	}
+
+	proxyEnv := make(map[string]corev1.EnvVar)
+	for _, env := range buildCredentialProxySidecar(agent, "/opt/hermes").Env {
+		proxyEnv[env.Name] = env
+	}
+	if proxyEnv["TEAMS_APP_ID"].ValueFrom.SecretKeyRef.Name != "custom-teams-secret" || proxyEnv["TEAMS_APP_ID"].ValueFrom.SecretKeyRef.Key != "teams-app-id" {
+		t.Errorf("expected proxy TEAMS_APP_ID custom-teams-secret/teams-app-id, got %v", proxyEnv["TEAMS_APP_ID"].ValueFrom)
+	}
+	if proxyEnv["TEAMS_APP_PASSWORD"].ValueFrom.SecretKeyRef.Name != "custom-teams-secret" || proxyEnv["TEAMS_APP_PASSWORD"].ValueFrom.SecretKeyRef.Key != "teams-app-pwd" {
+		t.Errorf("expected proxy TEAMS_APP_PASSWORD custom-teams-secret/teams-app-pwd, got %v", proxyEnv["TEAMS_APP_PASSWORD"].ValueFrom)
+	}
+	if proxyEnv["TEAMS_TENANT_ID"].Value != "teams-tenant-guid" {
+		t.Errorf("expected proxy TEAMS_TENANT_ID teams-tenant-guid, got %v", proxyEnv["TEAMS_TENANT_ID"].Value)
+	}
+}
+
+func TestBuildDeploymentTeamsAllowAllUsers(t *testing.T) {
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-agent",
+			Namespace: "my-ns",
+		},
+		Spec: agentv1alpha1.PlatformAgentSpec{
+			Integration: &agentv1alpha1.PlatformAgentIntegrationSpec{
+				Teams: &agentv1alpha1.TeamsSpec{
+					Enabled:       ptr.To(true),
+					AllowAllUsers: ptr.To(true),
+				},
+			},
+		},
+	}
+
+	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456", nil, renderOptions{imageVolumeSupported: true})
+	container := dep.Spec.Template.Spec.Containers[0]
+	envMap := make(map[string]corev1.EnvVar)
+	for _, env := range container.Env {
+		envMap[env.Name] = env
+	}
+
+	if envMap["TEAMS_ALLOW_ALL_USERS"].Value != "true" {
+		t.Errorf("expected TEAMS_ALLOW_ALL_USERS true, got %s", envMap["TEAMS_ALLOW_ALL_USERS"].Value)
+	}
+}
+
+func TestBuildDeploymentTeamsDefaultDisallowAllUsers(t *testing.T) {
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-agent",
+			Namespace: "my-ns",
+		},
+		Spec: agentv1alpha1.PlatformAgentSpec{
+			Integration: &agentv1alpha1.PlatformAgentIntegrationSpec{
+				Teams: &agentv1alpha1.TeamsSpec{
+					Enabled: ptr.To(true),
+				},
+			},
+		},
+	}
+
+	dep := buildDeployment(agent, "abcd1234", "efgh5678", "ijkl9012", "policy3456", nil, renderOptions{imageVolumeSupported: true})
+	container := dep.Spec.Template.Spec.Containers[0]
+	envMap := make(map[string]corev1.EnvVar)
+	for _, env := range container.Env {
+		envMap[env.Name] = env
+	}
+
+	if envMap["TEAMS_ALLOW_ALL_USERS"].Value != "false" {
+		t.Errorf("expected TEAMS_ALLOW_ALL_USERS false by default, got %s", envMap["TEAMS_ALLOW_ALL_USERS"].Value)
+	}
+}
+
+func TestBuildConfigMapTeamsEnabled(t *testing.T) {
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-agent",
+			Namespace: "test-ns",
+		},
+		Spec: agentv1alpha1.PlatformAgentSpec{
+			Integration: &agentv1alpha1.PlatformAgentIntegrationSpec{
+				Teams: &agentv1alpha1.TeamsSpec{
+					Enabled: ptr.To(true),
+				},
+			},
+		},
+	}
+
+	cm := buildConfigMap(agent, nil)
+	yamlContent := defaultProfileYAML(t, cm)
+	if !strings.Contains(yamlContent, "teams:") || !strings.Contains(yamlContent, "enabled: true") {
+		t.Errorf("expected config.yaml to enable teams platform, got:\n%s", yamlContent)
+	}
+	if !strings.Contains(yamlContent, "typing_status_text: Kage is thinking…") {
+		t.Errorf("expected config.yaml to set teams typing status text, got:\n%s", yamlContent)
+	}
+}
+
+func TestBuildConfigMapTeamsAdaptiveCards(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		integration *agentv1alpha1.PlatformAgentIntegrationSpec
+	}{
+		{"teams enabled", &agentv1alpha1.PlatformAgentIntegrationSpec{
+			Teams: &agentv1alpha1.TeamsSpec{Enabled: ptr.To(true)},
+		}},
+		{"no integration", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &agentv1alpha1.PlatformAgent{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-agent", Namespace: "test-ns"},
+				Spec:       agentv1alpha1.PlatformAgentSpec{Integration: tc.integration},
+			}
+
+			var cfg struct {
+				Platforms struct {
+					Teams struct {
+						Extra map[string]any `json:"extra"`
+					} `json:"teams"`
+				} `json:"platforms"`
+			}
+			raw := defaultProfileYAML(t, buildConfigMap(agent, nil))
+			if err := k8syaml.Unmarshal([]byte(raw), &cfg); err != nil {
+				t.Fatalf("the default profile overlay is not parseable: %v\n%s", err, raw)
+			}
+			if got := cfg.Platforms.Teams.Extra["adaptive_cards"]; got != true {
+				t.Errorf("platforms.teams.extra.adaptive_cards = %v, want true; got:\n%s", got, raw)
 			}
 		})
 	}
