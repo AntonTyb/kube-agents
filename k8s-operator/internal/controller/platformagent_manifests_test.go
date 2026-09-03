@@ -1581,6 +1581,117 @@ func TestKustomizeNetworkPolicies_PodSelectorMatchesCommonLabels(t *testing.T) {
 	}
 }
 
+// TestKustomizeCoreEgressDNSPeersMatchTheOperator pins the static Kustomize DNS
+// rule to the one buildNetworkPolicy renders. They are two hand-maintained
+// copies of the same peer list, and nothing else compares them: the only other
+// test reading these files checks podSelector alone.
+//
+// The drift is not hypothetical. Every other static copy in the tree — the
+// chart's litellm and github-minter policies, the LiteLLM integration base, the
+// examples — already named the Cloud DNS resolver while this file did not, and
+// no test noticed until a Cloud DNS install lost name resolution. The regression
+// this catches is the reverse: someone edits the builder, `go test ./...` stays
+// green, and Kustomize installs quietly get a different resolver set.
+//
+// It compares ipBlock CIDRs only. The selector peers are equivalent but not
+// textually comparable across a Go literal and a YAML document, and pinning
+// those would make the test fail on cosmetic edits rather than on drift.
+func TestKustomizeCoreEgressDNSPeersMatchTheOperator(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "deploy", "kustomize", "platform", "networkpolicy-core-egress.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	var manifest struct {
+		Spec struct {
+			Egress []struct {
+				Ports []struct {
+					Port int32 `yaml:"port"`
+				} `yaml:"ports"`
+				To []struct {
+					IPBlock struct {
+						CIDR string `yaml:"cidr"`
+					} `yaml:"ipBlock"`
+				} `yaml:"to"`
+			} `yaml:"egress"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("failed to unmarshal %s: %v", path, err)
+	}
+
+	// The static file's DNS rule carries a 0.0.0.0/0 peer with an except list,
+	// which the operator's does not; compare the single-host grants, which are
+	// the resolvers themselves.
+	static := map[string]bool{}
+	for _, rule := range manifest.Spec.Egress {
+		isDNS := len(rule.Ports) > 0
+		for _, port := range rule.Ports {
+			if port.Port != dnsPort {
+				isDNS = false
+			}
+		}
+		if !isDNS {
+			continue
+		}
+		for _, peer := range rule.To {
+			if strings.HasSuffix(peer.IPBlock.CIDR, "/32") || strings.HasSuffix(peer.IPBlock.CIDR, "/128") {
+				static[peer.IPBlock.CIDR] = true
+			}
+		}
+	}
+
+	agent := &agentv1alpha1.PlatformAgent{
+		ObjectMeta: metav1.ObjectMeta{Name: "platform-agent", Namespace: "kubeagents-system"},
+	}
+	// Every port-53 rule, not egressCIDRsForPort, which returns at the first one
+	// it finds. The static side above iterates the whole file, and comparing one
+	// operator rule against all of the manifest's would report parity for a
+	// second operator rule nobody had mirrored — the exact drift this test is
+	// here to catch, and a split into two port-53 rules is a plausible edit given
+	// that separate rules are how this policy keeps grants from widening one
+	// another.
+	rendered := buildNetworkPolicy(agent, nil, defaultTestNetpolProfile(), false, "", false)
+	operator := map[string]bool{}
+	for _, rule := range rendered.Spec.Egress {
+		// Written out rather than through ruleNamesPort, which counts a rule with
+		// no ports as naming every one of them. That is right for its callers and
+		// wrong here: such a rule's peers are not DNS peers, and folding them into
+		// this set would report drift against the static file for peers the static
+		// file's DNS rule was never supposed to carry.
+		namesDNS := false
+		for _, candidate := range rule.Ports {
+			if candidate.Port != nil && candidate.Port.IntValue() == dnsPort {
+				namesDNS = true
+				break
+			}
+		}
+		if !namesDNS {
+			continue
+		}
+		for _, peer := range rule.To {
+			if peer.IPBlock == nil {
+				continue
+			}
+			if strings.HasSuffix(peer.IPBlock.CIDR, "/32") || strings.HasSuffix(peer.IPBlock.CIDR, "/128") {
+				operator[peer.IPBlock.CIDR] = true
+			}
+		}
+	}
+
+	for cidr := range operator {
+		if !static[cidr] {
+			t.Errorf("the operator's DNS rule grants %s and %s does not; a Kustomize install gets a "+
+				"different resolver set from an operator-managed one", cidr, filepath.Base(path))
+		}
+	}
+	for cidr := range static {
+		if !operator[cidr] {
+			t.Errorf("%s grants %s on port 53 and the operator's DNS rule does not", filepath.Base(path), cidr)
+		}
+	}
+}
+
 // fqdnPatternsFromPolicy returns the egress match patterns buildFQDNNetworkPolicy emits.
 func fqdnPatternsFromPolicy(t *testing.T) []string {
 	t.Helper()
