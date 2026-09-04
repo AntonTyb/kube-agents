@@ -1354,6 +1354,56 @@ class FailingChecksTest(unittest.TestCase):
         # treatment; a CRLF in it is one name, not two.
         self.assertEqual(status.name, "prow e2e")
 
+    def test_a_log_url_that_is_not_a_web_address_is_dropped_at_ingest(self):
+        """The same argument as the check name, one field over.
+
+        `details_url` reaches a card body a model reads and may fetch, and it
+        is chosen by whoever posted the check. Both registers are asserted
+        because they carry it under different keys, and the name and conclusion
+        must survive: a worker can still go and find the log itself.
+        """
+        found = self._checks(
+            {
+                "check_runs": [
+                    {
+                        "name": "unit",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "details_url": "javascript:alert(1)",
+                    }
+                ]
+            },
+            {
+                "statuses": [
+                    {
+                        "context": "prow/e2e",
+                        "state": "failure",
+                        "target_url": "file:///opt/data/SETTINGS.md",
+                    }
+                ]
+            },
+        )
+        run, status = found
+        self.assertEqual([c.details_url for c in found], ["", ""])
+        self.assertEqual((run.name, status.name), ("unit", "prow/e2e"))
+
+    def test_a_real_log_url_survives(self):
+        found = self._checks(
+            {
+                "check_runs": [
+                    {
+                        "name": "unit",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "details_url": "https://github.com/acme/toolkit/runs/1",
+                    }
+                ]
+            }
+        )
+        self.assertEqual(
+            found[0].details_url, "https://github.com/acme/toolkit/runs/1"
+        )
+
     def test_an_ordinary_check_name_survives_unchanged(self):
         """The allowlist has to pass what real CI actually calls its jobs."""
         for name in (
@@ -1469,6 +1519,49 @@ class FailingChecksTest(unittest.TestCase):
             {"statuses": [{"state": "failure"}]},
         )
         self.assertEqual([c.name for c in found], ["", ""])
+
+
+class SweepReadResilienceTest(unittest.TestCase):
+    """Every read-only round trip asks `_call` for the same two favours.
+
+    `repo=` gives the runner the context it needs to refresh a credential on an
+    authentication failure, and `retry_transient=True` buys one bounded retry
+    on a sidecar blip. Both default to falsy, so a read that omits them
+    compiles, passes its own tests, and merges without a conflict — which is
+    how the three reads this branch added arrived without either. The cost is
+    paid by the sweep that runs unattended every ten minutes: one expired token
+    turns into a chat warning per repository per tick.
+
+    Asserted over the whole provider rather than over the three new reads, so
+    the next read added here is held to it too.
+    """
+
+    #: Read-only operations and the arguments that drive them. Mutating calls
+    #: are deliberately absent: `retry_transient` on a POST risks double-posting
+    #: on a timeout, which `_call`'s own docstring forbids.
+    READS = (
+        ("list_open_prs", (REPO,)),
+        ("list_commits", (REPO, _unhealthy_pr())),
+        ("conflict_state", (REPO, _unhealthy_pr())),
+        ("failing_checks", (REPO, _unhealthy_pr())),
+    )
+
+    def test_every_read_passes_the_repo_and_asks_for_the_retry(self):
+        for name, args in self.READS:
+            with self.subTest(operation=name):
+                seen = []
+                provider = forge.GitHubProvider(run=FakeGh())
+
+                def record(argv, **kwargs):
+                    seen.append(kwargs)
+                    return None
+
+                provider._call = record
+                getattr(provider, name)(*args)
+                self.assertTrue(seen, f"{name} made no call")
+                for kwargs in seen:
+                    self.assertEqual(kwargs.get("repo"), REPO)
+                    self.assertIs(kwargs.get("retry_transient"), True)
 
 
 class ProtocolConformanceTest(unittest.TestCase):

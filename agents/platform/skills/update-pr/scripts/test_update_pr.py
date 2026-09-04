@@ -575,6 +575,88 @@ class RecordTest(_Harness):
         self.assertEqual(provider.posted, [])
         self.assertIn("not a commit on this pull request", err)
 
+    def test_an_unresolvable_pushed_sha_still_marks_a_moved_tip(self):
+        """The likeliest way to reach a refusal with the branch already moved.
+
+        The commits are on the branch; only the argument naming them is wrong.
+        Resolving `--pushed` used to exit through `_resolve_sha` directly, so
+        this path left the tip unmarked while every neighbouring path marked
+        it — and `SKILL.md` tells the model not to retry after a refusal,
+        which turns a typo into the runaway rather than into one lost turn.
+        """
+        for value in ("cc1", "9" * 40):
+            with self.subTest(pushed=value):
+                provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+                rc, _, _ = self.record(provider, extra=("--pushed", value))
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(provider.posted), 1)
+                self.assertIn(
+                    f"<!-- agent-updated:{HEAD_SHA} -->", provider.posted[0][1]
+                )
+
+    def test_every_refusal_on_a_moved_branch_marks_the_tip(self):
+        """The guarantee is worth what its least-travelled path is worth.
+
+        One refusal that exits without a marker is enough to reopen the loop,
+        and the four documents that state the guarantee do not distinguish
+        between paths — so this walks them rather than trusting the prose. Add
+        a refusal below `--attempted-sha`'s resolution, add it here.
+        """
+        cases = {
+            "--pushed is too short": ("--pushed", "cc1"),
+            "--pushed is not on the branch": ("--pushed", "9" * 40),
+            "--pushed predates the run": ("--pushed", BASE_SHA),
+            "--no-change on a moved branch": ("--no-change",),
+        }
+        for label, extra in cases.items():
+            with self.subTest(refusal=label):
+                provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+                rc, _, _ = self.record(provider, extra=extra)
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(provider.posted), 1, label)
+                self.assertIn(
+                    f"<!-- agent-updated:{HEAD_SHA} -->", provider.posted[0][1]
+                )
+
+        # The two body refusals, which reach `refuse` through `SystemExit`
+        # rather than through `on_fail`. Both claim a real commit, so they get
+        # past everything above and fail on the body alone.
+        bodies = {
+            "the body is unreadable": os.path.join(self.scratch, "absent.md"),
+            "the body is only marker syntax": self.scratch_file(
+                name="markers.md",
+                content=pr_triggers.marker(HEAD_SHA, pr_triggers.UPDATED_MARKER),
+            ),
+        }
+        for label, path in bodies.items():
+            with self.subTest(refusal=label):
+                provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+                rc, _, _ = self.record(
+                    provider, extra=("--pushed", FIX_SHA), body=path
+                )
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(provider.posted), 1, label)
+                self.assertIn(
+                    f"<!-- agent-updated:{HEAD_SHA} -->", provider.posted[0][1]
+                )
+
+    def test_an_unresolvable_attempted_sha_is_the_stated_exception(self):
+        """It is what "the branch has moved" would be measured against.
+
+        Refusing plainly is honest here — nothing has been posted, nothing on
+        the thread has changed, and the next tick simply cards the pull request
+        again. Pinned because the docstrings name this as the one exception,
+        and an exception nobody tests drifts into a second defect.
+        """
+        provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+        rc, _, err = self.record(
+            provider, sha="9" * 40, extra=("--pushed", FIX_SHA)
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(provider.posted, [])
+        self.assertIn("--attempted-sha", err)
+        self.assertIn("Nothing was posted", err)
+
     def test_a_claim_is_required(self):
         provider = FakeProvider()
         rc, _, _ = self.record(provider, extra=())

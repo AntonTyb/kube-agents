@@ -44,13 +44,21 @@ Both bounds count markers, so they only bind on a run that reaches this
 command. That is why every refusal below, on a run whose commits are already on
 the branch, posts the marker before it exits rather than leaving the thread
 untouched: a pushed branch with no marker spends nothing from the budget while
-minting a fresh tip, and the sweep hands it straight back. What that does not
-cover is a turn that dies before ``record`` is invoked at all — a reaped turn,
-a crashed container. Those still leave a pushed branch unmarked, and the loop is
-bounded there only by whoever notices. Closing it would mean writing the marker
-before the work rather than after, which trades this bound against the one
-``pr_triggers.updated_head_shas`` chose deliberately: that a crashed turn must
-not park a pull request for good with nothing said to anyone.
+minting a fresh tip, and the sweep hands it straight back. "Every" is checked
+by a test that walks the refusals, because the guarantee is worth exactly as
+much as its least-travelled path — an unresolvable ``--pushed`` used to exit
+without a marker, which is the likeliest way to reach one of these at all.
+
+Two things it does not cover. Resolving ``--attempted-sha`` itself comes first
+and refuses plainly, because it is what "already on the branch" would be
+measured against; nothing has been posted by then and nothing about the thread
+has changed, so the next tick simply cards the pull request again. The real
+residue is a turn that dies before ``record`` is invoked at all — a reaped
+turn, a crashed container. Those leave a pushed branch unmarked, and the loop
+is bounded there only by whoever notices. Closing it would mean writing the
+marker before the work rather than after, which trades this bound against the
+one ``pr_triggers.updated_head_shas`` chose deliberately: that a crashed turn
+must not park a pull request for good with nothing said to anyone.
 
 ``record`` also refuses to post a claim it cannot check. ``--pushed`` names a
 commit the run made, and it must be on the pull request and must come after the
@@ -256,34 +264,36 @@ def handle_poll(args) -> int:
     return 0
 
 
-def _resolve_sha(commits, value: str, label: str) -> tuple[str, int]:
+def _resolve_sha(commits, value: str, label: str, on_fail=None) -> tuple[str, int]:
     """The full sha and branch position of `value`, or exit.
 
     Resolved against the pull request's own commits rather than accepted as
     typed. An abbreviation is fine — it is what `git log` prints — but the
     marker has to carry the full sha, because the sweep compares it against
     `head_sha` by exact string equality and a short one would match nothing.
+
+    `on_fail` is how a caller that has more to do before exiting takes the
+    refusal over. `handle_record` passes its `refuse`, because a `--pushed`
+    that will not resolve is one of the ways a run reaches an exit with the
+    branch already moved, and a moved branch owes the thread a marker whatever
+    the reason. Default is a plain exit, which is right for `--attempted-sha`:
+    it is resolved before there is an anchor to compute "moved" against.
     """
+    fail = on_fail or pr_skill.fail
     text = str(value or "").strip().lower()
     if len(text) < SHA_MIN_LEN:
-        pr_skill.fail(
-            f"{label} {value!r} is shorter than {SHA_MIN_LEN} characters. "
-            "Nothing was posted."
-        )
+        fail(f"{label} {value!r} is shorter than {SHA_MIN_LEN} characters.")
     matches = [
         (index, commit.sha)
         for index, commit in enumerate(commits)
         if commit.sha.lower().startswith(text)
     ]
     if not matches:
-        pr_skill.fail(
-            f"{label} {value} is not a commit on this pull request. Nothing was "
-            "posted."
-        )
+        fail(f"{label} {value} is not a commit on this pull request.")
     if len(matches) > 1:
-        pr_skill.fail(
+        fail(
             f"{label} {value} matches {len(matches)} commits on this pull "
-            "request. Give more characters. Nothing was posted."
+            "request. Give more characters."
         )
     index, sha = matches[0]
     return sha, index
@@ -309,8 +319,15 @@ def handle_record(args) -> int:
     except forge.ForgeError as error:
         pr_skill.fail(f"{error.reason}: {error.value}")
 
+    # No `on_fail`: this is the one resolution with nothing to fall back on. It
+    # is what "moved" would be measured from, so a run that cannot resolve it
+    # cannot know whether the branch moved, and the plain exit is honest —
+    # nothing has been posted, and nothing about the thread has changed.
     attempted_sha, attempted_at = _resolve_sha(
-        commits, args.attempted_sha, "--attempted-sha"
+        commits,
+        args.attempted_sha,
+        "--attempted-sha",
+        on_fail=lambda message: pr_skill.fail(f"{message} Nothing was posted."),
     )
 
     # Counted from the thread this call just read rather than from what `poll`
@@ -375,12 +392,19 @@ def handle_record(args) -> int:
                     f"{message} The attempt could not be marked either "
                     f"({error}), so this pull request will be carded again."
                 )
-        pr_skill.fail(message)
+            pr_skill.fail(f"{message} The attempt was marked; see the thread.")
+        pr_skill.fail(f"{message} Nothing was posted.")
 
     pushed = []
     positions = set()
     for value in args.pushed or []:
-        sha, position = _resolve_sha(commits, value, "--pushed")
+        # Through `refuse`, because a `--pushed` that will not resolve is the
+        # likeliest way to get here on a branch that has already moved: the
+        # commits are on the branch and the argument naming them is mistyped or
+        # too short. Resolving it with a plain exit would leave the tip
+        # unmarked, which is the unbounded loop this whole block exists to
+        # close, and `SKILL.md` tells the model not to retry after a refusal.
+        sha, position = _resolve_sha(commits, value, "--pushed", on_fail=refuse)
         if position <= attempted_at:
             # Every commit the agent ever made is on this branch, including the
             # one that opened the pull request, so membership alone would pass

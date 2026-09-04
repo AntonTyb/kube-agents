@@ -36,7 +36,11 @@ tick to discover there was nothing to do, which is the defect that retired `gith
 
 That bill scales with how many pull requests the agent has open, not with how many repositories it
 watches: the sweep walks every repository `get_managed_github_repos()` returns, and a repository
-with no agent-authored pull requests costs the one list call the comment sweep was already making.
+with no agent-authored pull requests costs one list call. That call is its own — sweeps share the
+tick's claim set and card budget, not a provider or a read — so the fixed cost of adding this sweep
+is a `gh` preflight, a viewer lookup, and one list call per repository, each duplicating what the
+comment sweep does a moment later. Deduplicating them would mean a read cache spanning the tick,
+which is a larger change than the calls are worth at this volume.
 
 The conditions are read deterministically, so the gate needs no reasoning:
 
@@ -119,6 +123,14 @@ Two bounds, both read back off the thread rather than tracked in a database, for
 `pr-comment-conversation.md` §5 gives: the sweep and the worker are separate processes on separate
 schedules, and the thread is the only state both can see.
 
+`PR_AGENT_MAX_PER_TICK` (default 3) is a third bound, but it is not this sweep's: it is the tick's,
+and both pull-request sweeps draw their cards from the one allowance. Applying it per sweep would
+have doubled the ceiling the knob's name states, silently, and on this path a card is a workspace
+lease and a push rather than a comment. `pr_updates` runs first, so under pressure the unmergeable
+branches are the ones that get the turns — the same ordering, and the same reason, as the claim in
+§3. The cap bounds a tick, not a pull request, so on its own it slows the loop rather than ending
+it; the two bounds below are what terminate it.
+
 **One attempt per head commit.** `<!-- agent-updated:<sha> -->` in a comment the agent authored
 means "this tip has been worked", whatever the outcome. It is keyed on a commit sha rather than a
 comment node id — the only marker of the three that is — because what triggered the run was that
@@ -152,10 +164,15 @@ without recording anything. The new tip is not in the marker set, the set has no
 key carries the sha rather than only the hour, so it mints straight away. Nothing binds, and the
 claim in §3 means the reviewer on that branch is not answered either.
 
-`record` therefore writes the marker on any refusal that comes after the push — a `--pushed` sha
-that predates the run, a commit nobody declared, an unreadable body — rather than exiting with the
-thread untouched. The comment says what went wrong, which is the same thing §4 above asks of a run
-that could not fix what it found.
+`record` therefore writes the marker on every refusal that comes after the push — a `--pushed` sha
+that predates the run or will not resolve, a commit nobody declared, an unreadable body — rather
+than exiting with the thread untouched. The comment says what went wrong, which is the same thing
+§4 above asks of a run that could not fix what it found. `test_update_pr.py` walks the refusal
+paths and asserts it, because "every" is the kind of claim a later branch quietly falsifies.
+
+One refusal is outside that rule by construction: an `--attempted-sha` that does not resolve. It is
+the anchor the others are measured against, so until it resolves there is no way to tell whether
+the branch moved, and no sha to write a marker for.
 
 What that leaves is a turn reaped or crashed before `record` is invoked at all. It stays unbounded,
 and the reason it is not fixed the obvious way — writing the marker before the work — is that doing

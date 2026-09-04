@@ -77,7 +77,7 @@ class SweepRegistryTest(unittest.TestCase):
         with mock.patch.dict(
             gate.SWEEPS,
             {
-                "issues": lambda dry_run=False, _claimed=None: (
+                "issues": lambda dry_run=False, _claimed=None, _budget=None: (
                     seen.append(dry_run) or gate.SweepResult()
                 )
             },
@@ -90,15 +90,16 @@ class SweepRegistryTest(unittest.TestCase):
     def test_every_registered_sweep_accepts_the_flag(self):
         """Against the real callables, which the stub above cannot check.
 
-        `main` passes `dry_run` and the tick's claim set positionally. A sweep
-        declared without either parameter raises `TypeError`, and the
-        deliberately broad `except` turns that into a `⚠️` line — so the job
-        would announce itself broken every ten minutes and never poll, while
-        every test that drives `SWEEPS` through a stub carried on passing.
+        `main` passes `dry_run`, the tick's claim set and the tick's card
+        budget positionally. A sweep declared without one of them raises
+        `TypeError`, and the deliberately broad `except` turns that into a `⚠️`
+        line — so the job would announce itself broken every ten minutes and
+        never poll, while every test that drives `SWEEPS` through a stub
+        carried on passing.
         """
         for name, sweep in gate.SWEEPS.items():
             with self.subTest(sweep=name):
-                inspect.signature(sweep).bind(False, set())
+                inspect.signature(sweep).bind(False, set(), gate._TickBudget(1))
 
     def test_the_update_sweep_runs_before_the_comment_sweep(self):
         """Registry order is the ordering guarantee, so it is asserted.
@@ -455,7 +456,7 @@ class MainTest(unittest.TestCase):
 
     def test_idle_tick_prints_nothing(self):
         """The property the whole job exists for: silence costs nothing."""
-        rc, out, filed = self._run({"issues": lambda _dry=False, _claimed=None: gate.SweepResult()})
+        rc, out, filed = self._run({"issues": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult()})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
         self.assertEqual(filed, [])
@@ -464,7 +465,7 @@ class MainTest(unittest.TestCase):
         """Work is handed to a worker, not announced. The card is the message."""
         card = gate.Card(title="t", body="b", idempotency_key="k")
         rc, out, filed = self._run(
-            {"issues": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[card])}
+            {"issues": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult(cards=[card])}
         )
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
@@ -472,7 +473,7 @@ class MainTest(unittest.TestCase):
 
     def test_warnings_reach_stdout(self):
         rc, out, _ = self._run(
-            {"issues": lambda _dry=False, _claimed=None: gate.SweepResult(warnings=["⚠️ broken"])}
+            {"issues": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult(warnings=["⚠️ broken"])}
         )
         self.assertEqual(rc, 0)
         self.assertIn("⚠️ broken", out)
@@ -480,14 +481,14 @@ class MainTest(unittest.TestCase):
     def test_a_raising_sweep_does_not_stop_its_sibling(self):
         """Sweep isolation — what two separate cron jobs used to give for free."""
 
-        def boom(_dry=False, _claimed=None):
+        def boom(_dry=False, _claimed=None, _budget=None):
             raise RuntimeError("kaboom")
 
         card = gate.Card(title="t", body="b", idempotency_key="k")
         rc, out, filed = self._run(
             {
                 "broken": boom,
-                "working": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[card]),
+                "working": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult(cards=[card]),
             }
         )
         self.assertEqual(rc, 0)
@@ -496,7 +497,7 @@ class MainTest(unittest.TestCase):
         self.assertIn("`broken` sweep failed", out)
 
     def test_a_raising_sweep_is_reported_not_swallowed(self):
-        def boom(_dry=False, _claimed=None):
+        def boom(_dry=False, _claimed=None, _budget=None):
             raise RuntimeError("kaboom")
 
         rc, out, filed = self._run({"broken": boom})
@@ -510,8 +511,8 @@ class MainTest(unittest.TestCase):
         unwanted = gate.Card(title="unwanted", body="b", idempotency_key="k2")
         rc, out, filed = self._run(
             {
-                "issues": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[wanted]),
-                "pr_comments": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[unwanted]),
+                "issues": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult(cards=[wanted]),
+                "pr_comments": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult(cards=[unwanted]),
             },
             env={gate.SWEEPS_ENV: "issues"},
         )
@@ -522,7 +523,7 @@ class MainTest(unittest.TestCase):
     def test_dry_run_files_nothing(self):
         card = gate.Card(title="t", body="b", idempotency_key="k")
         rc, out, filed = self._run(
-            {"issues": lambda _dry=False, _claimed=None: gate.SweepResult(cards=[card])},
+            {"issues": lambda _dry=False, _claimed=None, _budget=None: gate.SweepResult(cards=[card])},
             argv=["--dry-run"],
         )
         self.assertEqual(rc, 0)
@@ -533,7 +534,7 @@ class MainTest(unittest.TestCase):
         """Card filing is not the only write. Refusals and 👀 are the sweep's."""
         seen = []
 
-        def watch(dry=False, _claimed=None):
+        def watch(dry=False, _claimed=None, _budget=None):
             seen.append(dry)
             return gate.SweepResult()
 
@@ -1488,6 +1489,20 @@ class PrUpdatesSweepTest(unittest.TestCase):
         # pull request saying what happened.
         self.assertEqual(result.warnings, [])
 
+    def test_a_zero_budget_is_an_off_switch_that_costs_nothing(self):
+        """`max_update_attempts` documents zero as the way to stop this sweep.
+
+        Honoured after the reads it would be an off switch that still spends a
+        merge-state read, two CI reads and a comment read on every unhealthy
+        pull request, and writes "attempt budget spent" to stderr every ten
+        minutes. So it returns before the forge is touched, which is what
+        `preflighted` asserts.
+        """
+        provider = FakeProvider(prs=[make_pr()], conflicted=True)
+        result = self._sweep(provider, env={gate.PR_MAX_UPDATE_ATTEMPTS_ENV: "0"})
+        self.assertEqual((result.cards, result.warnings), ([], []))
+        self.assertFalse(provider.preflighted)
+
     def test_a_marker_somebody_else_wrote_does_not_spend_the_budget(self):
         provider = FakeProvider(
             prs=[make_pr()],
@@ -1729,6 +1744,88 @@ class PrUpdatesSweepTest(unittest.TestCase):
         result = self._sweep(provider, repos=["acme/a", "acme/b"])
         self.assertIn("acme/a#12", result.warnings[0])
         self.assertIn("acme/b#12", result.warnings[0])
+
+
+class SharedTickBudgetTest(unittest.TestCase):
+    """`PR_AGENT_MAX_PER_TICK` bounds the tick, not each sweep separately.
+
+    Two pull-request sweeps each taking a full allowance would hand an operator
+    who set the knob to three up to six model turns, and on the update path a
+    model turn takes a workspace lease and pushes commits. Nothing in the
+    output would say the number had stopped meaning what it says.
+    """
+
+    def _run(self, provider, budget, sweep, repo=REPO):
+        with mock.patch(
+            "gitops_workspace.get_managed_github_repos", return_value=[repo]
+        ), mock.patch.object(
+            forge, "provider_for", return_value=provider
+        ), mock.patch.dict(
+            "os.environ", {gate.PR_MAX_PER_TICK_ENV: "3"}, clear=False
+        ):
+            return sweep(False, set(), budget)
+
+    def test_two_sweeps_in_one_tick_share_one_allowance(self):
+        unhealthy = FakeProvider(
+            prs=[make_pr(n) for n in range(1, 6)], conflicted=True
+        )
+        # Different pull request numbers, so the claim the update sweep writes
+        # cannot be what bounds the second sweep. The budget has to.
+        triggered = FakeProvider(
+            prs=[make_pr(n) for n in range(20, 25)],
+            comments={
+                n: [make_comment(f"IC_{n}", "/agent x")] for n in range(20, 25)
+            },
+        )
+        budget = gate._TickBudget(3)
+        updates = self._run(unhealthy, budget, gate.sweep_pr_updates)
+        comments = self._run(triggered, budget, gate.sweep_pr_comments)
+        self.assertEqual(len(updates.cards), 3)
+        self.assertEqual(comments.cards, [])
+
+    def test_a_sweep_called_alone_still_has_its_own_allowance(self):
+        """Every direct test calls one sweep with no budget. Keep that working."""
+        provider = FakeProvider(prs=[make_pr(n) for n in range(1, 6)], conflicted=True)
+        with mock.patch(
+            "gitops_workspace.get_managed_github_repos", return_value=[REPO]
+        ), mock.patch.object(
+            forge, "provider_for", return_value=provider
+        ), mock.patch.dict(
+            "os.environ", {gate.PR_MAX_PER_TICK_ENV: "2"}, clear=False
+        ):
+            self.assertEqual(len(gate.sweep_pr_updates().cards), 2)
+
+    def test_main_hands_every_sweep_the_same_budget(self):
+        """One object, or the sharing above never happens in production."""
+        seen = []
+        stub = lambda dry_run, claimed, budget: (  # noqa: E731
+            seen.append(budget) or gate.SweepResult()
+        )
+        with mock.patch.dict(
+            gate.SWEEPS, {"a": stub, "b": stub}, clear=True
+        ), mock.patch.object(gate, "SWEEP_ORDER", ("a", "b")):
+            gate.main([])
+        self.assertEqual(len(seen), 2)
+        self.assertIs(seen[0], seen[1])
+        self.assertEqual(seen[0].remaining, gate.PR_MAX_PER_TICK_DEFAULT)
+
+
+class TickBudgetTest(unittest.TestCase):
+    def test_it_hands_out_no_more_than_it_has(self):
+        budget = gate._TickBudget(3)
+        self.assertEqual(budget.take(2), 2)
+        self.assertEqual(budget.take(5), 1)
+        self.assertEqual(budget.take(1), 0)
+
+    def test_a_zero_cap_hands_out_nothing(self):
+        """`PR_AGENT_MAX_PER_TICK=0` parks the sweeps; it must not go negative."""
+        budget = gate._TickBudget(0)
+        self.assertEqual(budget.take(4), 0)
+        self.assertEqual(budget.remaining, 0)
+
+    def test_a_negative_cap_is_read_as_zero(self):
+        budget = gate._TickBudget(-5)
+        self.assertEqual(budget.take(1), 0)
 
 
 class _PerRepoProvider(FakeProvider):

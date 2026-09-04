@@ -149,7 +149,11 @@ MERGEABLE_STATE_UNKNOWN = "unknown"
 
 #: `mergeable_state` for a branch that conflicts with its base. The other values
 #: — `blocked`, `behind`, `unstable`, `draft` — are all things a human or a
-#: check decides and none of them is a conflict, so only this one is.
+#: check decides and none of them is a conflict, so this is the only one of
+#: *this field's* values that means one. `conflict_state` still ORs it with
+#: `mergeable is False`, which is not a second reading of the same field: those
+#: other states come back with `mergeable: true`, so the OR widens the answer
+#: only where GitHub itself says the merge cannot be produced.
 MERGEABLE_STATE_CONFLICTED = "dirty"
 
 #: Check-run conclusions that mean CI is asking the author to change something.
@@ -199,6 +203,16 @@ MAX_CHECK_URL_CHARS = 300
 #: is no substitute and stays where it is: cutting a name at 120 characters does
 #: nothing about a newline in its first ten.
 CHECK_NAME_DISALLOWED_RE = re.compile(r"[^\w .:/#+,()@'-]", re.UNICODE)
+
+#: The only schemes a check's log URL may carry. The URL comes from whoever
+#: posted the check — `checks:write` alone, no access to the code — and it
+#: reaches a card body a model reads and may fetch. `javascript:` and `data:`
+#: are the ones that are obviously not addresses; `file:` is the one that is
+#: not obvious, because it looks like a path and names one inside the agent's
+#: own container. Anything else is dropped to "" rather than rewritten: the
+#: check's name and conclusion still reach the card, which is what a worker
+#: needs to go and find the log itself.
+CHECK_URL_ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 #: `gh api` puts the HTTP status in its stderr line: `gh: Not Found (HTTP 404)`.
 #: A 404 from the collaborator endpoint is an answer; every other failure is not.
@@ -341,7 +355,9 @@ class CheckRun:
     #: (`failure`, `timed_out`, …) or a status state (`failure`, `error`).
     conclusion: str
     #: Where the log lives. A `details_url` for a check run, a `target_url` for
-    #: a status. Empty when the reporter set neither.
+    #: a status. Already reduced by `safe_check_url`, so it is either an
+    #: `http`/`https` address or empty — empty when the reporter set neither,
+    #: and empty when what it set was not a web address at all.
     details_url: str = ""
     #: "check_run" | "status"
     register: str = "check_run"
@@ -360,6 +376,32 @@ def plain_check_name(name: str) -> str:
     name broken across two lines reads as one line rather than as one word.
     """
     return " ".join(CHECK_NAME_DISALLOWED_RE.sub(" ", name or "").split())
+
+
+def safe_check_url(url: str) -> str:
+    """`url` if it is an ordinary web address, otherwise "".
+
+    The mechanical half of the rule `update-pr/SKILL.md` states in prose: a
+    `details_url` is an address somebody else chose. Constrained at ingest for
+    the reason `plain_check_name` is — one place, so no consumer has to
+    remember — and by scheme only. Which hosts are worth reading is a judgment
+    a self-hosted runner or an on-prem CI makes differently in every install,
+    and an allowlist of them would break those installs silently; a scheme that
+    is not `http` or `https` is wrong everywhere.
+
+    Whitespace goes first, because a URL split across two lines would otherwise
+    parse as a scheme-less path and be dropped for the wrong reason.
+    """
+    text = "".join(str(url or "").split())
+    if not text:
+        return ""
+    try:
+        scheme = urllib.parse.urlsplit(text).scheme.lower()
+    except ValueError:
+        # `urlsplit` raises on a malformed IPv6 literal, which is a URL nothing
+        # downstream can use either.
+        return ""
+    return text if scheme in CHECK_URL_ALLOWED_SCHEMES else ""
 
 
 class ForgeProvider(Protocol):
@@ -922,7 +964,14 @@ class GitHubProvider:
         that are not conflicts and must not read as one, and `mergeable` is the
         field GitHub documents as authoritative for the merge itself.
         """
-        data = self._call(["api", f"repos/{repo}/pulls/{pr.number}"]) or {}
+        data = (
+            self._call(
+                ["api", f"repos/{repo}/pulls/{pr.number}"],
+                repo=repo,
+                retry_transient=True,
+            )
+            or {}
+        )
         mergeable = data.get("mergeable")
         state = str(data.get("mergeable_state") or "").strip().lower()
         if mergeable is None or not state or state == MERGEABLE_STATE_UNKNOWN:
@@ -948,7 +997,9 @@ class GitHubProvider:
                 "api",
                 f"repos/{repo}/commits/{pr.head_sha}/check-runs"
                 f"?per_page={CHECK_PAGE_SIZE}",
-            ]
+            ],
+            repo=repo,
+            retry_transient=True,
         )
         for row in (runs or {}).get("check_runs") or []:
             if str(row.get("status") or "").strip().lower() != "completed":
@@ -960,7 +1011,7 @@ class GitHubProvider:
                 CheckRun(
                     name=plain_check_name(str(row.get("name") or "")),
                     conclusion=conclusion,
-                    details_url=str(row.get("details_url") or ""),
+                    details_url=safe_check_url(row.get("details_url")),
                     register="check_run",
                 )
             )
@@ -970,7 +1021,9 @@ class GitHubProvider:
                 "api",
                 f"repos/{repo}/commits/{pr.head_sha}/status"
                 f"?per_page={CHECK_PAGE_SIZE}",
-            ]
+            ],
+            repo=repo,
+            retry_transient=True,
         )
         for row in (combined or {}).get("statuses") or []:
             state = str(row.get("state") or "").strip().lower()
@@ -980,7 +1033,7 @@ class GitHubProvider:
                 CheckRun(
                     name=plain_check_name(str(row.get("context") or "")),
                     conclusion=state,
-                    details_url=str(row.get("target_url") or ""),
+                    details_url=safe_check_url(row.get("target_url")),
                     register="status",
                 )
             )

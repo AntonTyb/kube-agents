@@ -345,9 +345,13 @@ key -->` renders as `/agent fix the typo`, so the request acted on and the reque
   as one did, live, before this moved. `audit_report._write_temp` documents the same trap, which is
   the sort of thing a second implementation rediscovers the hard way.
 - **Cap.** At most `PR_AGENT_MAX_PER_TICK` (default 3) worker cards per tick, oldest first, with
-  `deferred: <n>` logged. No silent truncation. The same cap bounds **refusals**, which the design
-  above missed: an account posting a hundred untrusted comments would otherwise draw a hundred
-  refusal comments in one tick, which is the amplification the trust gate exists to prevent.
+  `deferred: <n>` logged. No silent truncation. The allowance belongs to the tick rather than to
+  this sweep: `pr_updates` runs first and draws from the same one, so a tick that spent it on
+  unmergeable branches files no comment cards at all — see `pr-update-sweep.md` §4. The same
+  _number_ separately bounds **refusals**, which the design above missed: an account posting a
+  hundred untrusted comments would otherwise draw a hundred refusal comments in one tick, which is
+  the amplification the trust gate exists to prevent. Separately, because a refusal costs a comment
+  rather than a model turn, and a tick that spent its cards has not spent the repository's patience.
   Deferral is logged to stderr rather than stdout — it is ordinary backpressure that clears on the
   next tick, not a fault the room needs to hear about.
 - **Refusals have a second, total bound**: `PR_AGENT_MAX_REFUSALS_PER_PR` (default 10), counted from

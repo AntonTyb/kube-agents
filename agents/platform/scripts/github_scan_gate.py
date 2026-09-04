@@ -345,11 +345,14 @@ def _issue_card(payload: dict, now: datetime | None = None) -> Card:
 
 
 def sweep_issues(
-    dry_run: bool = False, claimed_prs: set[tuple[str, int]] | None = None
+    dry_run: bool = False,
+    claimed_prs: set[tuple[str, int]] | None = None,
+    card_budget: "_TickBudget | None" = None,
 ) -> SweepResult:
-    # `claimed_prs` is accepted and unused: every sweep takes the tick's shared
-    # state so `main` can call them all the same way, and this one is about
-    # issues, which no pull-request sweep can claim.
+    # `claimed_prs` and `card_budget` are accepted and unused: every sweep takes
+    # the tick's shared state so `main` can call them all the same way, and this
+    # one is about issues, which no pull-request sweep claims and which
+    # `PR_AGENT_MAX_PER_TICK` has never bounded.
     if dry_run:
         # `resolver.py poll` performs its own stale-label sweep as a side
         # effect, and it has no dry-run of its own, so this one cannot promise
@@ -431,6 +434,39 @@ def _int_env(name: str, default: int) -> int:
 
 def _max_per_tick() -> int:
     return _int_env(PR_MAX_PER_TICK_ENV, PR_MAX_PER_TICK_DEFAULT)
+
+
+class _TickBudget:
+    """How many pull-request cards this whole tick may still file.
+
+    `PR_AGENT_MAX_PER_TICK` reads as "cards per tick", and while `pr_comments`
+    was the only pull-request sweep that is what it was. Two sweeps applying it
+    independently would hand an operator who set it to three up to six model
+    turns — and on the update path a model turn takes a workspace lease and
+    pushes commits — with nothing in the output saying the knob had stopped
+    meaning what it says. The claim does not offset this: it removes the update
+    sweep's pull requests from the comment sweep's pool, and the comment sweep
+    still takes a full cap from what is left.
+
+    So the allowance is taken from one place and the sweeps share it. Run order
+    therefore decides who gets it under pressure, and `pr_updates` running
+    first is the right way round for the same reason it claims what it cards: a
+    change requested on a branch that will not merge is a change nobody can
+    take.
+
+    Threaded from `main` like `claimed_prs`, and for the same reason — a sweep
+    called on its own, which is every direct test, makes its own and behaves as
+    it always did.
+    """
+
+    def __init__(self, cap: int):
+        self.remaining = max(0, cap)
+
+    def take(self, wanted: int) -> int:
+        """Claim up to `wanted` cards, returning how many were left to claim."""
+        allowed = min(max(0, wanted), self.remaining)
+        self.remaining -= allowed
+        return allowed
 
 
 def _max_refusals_per_pr() -> int:
@@ -562,7 +598,9 @@ def _pr_card(pr, triggers: list, repo: str, now: datetime | None = None) -> Card
 
 
 def sweep_pr_comments(
-    dry_run: bool = False, claimed_prs: set[tuple[str, int]] | None = None
+    dry_run: bool = False,
+    claimed_prs: set[tuple[str, int]] | None = None,
+    card_budget: "_TickBudget | None" = None,
 ) -> SweepResult:
     """Find review comments that addressed the agent and have no answer yet.
 
@@ -621,6 +659,7 @@ def sweep_pr_comments(
         return SweepResult(warnings=[_forge_warning(error)])
 
     cap = _max_per_tick()
+    tick_budget = card_budget if card_budget is not None else _TickBudget(cap)
     refusal_budget = _max_refusals_per_pr()
     allowed_bots = pr_triggers.bot_allowlist()
     pending: list[_Pending] = []
@@ -724,7 +763,7 @@ def sweep_pr_comments(
         posted_refusals += 1
         refused_so_far[(item.repo, item.pr.number)] = refused_so_far.get((item.repo, item.pr.number), 0) + 1
 
-    accepted = pending[:cap]
+    accepted = pending[: tick_budget.take(len(pending))]
     deferred = len(pending) - len(accepted)
     if deferred:
         # stderr, not stdout: deferral is backpressure working as designed and
@@ -880,7 +919,9 @@ def _update_card(item: _Unhealthy, repo: str, now: datetime | None = None) -> Ca
 
 
 def sweep_pr_updates(
-    dry_run: bool = False, claimed_prs: set[tuple[str, int]] | None = None
+    dry_run: bool = False,
+    claimed_prs: set[tuple[str, int]] | None = None,
+    card_budget: "_TickBudget | None" = None,
 ) -> SweepResult:
     """Find the agent's own pull requests that cannot merge as they stand.
 
@@ -906,6 +947,15 @@ def sweep_pr_updates(
     reader of a dry run wants to see what would have been carded.
     """
     warnings: list[str] = []
+
+    if _max_update_attempts() <= 0:
+        # `PR_AGENT_MAX_UPDATE_ATTEMPTS=0` is documented as the off switch, so
+        # it returns before the forge is touched rather than after. Reached
+        # further down instead, every unhealthy pull request would still cost a
+        # merge-state read, two CI reads and a comment read, and would write a
+        # line to stderr every ten minutes to say the budget was spent — an off
+        # switch noisier than leaving it on.
+        return SweepResult()
 
     try:
         from gitops_workspace import get_managed_github_repos
@@ -936,6 +986,7 @@ def sweep_pr_updates(
         return SweepResult(warnings=[_forge_warning(error)])
 
     cap = _max_per_tick()
+    tick_budget = card_budget if card_budget is not None else _TickBudget(cap)
     budget = _max_update_attempts()
     unhealthy: list[_Unhealthy] = []
     unreadable: list[tuple[str, int]] = []
@@ -1010,7 +1061,7 @@ def sweep_pr_updates(
     # new ones starve it. Repositories go in slug order rather than the order
     # they were configured in, so the cap falls the same way on every tick.
     unhealthy.sort(key=lambda item: (item.repo, item.pr.number))
-    accepted = unhealthy[:cap]
+    accepted = unhealthy[: tick_budget.take(len(unhealthy))]
     deferred = len(unhealthy) - len(accepted)
     if deferred:
         sys.stderr.write(
@@ -1131,10 +1182,12 @@ def main(argv: list[str] | None = None) -> int:
     # here rather than at module scope so a second call to `main` in one process
     # — every test that drives it — starts from an empty claim.
     claimed_prs: set[tuple[str, int]] = set()
+    # One allowance for the tick, not one per sweep. See `_TickBudget`.
+    card_budget = _TickBudget(_max_per_tick())
 
     for name in sweeps:
         try:
-            result = SWEEPS[name](dry_run, claimed_prs)
+            result = SWEEPS[name](dry_run, claimed_prs, card_budget)
         except Exception as e:  # noqa: BLE001 - one blind sweep must not blind the rest
             warnings.append(
                 f"⚠️ **GitHub repo watcher — `{name}` sweep failed:** "
