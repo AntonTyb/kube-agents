@@ -27,13 +27,12 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 
 import forge
 
-#: The one directory a comment body may be read from, and the one a stamped
-#: copy is written to. Bodies posted from here are public, so the path is
-#: bounded rather than merely checked for existence.
+#: The one directory a comment body may be read from. Bodies read from here are
+#: posted in public, so the path is bounded rather than merely checked for
+#: existence. Nothing is written back into it since #913 — see `post_body`.
 SCRATCH_DIR = "/opt/data/scratch"
 
 
@@ -139,24 +138,18 @@ def confined_body(path: str) -> str:
 
 
 def post_body(provider, repo: str, pr, body: str) -> None:
-    """Post `body` on `pr`, via a temporary file inside the scratch directory.
+    """Post `body` on `pr`.
 
-    Through a file rather than argv because the body carries a reviewer's own
-    words — or a CI log excerpt — back onto the forge and can run to thousands
-    of characters, with the quoting rules of two shells and a proxy in between.
-    The temporary copy lands in the same confined directory the input came
-    from, and is removed whether or not the post succeeded.
+    A one-line delegation, kept as a named function because what it does not do
+    is the point — `github_scan_gate._post_body` is the same shape for the same
+    reason. It used to stage the body in a temporary file inside `SCRATCH_DIR`,
+    on the volume the credential sidecar also mounted. #913 split the shell and
+    the broker into separate pods, so there is no longer a filesystem both sides
+    can see, and `post_comment` takes the text and sends it on fd 0.
+
+    `confined_body` above still bounds where the *input* may come from. That
+    confinement is about what the model is allowed to read and is unaffected by
+    how the result travels, which is why `SCRATCH_DIR` outlives this function's
+    use of it.
     """
-    os.makedirs(SCRATCH_DIR, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", suffix=".md", dir=SCRATCH_DIR, delete=False
-    )
-    try:
-        handle.write(body)
-        handle.close()
-        provider.post_comment(repo, pr, handle.name)
-    finally:
-        try:
-            os.unlink(handle.name)
-        except OSError:
-            pass
+    provider.post_comment(repo, pr, body)

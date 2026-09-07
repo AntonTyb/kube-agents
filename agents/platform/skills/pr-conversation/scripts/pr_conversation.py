@@ -639,8 +639,12 @@ def _post(args, marker_kind: str) -> int:
         _fail(f"Reply body {args.body_file} is nothing but marker syntax.")
     stamped = f"{body}\n\n{pr_triggers.marker(args.comment_id, marker_kind)}\n"
 
-    # The stamped copy stays inside scratch: same confinement as the input, and
-    # the same directory the skill is already allowed to write.
+    # The stamped copy is never written down. It used to go to a file in
+    # scratch, on the volume the credential sidecar also mounted; with the
+    # broker in its own pod there is no such volume, and `post_comment` takes
+    # the text. `_confined_body` above still governs where the *input* may come
+    # from — that confinement is about what the model is allowed to read, and is
+    # unaffected by how the result travels.
     try:
         pr_skill.post_body(provider, repo, pr, stamped)
     except forge.ForgeError as error:

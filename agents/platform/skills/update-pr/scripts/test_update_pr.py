@@ -167,11 +167,10 @@ class FakeProvider:
     def failing_checks(self, repo, pr):
         return list(self.failing)
 
-    def post_comment(self, repo, pr, body_file):
+    def post_comment(self, repo, pr, body):
         if self.post_error:
             raise self.post_error
-        with open(body_file, "r", encoding="utf-8") as handle:
-            self.posted.append((pr.number, handle.read()))
+        self.posted.append((pr.number, body))
 
 
 class _Harness(unittest.TestCase):
