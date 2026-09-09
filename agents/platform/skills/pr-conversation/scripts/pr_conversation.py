@@ -362,11 +362,6 @@ def handle_poll(args) -> int:
         return 0
 
     payload = {"status": "FOUND", "requests": found, "conversations": threads}
-    if over_budget:
-        payload["warnings"] = [
-            f"pr_conversation: {over_budget} untrusted request(s) not offered — "
-            "the per-pull-request refusal budget is exhausted"
-        ]
     print(json.dumps(payload))
     return 0
 

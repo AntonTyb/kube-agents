@@ -772,6 +772,36 @@ class RepositoryScopeTest(_Harness):
         self.assertEqual(provider.posted, [])
         self.assertIn("not in the managed repositories list", err)
 
+    def test_record_refuses_a_cross_org_repository_the_allowlist_permits(self):
+        """#1200's org gate reaches this skill through `pr_skill`.
+
+        The allowlist is satisfied on purpose, so `validate_repo_org` is the
+        only thing that can refuse. This skill never had its own copy of the
+        check — it inherits it from the shared helper — so the test is what
+        says the inheritance is real rather than assumed.
+        """
+        provider = FakeProvider()
+        rc, _, err = self.run_helper(
+            [
+                "record",
+                "--repo",
+                "other/repo",
+                "--pr",
+                "12",
+                "--attempted-sha",
+                HEAD_SHA,
+                "--body-file",
+                self.scratch_file(),
+                "--no-change",
+            ],
+            provider,
+            repos=["other/repo"],
+            env={"GITOPS_ORG": "managed"},
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(provider.posted, [])
+        self.assertIn("Cross-org repository", err)
+
     def test_record_refuses_a_repository_that_is_not_a_slug(self):
         provider = FakeProvider()
         rc, _, err = self.run_helper(

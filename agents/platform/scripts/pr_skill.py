@@ -48,19 +48,32 @@ def fail(message: str):
 
 
 def validate_repo(repo: str) -> str:
-    """`repo` as `owner/name` and on the managed allowlist, or `ValueError`.
+    """`repo` as `owner/name`, in the primary org, and on the managed
+    allowlist, or `ValueError`.
 
-    Two checks rather than one. The slug check is what stops a value that
+    Three checks rather than one. The slug check is what stops a value that
     reaches a `gh` argument list from carrying path traversal or a leading
     dash; the allowlist is what stops a hand-run or a stale card aiming a
-    write at a repository the install was never given.
+    write at a repository the install was never given; and
+    `validate_repo_org` (#1200) is what stops one aimed outside the
+    organisation the token minter is bound to, which the allowlist does not
+    cover when it is unset.
+
+    The org check is last because it is the only one that can pass vacuously —
+    it is a no-op when neither `GITOPS_ORG` nor `GITHUB_ORG` is set — so
+    running it after the two that always apply keeps the error a caller sees
+    the most specific one available.
 
     `gitops_workspace` is imported here rather than at module scope because
     this module is force-synced into `$HERMES_HOME/scripts` alongside it, and
     a top-level import would make every consumer of `pr_skill` pay for that
     module's own imports.
     """
-    from gitops_workspace import get_managed_github_repos, is_valid_repo_slug
+    from gitops_workspace import (
+        get_managed_github_repos,
+        is_valid_repo_slug,
+        validate_repo_org,
+    )
 
     if not repo or not is_valid_repo_slug(repo):
         raise ValueError(f"Invalid repository format: {repo!r}. Expected 'owner/name'.")
@@ -69,7 +82,7 @@ def validate_repo(repo: str) -> str:
         raise ValueError(
             f"Repository {repo!r} is not in the managed repositories list: {managed}"
         )
-    return repo
+    return validate_repo_org(repo)
 
 
 def resolve_repo(args=None) -> str:

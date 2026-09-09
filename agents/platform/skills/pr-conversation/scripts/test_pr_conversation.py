@@ -1280,6 +1280,27 @@ class RepoValidationTest(_Harness):
             self.run_helper(["reply", "--repo", "unmanaged/repo", "--pr", "12", "--comment-id", "IC_1", "--body-file", self.scratch_file("r.md", "body"), "--no-change"], provider, repo="managed/repo")
         self.assertIn("not in the managed repositories list", err.getvalue())
 
+    def test_cross_org_repo_rejected_even_when_the_allowlist_permits_it(self):
+        """#1200's org gate has to survive the extraction into `pr_skill`.
+
+        The allowlist is deliberately satisfied here, so the only thing that can
+        refuse is `validate_repo_org`. Without it the reply posts: this skill's
+        copy of `validate_repo` used to run the check itself, and the alias that
+        replaced it would otherwise have dropped it silently, which is the exact
+        failure `pr_skill`'s docstring says a duplicated gate produces.
+        """
+        provider = answerable()
+        err = StringIO()
+        with mock.patch.dict(os.environ, {"GITOPS_ORG": "managed"}, clear=False):
+            with self.assertRaises(SystemExit), redirect_stderr(err):
+                self.run_helper(
+                    ["reply", "--repo", "other/repo", "--pr", "12", "--comment-id", "IC_1", "--body-file", self.scratch_file("r.md", "body"), "--no-change"],
+                    provider,
+                    repo="other/repo",
+                )
+        self.assertEqual(provider.posted, [])
+        self.assertIn("Cross-org repository", err.getvalue())
+
     def test_poll_unmanaged_repo_returns_error(self):
         provider = answerable()
         _rc, out = self.run_helper(["poll", "--repo", "unmanaged/repo"], provider, repo="managed/repo")
