@@ -13,4 +13,9 @@ annotations, issue links and badges per case), `events.yaml` (dated event
 markers plus the human-classified catch and false-red counts), and the CI
 health adjudicator's `health.json` / `health-history.jsonl` when published; render.py's docstring
 owns the details.
+
+Two more readers of the same data.json live here: `health.py` decides
+whether the presubmit gate is GREEN / DEGRADED / OUTAGE and why, and
+`post_health.py` tells a Google Chat space when that changes.
+docs/ci-health.md is the page for both.
 """
