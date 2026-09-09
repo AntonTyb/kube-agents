@@ -1013,6 +1013,17 @@ TASKS=(
   # "./tasks/cluster-agent-pending-replicas-capped-pool/task.yaml"
   # gpu-stress-test-diagnosis: moved to NIGHTLY_TASKS 2026-09-03 (tofu wall clock, #1218/#1202).
   "./tasks/agent-kanban-smoke/task.yaml"
+  # Knowledge-grounding probe (#945): a pure GKE documentation question,
+  # graded on the persona's grounding contract — the answer names the
+  # compute-class nodeSelector key and concludes with the mandated
+  # `## Sources` section citing Developer Knowledge MCP or its web-search
+  # fallback. deployer: noop, no fixture, no cluster read: one delegation
+  # round trip plus one knowledge lookup. Measured 615/715/166s on its
+  # first run (build 2097362391401500672, 2026-09-08), so it is priced in
+  # unit_cost_hint rather than left at the default. Activated without a
+  # budget raise on the headroom #1218 freed by dropping the two tofu
+  # cases; runs unadmitted (the #1049 precedent) while it earns a record.
+  "./tasks/knowledge-grounding-sources-probe/task.yaml"
   # Last, because it is the only entry that pays twice. Its stack plants an
   # OOM-killed workload on the host cluster and blocks until the event
   # watcher's leading-edge debounce clears and the incident opens (~1 minute,
@@ -1504,6 +1515,9 @@ unit_cost_hint() {
     upgrade-readiness-lagging-cluster | consistency-drift-outlier) echo 900 ;;
     compliance-rbac-overgrant | rca-remediation-pr) echo 700 ;;
     consistency-authorized-networks-probe) echo 300 ;;
+    # Median of its first three measured repetitions (615/715/166s, build
+    # 2097362391401500672); the 200s default under-packs it by 3x.
+    knowledge-grounding-sources-probe) echo 600 ;;
     *) echo 200 ;;
   esac
 }
