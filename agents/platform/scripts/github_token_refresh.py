@@ -174,9 +174,15 @@ def refresh_credentials_once(
 def github_repo_from_remote(url: str) -> str | None:
     """Return `owner/repo` when `url` is a GitHub remote, else None.
 
-    A remote always names a host, so the bare shorthand is refused here even
-    though `repo_ref` parses it: git cannot produce an `origin` of `acme/repo`,
-    and accepting one would let a stray config value stand in for a clone URL.
+    A remote has to *state* its host, so both shorthands `repo_ref` accepts are
+    refused here: the bare `acme/repo`, which parses to no host at all, and
+    `github.com/acme/repo`, which parses to an inferred one. Git produces
+    neither. It will take the second — `git remote add origin
+    github.com/acme/toolkit` succeeds — but as a relative local path, and
+    reading it as a clone URL is what lets a directory name in a `.git/config`
+    the sandbox writes stand in for a repository. `repo_ref.host_stated` is the
+    distinction; the lift that supplies the other kind is for a registration,
+    which is a value a person configured rather than one git emitted.
 
     The host is compared after parsing rather than searched for in the raw
     string — `https://evil.example/github.com/o/r.git` and
@@ -190,7 +196,7 @@ def github_repo_from_remote(url: str) -> str | None:
     if ref is None:
         log(f"Ignoring git remote: '{url}' is not a repository URL.")
         return None
-    if not ref.host:
+    if not ref.host_stated:
         log(f"Ignoring git remote: '{url}' names no host.")
         return None
     if not ref.is_github:

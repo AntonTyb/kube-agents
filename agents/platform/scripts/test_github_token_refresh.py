@@ -90,9 +90,22 @@ class GitHubTokenRefreshTest(unittest.TestCase):
     @patch("github_token_refresh.subprocess.run")
     def test_get_current_git_repo_local_path_returns_none(self, run):
         res = MagicMock()
-        res.stdout = "/srv/git/kube-agents.git\n"
         run.return_value = res
-        self.assertIsNone(get_current_git_repo())
+        for url in (
+            "/srv/git/kube-agents.git",
+            # `git remote add origin github.com/gke-labs/kube-agents` succeeds:
+            # git takes it as a relative local path, not a GitHub URL. It is a
+            # directory name, and `repo_ref`'s shorthand lift gives it an
+            # inferred github.com host -- which is right for a repository
+            # someone registered and wrong for a remote git emitted. Admitting
+            # it here mints an installation token for whichever org the
+            # directory happens to name.
+            "github.com/gke-labs/kube-agents",
+            "GitHub.com/gke-labs/kube-agents",
+        ):
+            with self.subTest(url=url):
+                res.stdout = url + "\n"
+                self.assertIsNone(get_current_git_repo())
 
     @patch("github_token_refresh.subprocess.run")
     def test_get_current_git_repo_failure_returns_none(self, run):

@@ -307,6 +307,33 @@ class KnownHostsTest(unittest.TestCase):
         self.assertEqual(ref.host, "")
         self.assertEqual(ref.path, "my.org/repo")
 
+    def test_the_lift_is_the_only_thing_that_marks_a_host_inferred(self):
+        """A caller that needs the host the *syntax* named reads `host_stated`.
+
+        `host` alone cannot answer that: the lift and a scheme both produce
+        `github.com`. The distinction is what separates a registration, where
+        the shorthand is the spelling a person types, from a git remote, where
+        git emits no such thing.
+        """
+        lifted = repo_ref.parse("github.com/acme/toolkit")
+        self.assertTrue(lifted.host_inferred)
+        self.assertFalse(lifted.host_stated)
+
+        for stated in (
+            "https://github.com/acme/toolkit",
+            "git@github.com:acme/toolkit.git",
+            "ssh://git@ssh.github.com:443/acme/toolkit.git",
+        ):
+            with self.subTest(value=stated):
+                ref = repo_ref.parse(stated)
+                self.assertFalse(ref.host_inferred)
+                self.assertTrue(ref.host_stated)
+
+    def test_a_hostless_ref_is_neither_stated_nor_inferred(self):
+        ref = repo_ref.parse("acme/toolkit")
+        self.assertFalse(ref.host_inferred)
+        self.assertFalse(ref.host_stated)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,6 +34,17 @@ single-segment path — and `my.org` is a legal owner in the bare form the
 operator writes through verbatim. The one exception is `KNOWN_HOSTS`: a
 schemeless value whose first segment is a spelling of a forge this harness
 knows does name that host, which is what keeps `github.com/owner/repo` working.
+
+That exception is recorded rather than hidden. A ref carries `host_inferred`,
+and the lift is the only thing that sets it, because the shorthand is right for
+one kind of caller and wrong for another. A repository *registration* is a
+value a person configured, and `github.com/o/r` is exactly the shorthand they
+type. A *git remote* is a value git produced, and git produces no such thing:
+`git remote add origin github.com/acme/toolkit` is accepted, but as a relative
+local path, not a GitHub URL. A caller reading a remote therefore wants
+`host_stated`, and `github_token_refresh.github_repo_from_remote` is the one
+that does — otherwise a directory path in a `.git/config` the sandbox controls
+would mint an installation token for whatever org it named.
 """
 
 from __future__ import annotations
@@ -118,6 +129,15 @@ class RepoRef:
 
     host: str
     path: str
+    #: Whether `host` is what the value's syntax said, or what the `KNOWN_HOSTS`
+    #: lift supplied for a value that stated none. Both are `host` — the
+    #: distinction exists because it is not always the same question. A
+    #: *registration* is a value someone configured, where `github.com/o/r` is
+    #: the shorthand the lift is for; a *git remote* is a value git produced,
+    #: and git produces no such thing, so a caller reading one wants the host
+    #: the syntax stated and nothing else. Defaulted so the only construction
+    #: that sets it is the lift itself.
+    host_inferred: bool = False
 
     @property
     def segments(self) -> tuple[str, ...]:
@@ -126,6 +146,11 @@ class RepoRef:
     @property
     def is_github(self) -> bool:
         return self.host in GITHUB_HOSTS
+
+    @property
+    def host_stated(self) -> bool:
+        """A host the value's own syntax named — a scheme or an scp remote."""
+        return bool(self.host) and not self.host_inferred
 
     def __str__(self) -> str:
         return f"{self.host}{PATH_SEPARATOR}{self.path}" if self.host else self.path
@@ -192,14 +217,15 @@ def parse(value: object) -> RepoRef:
         host, path = (scp.group("host"), scp.group("path")) if scp else ("", text)
 
     path = _trim(path)
+    inferred = False
     if not host and PATH_SEPARATOR in path:
         first, _, rest = path.partition(PATH_SEPARATOR)
         if first.lower() in KNOWN_HOSTS and rest:
-            host, path = first, rest
+            host, path, inferred = first, rest, True
 
     if not path or not all(_safe_segment(s) for s in path.split(PATH_SEPARATOR)):
         raise RepoRefError(value)
-    return RepoRef(host=host.lower(), path=path)
+    return RepoRef(host=host.lower(), path=path, host_inferred=inferred)
 
 
 def try_parse(value: object) -> RepoRef | None:
