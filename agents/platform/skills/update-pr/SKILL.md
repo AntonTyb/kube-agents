@@ -74,7 +74,7 @@ command exits 0 on all of them, so nothing but this stops you:
 - **`NOT_CONFIGURED`** — this install manages no GitOps repository.
   Complete the card saying so and stop. This is not something to work around.
 - **`ERROR`** — the forge could not be read; `reason` carries the code. Block
-  the card with that code and stop. **Do not lease a workspace and do not
+  the card with that code and stop. **Do not open a workspace and do not
   guess**: with no `conflicted`, no `base_ref`, and no `head_sha`, a run that
   carries on has nothing to fix and nothing to record at Step 6.
 - **`NOT_FOUND`** — the number you asked for is not an open pull request of
@@ -107,12 +107,12 @@ is capped), `attempts_used`, `attempts_allowed`, and its own `status`:
 **Write down `head_sha` now.** It is the tip this run started from, every stage
 below pushes on top of it, and Step 6 needs it back to record the attempt.
 
-### Step 2: Lease a workspace
+### Step 2: Open a workspace
 
-Every stage that changes the branch does it inside one leased workspace, taken
-once here and reused. Never run `git` from wherever your shell happens to be:
-you share one volume with every other agent in this pod, and a bare
-`git checkout` there lands inside a clone somebody else is mid-way through.
+Every stage that changes the branch does it inside one workspace, opened once
+here and reused. Never run `git` from wherever your shell happens to be: you
+share one volume with every other agent in this pod, and a bare `git checkout`
+there lands inside a clone somebody else is mid-way through.
 
 ```bash
 "$HERMES_HOME"/skills/submit-suggestion/scripts/submit_suggestion.py prepare \
@@ -124,21 +124,48 @@ Without it `prepare` falls back to the ConfigMap, which refuses to guess when
 the install manages more than one repository — the configuration this sweep
 exists for.
 
-Because the branch already exists on the remote, `prepare` bases it on
+Because the branch already exists on the remote, `prepare` opens it on
 `origin/<head_ref>` and the commits already under review are still there.
-**Keep the whole JSON line** — `workspace` and `lease` are needed by every
-`submit` below. The credential proxy refuses `git add`, `commit`, `merge`,
-`checkout`, `push` and every other tree-mutating verb outside a leased
-workspace.
+**Keep the whole JSON line.** Its `mode` field decides how the three stages
+below work, and you follow that field rather than choosing — `submit-suggestion`
+Step 1 describes both in full:
 
-Lease only for a row that said `FOUND`. Every other outcome — `HEALTHY`,
-`INDETERMINATE`, `ALREADY_ATTEMPTED`, `BUDGET_SPENT`, `UNREADABLE`, and the four
-top-level statuses that are not `FOUND` — takes you straight to Step 7 with
-nothing leased and nothing pushed.
+- **`"mode": "content"`** — the checkout is on the credential broker's side and
+  you have no path to it. There is a `handle`, no `workspace` and no `lease`,
+  and no `git` for you to run. **Stage 1 cannot be done in this mode**; Step 3
+  says what to do instead. Stages 2 and 3 are unaffected, because everything
+  they push goes through `submit-suggestion`, which follows the same field.
+- **`"mode": "directory"`** — a clone leased to you alone on the shared volume,
+  under `workspace`, held by `lease`. All three stages are available. The
+  credential proxy refuses `git add`, `commit`, `merge`, `checkout`, `push` and
+  every other tree-mutating verb outside that leased workspace.
+
+**Do not try to force the other mode.** `prepare` takes content mode whenever
+the broker offers it and there is no flag to override that, deliberately: since
+the agent shell and the broker became separate pods there is no filesystem both
+can see, so on a current install directory mode is what you get when the broker
+is old, not something you may ask for.
+
+Open a workspace only for a row that said `FOUND`. Every other outcome —
+`HEALTHY`, `INDETERMINATE`, `ALREADY_ATTEMPTED`, `BUDGET_SPENT`, `UNREADABLE`,
+and the four top-level statuses that are not `FOUND` — takes you straight to
+Step 7 with nothing opened and nothing pushed.
 
 ### Step 3: Stage 1 — the merge conflict
 
-Only when `conflicted` is `true`. Inside the workspace:
+Only when `conflicted` is `true`.
+
+**In content mode, skip this stage and report it.** Resolving a conflict means
+writing a commit with two parents, and the broker's content API commits onto one
+branch from a set of file contents — there is no verb that produces a merge, and
+no way to fake one. A single-parent commit carrying the base's lines looks
+resolved and is not: the merge base has not moved, so the forge still reports
+the pull request as conflicted and the sweep cards it again on the new tip. Do
+not attempt it by reading files out of a second workspace and writing them back.
+Go on to Step 4, and in Step 6's comment say the branch conflicts with
+`<base_ref>`, that this agent cannot merge it, and that a human needs to.
+
+In directory mode, inside the workspace:
 
 ```bash
 cd "<workspace>"
@@ -211,12 +238,22 @@ the same repository Step 1 named). If it reports
 `NO_REQUESTS`, this stage is done — that is the common case, and this sweep
 carded the pull request for the conflict or the CI, not for a comment.
 
-Two things differ because you are inside an update run:
+Three things differ because you are inside an update run:
 
-- **Reuse this run's workspace and lease.** `pr-conversation` sends you to
-  `submit-suggestion` Step 5 for a change request, which begins by leasing a
-  workspace; you already hold one on this branch. Take a second one and the two
-  clones race each other's pushes.
+- **Reuse the workspace Step 2 opened.** `pr-conversation` sends you to
+  `submit-suggestion` Step 5 for a change request, which begins by opening a
+  workspace; you already hold one on this branch. Pass the `handle` you were
+  given in content mode, or the `workspace` and `lease` in directory mode. Open
+  a second and the two checkouts race each other's pushes — and in content mode
+  the second one is opened at the tip as it was before this run's commits, so
+  the race silently drops them.
+- **`--keep-description` on that `submit`, exactly as in Step 3.** Step 5 of
+  `submit-suggestion` offers `--title`/`--body` and `--keep-description` as
+  alternatives, because the skill it belongs to wrote the description it is
+  overwriting. This one did not. Everything Step 3 says about that flag applies
+  here unchanged — the pull request is somebody else's and its description is
+  under human review — and the failure is silent, so nothing downstream will
+  tell you the body was replaced.
 - **Its own commits, on top of the merge.** A reviewer's change and a conflict
   resolution are separate commits, per "one commit per stage" above.
 
@@ -271,8 +308,10 @@ Several red checks usually have one cause; find it before you fix anything. Fix
 the defect the job found, not the job: making a test pass by weakening its
 assertion, marking it skipped, or relaxing a lint rule is not a fix, and if you
 believe the check itself is wrong then say so in Step 6's comment and change
-nothing. Then stage the specific files, commit, and `submit` exactly as Step 3
-does, with one commit for this stage.
+nothing. Then commit and `submit` through `submit-suggestion`, following the
+`mode` Step 2 printed — its Steps 2 and 3 describe both, and Step 3 above is the
+directory-mode shape. One commit for this stage, and `--keep-description` on the
+`submit` for the reason Step 3 gives.
 
 Do not re-run CI and wait for it. The checks take longer than this turn should,
 and the next sweep sees the result: if your fix worked, the pull request is
@@ -294,8 +333,9 @@ EOF
 Say, per stage, what happened: the conflict resolved and how you resolved
 anything non-obvious, the reviewer requests answered or that there were none,
 the check fixed and what was actually wrong with it. Name each commit. Then say
-plainly what you left undone and why — a conflict you would not guess at, a log
-you could not read, a check you believe is wrong. That sentence is the whole
+plainly what you left undone and why — a conflict you would not guess at, a
+conflict you could not merge because Step 2 put you in content mode, a log you
+could not read, a check you believe is wrong. That sentence is the whole
 value of a run that fixed nothing, and it is what the human who eventually looks
 at this branch reads first.
 

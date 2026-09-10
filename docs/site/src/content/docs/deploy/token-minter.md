@@ -79,7 +79,7 @@ Names and values baked into the deployment templates ([`k8s-operator/config/inte
 - **Kubernetes Service / Deployment:** `github-token-minter` (namespace `kubeagents-system`), listening on port `8080` with a `/version` health endpoint.
 - **Image:** substituted from `GITHUB_MINTER_IMAGE`, run as `/minty server run`. The upstream reference and pin live in `images.json`; see the [Docker images](docker-images.md) inventory.
 - **Kubernetes SA:** `kubeagents-github-minter`, Workload-Identity-bound to GSA `kubeagents-github-minter-gsa` (which holds `roles/cloudkms.signerVerifier` on the KMS key).
-- **Scope:** the ConfigMap rule exposes a `platform-agent-scope` scope granting `contents: write`, `pull_requests: write`, and `issues: write`; requests must pass this in the `scope` field.
+- **Scope:** the ConfigMap rule exposes a `platform-agent-scope` scope granting `contents: write`, `pull_requests: write`, `issues: write`, `checks: read`, and `statuses: read`; requests must pass this in the `scope` field. The two reads are what the update-pr sweep needs to see which checks are red on a pull request's head commit; without them the App gets 403 on a private repository and the sweep skips the pull request rather than carding it.
 - The App ID is injected from the `github-app-credentials` Secret, and the KMS key reference (`projects/.../cryptoKeyVersions/<n>`) points at the configured key version (the chart's `githubMinter.kms.keyVersion`), which must be ENABLED — i.e. imported — before the Deployment passes readiness.
 
 ## Manual testing

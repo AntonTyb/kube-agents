@@ -41,24 +41,38 @@ commits first: a mistyped one produces a marker matching nothing, which is the
 same runaway by a slower road.
 
 Both bounds count markers, so they only bind on a run that reaches this
-command. That is why every refusal below, on a run whose commits are already on
-the branch, posts the marker before it exits rather than leaving the thread
+command. That is why every refusal below, on a run that has already moved the
+branch, posts the marker before it exits rather than leaving the thread
 untouched: a pushed branch with no marker spends nothing from the budget while
-minting a fresh tip, and the sweep hands it straight back. "Every" is checked
-by a test that walks the refusals, because the guarantee is worth exactly as
-much as its least-travelled path — an unresolvable ``--pushed`` used to exit
-without a marker, which is the likeliest way to reach one of these at all.
+minting a fresh tip, and the sweep hands it straight back.
 
-Two things it does not cover. Resolving ``--attempted-sha`` itself comes first
-and refuses plainly, because it is what "already on the branch" would be
-measured against; nothing has been posted by then and nothing about the thread
-has changed, so the next tick simply cards the pull request again. The real
-residue is a turn that dies before ``record`` is invoked at all — a reaped
-turn, a crashed container. Those leave a pushed branch unmarked, and the loop
-is bounded there only by whoever notices. Closing it would mean writing the
-marker before the work rather than after, which trades this bound against the
-one ``pr_triggers.updated_head_shas`` chose deliberately: that a crashed turn
-must not park a pull request for good with nothing said to anyone.
+"Has already moved the branch" is read from two signals, both of which are
+answered by the forge's own commit list rather than taken on the caller's word.
+One is commits sitting after ``--attempted-sha``. The other is a ``--pushed``
+value that *resolves* to a commit on the branch, which is what catches a run
+whose ``--attempted-sha`` names the tip it ended on rather than the one it
+started from — there the first signal reads False on a branch that did move.
+The comment at each says why the other cannot see its case. "Every" is checked
+by a test that walks the refusals under both, because the guarantee is worth
+exactly as much as its least-travelled path — an unresolvable ``--pushed`` used
+to exit without a marker, which is the likeliest way to reach one of these at
+all.
+
+Three things it does not cover, and the shape of all three is the same: the
+forge says nothing landed, so there is nothing the marker could honestly name.
+Resolving ``--attempted-sha`` itself comes first and refuses plainly, because
+it is what "already on the branch" would be measured against; nothing has been
+posted by then and nothing about the thread has changed, so the next tick
+simply cards the pull request again. A run that pushed and then described what
+it pushed with a sha the forge cannot resolve is outside it too — the claim is
+contradicted by the branch, and marking on a contradicted claim would park a
+pull request where nothing happened. The real residue is a turn that dies
+before ``record`` is invoked at all — a reaped turn, a crashed container. Those
+leave a pushed branch unmarked, and the loop is bounded there only by whoever
+notices. Closing it would mean writing the marker before the work rather than
+after, which trades this bound against the one
+``pr_triggers.updated_head_shas`` chose deliberately: that a crashed turn must
+not park a pull request for good with nothing said to anyone.
 
 ``record`` also refuses to post a claim it cannot check. ``--pushed`` names a
 commit the run made, and it must be on the pull request and must come after the
@@ -358,6 +372,11 @@ def handle_record(args) -> int:
     # A pushed branch therefore gets its marker whatever else is wrong with the
     # call. That is what §4 of the design means by "a run that could not fix
     # what it found still writes one, so it is not repeated every ten minutes".
+    #
+    # Two independent things say so, and both are needed because each catches
+    # the mistake the other misses. This is the first: the branch is ahead of
+    # `--attempted-sha`, which catches a run that named a stale tip. The second
+    # is set in the `--pushed` loop below, and catches the opposite mistake.
     branch_moved = attempted_at < len(commits) - 1
 
     def refuse(message: str):
@@ -405,6 +424,26 @@ def handle_record(args) -> int:
         # unmarked, which is the unbounded loop this whole block exists to
         # close, and `SKILL.md` tells the model not to retry after a refusal.
         sha, position = _resolve_sha(commits, value, "--pushed", on_fail=refuse)
+
+        # The second signal that the branch has moved, and the one that catches
+        # what the comparison above cannot: `--attempted-sha` naming the tip the
+        # run *ended* on rather than the one it started from. That is the
+        # likelier of the two slips, because it is what `git rev-parse HEAD`
+        # prints after the fix commit. The branch is then not ahead of the sha —
+        # the sha *is* the tip — so `branch_moved` above reads False on a run
+        # that pushed, and the `position <= attempted_at` refusal immediately
+        # below would exit without a marker on the branch that most needs one.
+        #
+        # Resolution is what makes this evidence rather than a claim. A value
+        # that resolved names a commit the forge says is on the branch, so
+        # something is there to account for whatever `--attempted-sha` got
+        # wrong. A value that did not resolve is only an assertion, and on a
+        # branch the forge reports as unmoved it is an assertion the forge
+        # contradicts — marking on that would park a pull request where nothing
+        # landed, which is what `updated_head_shas` refuses to allow. So this is
+        # set after `_resolve_sha` returns and not before it is called.
+        branch_moved = True
+
         if position <= attempted_at:
             # Every commit the agent ever made is on this branch, including the
             # one that opened the pull request, so membership alone would pass

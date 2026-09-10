@@ -639,6 +639,77 @@ class RecordTest(_Harness):
                     f"<!-- agent-updated:{HEAD_SHA} -->", provider.posted[0][1]
                 )
 
+    def test_a_refusal_marks_the_tip_when_attempted_sha_names_the_new_tip(self):
+        """The second signal: a `--pushed` the forge can resolve.
+
+        The walk above fixes `--attempted-sha` at the tip the run started from,
+        so `branch_moved` was carried by "the branch is ahead of that sha" in
+        every one of its cases — a test that only ever exercises one of two
+        signals passes while the other is missing entirely.
+
+        This is the mistake it could not see. `--attempted-sha` wants the tip
+        the run *started* from, but `git rev-parse HEAD` after the fix commit
+        prints the tip it ended on, so a run that names that instead is the
+        likelier of the two slips rather than a stretch. The branch is then not
+        ahead of the sha, because the sha *is* the tip, and the comparison alone
+        reads False on a run that pushed — every refusal here exits silently, on
+        precisely the branch the marker exists to bound. `--pushed FIX_SHA` is
+        the reproduction: a run that pushed one commit and named it in both
+        arguments.
+
+        The marker names `attempted_sha`, which on this path is also the head,
+        so it is the sha `updated_head_shas` will match.
+        """
+        cases = {
+            "--pushed is the attempted sha": ("--pushed", FIX_SHA),
+            "--pushed predates the run": ("--pushed", BASE_SHA),
+        }
+        for label, extra in cases.items():
+            with self.subTest(refusal=label):
+                provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+                rc, _, _ = self.record(provider, sha=FIX_SHA, extra=extra)
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(provider.posted), 1, label)
+                self.assertIn(
+                    f"<!-- agent-updated:{FIX_SHA} -->", provider.posted[0][1]
+                )
+
+        # Once one value has resolved, the branch is known to have moved for
+        # every refusal after it — including the body ones, which are reached
+        # through `SystemExit` rather than through `on_fail`.
+        provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+        rc, _, _ = self.record(
+            provider,
+            sha=FIX_SHA,
+            extra=("--pushed", FIX_SHA),
+            body=os.path.join(self.scratch, "absent.md"),
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(provider.posted), 1)
+        self.assertIn(f"<!-- agent-updated:{FIX_SHA} -->", provider.posted[0][1])
+
+    def test_an_unresolvable_pushed_sha_on_an_unmoved_tip_posts_nothing(self):
+        """The boundary of the second signal, pinned so it is not widened.
+
+        Signal two is a `--pushed` value the forge *resolved*, not a `--pushed`
+        argument having been given. The distinction is the whole difference
+        between the two tests above: a value that resolved names a commit the
+        branch really carries, while one that did not is an assertion the
+        branch contradicts. Widening it to "was `--pushed` passed at all" makes
+        every mistyped sha park a pull request that nothing was ever pushed to,
+        which is the failure `updated_head_shas` is built to refuse — and it
+        would pass the test above, so nothing else here would catch it.
+        """
+        for value in ("cc1", "9" * 40):
+            with self.subTest(pushed=value):
+                provider = FakeProvider(commits=COMMITS_AFTER_FIX)
+                rc, _, err = self.record(
+                    provider, sha=FIX_SHA, extra=("--pushed", value)
+                )
+                self.assertEqual(rc, 1)
+                self.assertEqual(provider.posted, [])
+                self.assertIn("Nothing was posted", err)
+
     def test_an_unresolvable_attempted_sha_is_the_stated_exception(self):
         """It is what "the branch has moved" would be measured against.
 

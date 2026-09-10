@@ -86,13 +86,37 @@ wrong trade here: it rewrites the commits under review, which detaches every inl
 from the line it was written against. An extra merge commit on a branch that is about to be
 squash-merged costs nothing by comparison.
 
+### Stage 1 does not run in content mode
+
+The merge needs a git checkout the agent can run `git merge` in, and on a current install it does
+not have one. `submit-suggestion prepare` takes content mode whenever the broker offers it, the
+operator renders `CREDENTIAL_PROXY_CONTENT_WORKSPACE=1` on every broker with no field to turn it
+off, and content mode hands back a handle rather than a leased directory. What the broker exposes
+over that handle is `read`, `list`, `grep`, `commit` and `push` — `commit` applies a set of file
+contents to one branch, so every commit it can make has one parent. A merge has two.
+
+Faking it is worse than skipping it, which is why the skill forbids the attempt rather than leaving
+it to judgement: a single-parent commit carrying the base's lines resolves the textual difference
+but not the merge base, so the forge still reports `mergeable: false`, and the sweep cards the pull
+request again on a tip that now also has an agent commit on it. So stage 1 in content mode reports
+the conflict in Step 6's comment and leaves it for a human. Stages 2 and 3 are unaffected — both
+push through `submit-suggestion`, which implements content mode natively.
+
+Closing this properly means a merge verb on the broker, where the full clone with both refs already
+is; the conflict round-trip that verb needs is a design of its own and not part of this one.
+
 ### Stage 2 delegates rather than reimplements
 
 Reviewer comments already have a skill, a policy layer, and a set of bounds — who may direct the
 agent, what counts as addressing it, how many refusals one pull request may draw. Stage 2 is
-therefore `pr-conversation`'s procedure run in full, from inside the update run's own workspace
-lease. A second implementation of that gate would be a second copy of it that drifts, and a budget
-each caller kept its own copy of would be a budget the second caller could spend again.
+therefore `pr-conversation`'s procedure run in full, from inside the workspace the update run
+already opened — its handle in content mode, its lease in directory mode. Delegating in full has
+one edge the skill has to name: `submit-suggestion`'s submit step rewrites the pull request's title
+and body by default, which is right for the skill that wrote them and wrong here, where the
+description belongs to whoever opened the pull request and is under review. Stage 2 passes
+`--keep-description` for the same reason stage 1 does. A second implementation of that gate would
+be a second copy of it that drifts, and a budget each caller kept its own copy of would be a budget
+the second caller could spend again.
 
 This creates the one piece of cross-sweep state in the watcher: `pr_updates` runs first and **claims**
 the pull requests it cards, and `pr_comments` skips anything claimed. Without the claim, a pull
@@ -165,14 +189,25 @@ key carries the sha rather than only the hour, so it mints straight away. Nothin
 claim in §3 means the reviewer on that branch is not answered either.
 
 `record` therefore writes the marker on every refusal that comes after the push — a `--pushed` sha
-that predates the run or will not resolve, a commit nobody declared, an unreadable body — rather
-than exiting with the thread untouched. The comment says what went wrong, which is the same thing
-§4 above asks of a run that could not fix what it found. `test_update_pr.py` walks the refusal
-paths and asserts it, because "every" is the kind of claim a later branch quietly falsifies.
+that predates the run, a commit nobody declared, an unreadable body — rather than exiting with the
+thread untouched. The comment says what went wrong, which is the same thing §4 above asks of a run
+that could not fix what it found. `test_update_pr.py` walks the refusal paths and asserts it,
+because "every" is the kind of claim a later branch quietly falsifies.
 
-One refusal is outside that rule by construction: an `--attempted-sha` that does not resolve. It is
-the anchor the others are measured against, so until it resolves there is no way to tell whether
-the branch moved, and no sha to write a marker for.
+"After the push" is decided from the forge's commit list, never from the caller's word for it, and
+it takes two signals rather than one. Commits sitting after `--attempted-sha` is the obvious one.
+The second is a `--pushed` value that resolves to a commit on the branch, and it is there because
+`--attempted-sha` wants the tip the run _started_ from while `git rev-parse HEAD` after the fix
+commit prints the tip it ended on. A run that passes the latter leaves the branch not ahead of the
+sha it named — the sha is the tip — so the first signal alone reads "unmoved" on a branch that
+moved, and every refusal exits silently on exactly the branch the marker exists to bound.
+
+Two refusals stay outside the rule, both because the forge says nothing landed and so there is
+nothing a marker could honestly name. An `--attempted-sha` that does not resolve is the anchor the
+others are measured against, so until it resolves there is no way to tell whether the branch moved,
+and no sha to write a marker for. A `--pushed` that does not resolve is a claim the branch
+contradicts; marking on it would park a pull request nothing was ever pushed to, which is the
+failure the per-tip bound exists to avoid rather than to cause.
 
 What that leaves is a turn reaped or crashed before `record` is invoked at all. It stays unbounded,
 and the reason it is not fixed the obvious way — writing the marker before the work — is that doing
