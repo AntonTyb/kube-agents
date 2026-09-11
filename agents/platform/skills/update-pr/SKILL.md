@@ -223,6 +223,14 @@ you to reproduce a multi-kilobyte markdown document byte-for-byte, nothing
 checks the result, and the loss is silent. `--keep-description` requires the
 pull request to already be open, which by construction it is.
 
+**Stages 2 and 3 keep `--title` in content mode.** This stage is directory-only,
+so the call above never needs one, but the two stages that do run in content
+mode do: there `submit-suggestion` makes the commit itself and `--title` is its
+message rather than the pull request's headline, so it refuses without one. Pass
+a Conventional Commit subject for that stage's commit. The description on the
+pull request is left as its author wrote it either way — that is what the flag
+does, and a title passed alongside it does not reach the pull request.
+
 Record the commit sha — `git rev-parse HEAD` — for Step 6.
 
 ### Step 4: Stage 2 — the reviewers
@@ -248,12 +256,12 @@ Three things differ because you are inside an update run:
   the second one is opened at the tip as it was before this run's commits, so
   the race silently drops them.
 - **`--keep-description` on that `submit`, exactly as in Step 3.** Step 5 of
-  `submit-suggestion` offers `--title`/`--body` and `--keep-description` as
+  `submit-suggestion` offers `--title`/`--body-file` and `--keep-description` as
   alternatives, because the skill it belongs to wrote the description it is
   overwriting. This one did not. Everything Step 3 says about that flag applies
-  here unchanged — the pull request is somebody else's and its description is
-  under human review — and the failure is silent, so nothing downstream will
-  tell you the body was replaced.
+  here unchanged, content mode's `--title` included — the pull request is
+  somebody else's and its description is under human review — and the failure is
+  silent, so nothing downstream will tell you the body was replaced.
 - **Its own commits, on top of the merge.** A reviewer's change and a conflict
   resolution are separate commits, per "one commit per stage" above.
 
