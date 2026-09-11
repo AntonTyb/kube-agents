@@ -1986,3 +1986,172 @@ func TestA2AConfigHashRollsOnCredentialRepair(t *testing.T) {
 		t.Errorf("a credential rotation did not roll the bus: hash stayed %q", before)
 	}
 }
+
+// TestSeedGrantsAndProvisionScriptNameTheSameStreams pins the pair. seed's
+// $JS.API allow-list renders from a2aProvisionedStreams; the provision script
+// does NOT -- each create line there carries its own subjects, retention and
+// caps, so the script names the streams itself. This is what holds the two
+// spellings together, in both directions.
+//
+// The failure it prevents is quiet in the worst way: a stream added to the
+// script but not the grant makes provisioning hang on a refused API request
+// until the Job's backoff gives up, and the install comes up with a healthy bus
+// and a missing stream. That is the exact shape of #1259 — a provisioning step
+// that fails without the render looking wrong.
+func TestSeedGrantsAndProvisionScriptNameTheSameStreams(t *testing.T) {
+	script := a2aProvisionScript(a2aTestAgent())
+
+	for _, s := range a2aProvisionedStreams {
+		// Anchor to the create itself, not to the bare name: the script's prose
+		// mentions every bucket by name in a comment block, so a token match
+		// stayed green with the `kv add` line deleted. Only a create counts.
+		create := "stream add " + s + " "
+		if bare, isKV := strings.CutPrefix(s, "KV_"); isKV {
+			create = "kv add " + bare + " "
+		}
+		if !strings.Contains(script, create) {
+			t.Errorf("a2aProvisionedStreams names %q but the provision script has no %q; "+
+				"the grant permits a stream nothing creates", s, strings.TrimSpace(create))
+		}
+		for _, verb := range []string{"CREATE", "INFO"} {
+			want := "$JS.API.STREAM." + verb + "." + s
+			if !slices.Contains(a2aSeedJetStreamGrants(), want) {
+				t.Errorf("seed grant is missing %q", want)
+			}
+		}
+	}
+
+	// The other direction: every `stream add` / `kv add` in the script must be
+	// covered by the list, or provisioning breaks on a refusal.
+	for _, line := range strings.Split(script, "\n") {
+		for _, verb := range []string{"stream add ", "kv add "} {
+			idx := strings.Index(line, verb)
+			if idx < 0 {
+				continue
+			}
+			name := strings.Fields(line[idx+len(verb):])[0]
+			if verb == "kv add " {
+				name = "KV_" + name
+			}
+			if !slices.Contains(a2aProvisionedStreams, name) {
+				t.Errorf("the provision script creates %q, which a2aProvisionedStreams does not name, "+
+					"so seed has no grant for it and the create will be refused", name)
+			}
+		}
+	}
+}
+
+// TestSeedHoldsNoWholesaleJetStreamAPI is a shape check, and only that — it reads
+// the rendered config rather than asking a server, so it cannot prove a refusal.
+// The refusal proof is the live validation in the PR body: seed denied on
+// STREAM.PURGE against the running install, and the provision Job still
+// completing. This test exists to keep the wildcard from coming back by accident.
+//
+// It asks two questions, neither by substring. The first version of this test
+// scanned seed's block for seven banned strings, and `$JS.API.STREAM.>` — which
+// grants PURGE, DELETE, MSG.DELETE, RESTORE and UPDATE on every stream — contains
+// none of them; the web user's test in this file records the same lesson.
+//
+//  1. The publish allow-list is pinned exactly: the three starter topics, the
+//     grants a2aSeedJetStreamGrants renders, and seed's own inbox. Any other
+//     entry, in any spelling, is a diff.
+//  2. Every route architecture A3's write-surface enumeration calls an
+//     identity-forgery grant — a concrete subject per verb, on a provisioned
+//     stream — is run through subjectMatches against every rendered entry,
+//     including the ones a2aSeedJetStreamGrants produced. That is the question
+//     the server asks, so a wildcard cannot grant a route without naming it.
+func TestSeedHoldsNoWholesaleJetStreamAPI(t *testing.T) {
+	conf := string(buildA2ANATSConfigSecret(a2aTestAgent(), a2aTestCreds()).Data["nats.conf"])
+
+	// Seed's publish allow-list exactly, not the span to the next user: the
+	// following block's explanatory comment names grants of its own, and a
+	// sloppier cut reads them as seed's. It did, on this test's first run.
+	start := strings.Index(conf, "user: seed")
+	if start < 0 {
+		t.Fatal("no seed user in the rendered config")
+	}
+	openIdx := strings.Index(conf[start:], "publish { allow = [")
+	if openIdx < 0 {
+		t.Fatal("seed has no publish allow-list")
+	}
+	openIdx += start
+	closeIdx := strings.Index(conf[openIdx:], "] }")
+	if closeIdx < 0 {
+		t.Fatal("seed's publish allow-list is unterminated")
+	}
+	var got []string
+	for _, line := range strings.Split(conf[openIdx:openIdx+closeIdx], "\n") {
+		line = strings.TrimSuffix(strings.TrimSpace(line), ",")
+		if strings.HasPrefix(line, `"`) {
+			got = append(got, strings.Trim(line, `"`))
+		}
+	}
+
+	want := []string{
+		"a2a.topics.agent.platform.upgrade-readiness",
+		"a2a.topics.shared.blueprint",
+		"a2a.topics.shared.annotations",
+	}
+	want = append(want, a2aSeedJetStreamGrants()...)
+	want = append(want, "_INBOX.seed.>")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("seed publish allow-list changed.\n got: %q\nwant: %q", got, want)
+	}
+
+	// Every forbidden verb against every provisioned stream, not one sample
+	// each. A named grant only widens the stream it names, so a verb sampled
+	// on TASKS says nothing about the same verb on DIRECTORY -- adding
+	// $JS.API.STREAM.PURGE.TASKS to the grants passed a one-sample-per-verb
+	// list, because PURGE was only ever asked about TOPICS-JOURNAL.
+	forbiddenVerbs := []string{
+		"$JS.API.STREAM.RESTORE.",
+		"$JS.API.STREAM.MSG.DELETE.",
+		"$JS.API.STREAM.MSG.GET.",
+		"$JS.API.STREAM.PURGE.",
+		"$JS.API.STREAM.DELETE.",
+		"$JS.API.STREAM.UPDATE.",
+		"$JS.API.STREAM.SNAPSHOT.",
+	}
+	var forbidden []string
+	for _, s := range a2aProvisionedStreams {
+		for _, verb := range forbiddenVerbs {
+			forbidden = append(forbidden, verb+s)
+		}
+		forbidden = append(forbidden,
+			"$JS.API.CONSUMER.CREATE."+s+".x",
+			"$JS.API.CONSUMER.DURABLE.CREATE."+s+".x",
+			"$JS.API.DIRECT.GET."+s+".a2a.topics.shared.blueprint",
+		)
+	}
+	// Plus a stream nobody provisions: the CREATE and INFO grants are the two
+	// verbs seed legitimately holds, so they are only safe while they stay
+	// bound to names on the list.
+	forbidden = append(forbidden,
+		"$JS.API.STREAM.CREATE.NOT-PROVISIONED",
+		"$JS.API.STREAM.INFO.NOT-PROVISIONED",
+	)
+	for _, subject := range forbidden {
+		for _, grant := range got {
+			if subjectMatches(grant, subject) {
+				t.Errorf("seed grant %q permits %q; provisioning does not use it", grant, subject)
+			}
+		}
+	}
+
+	// The other direction, and the one a forbidden list cannot cover: a new
+	// entry inside a2aSeedJetStreamGrants is invisible to the DeepEqual above,
+	// since want is built from that same function. So bound the shape instead.
+	// Anything that is not account discovery or a listed stream's CREATE/INFO
+	// is a grant that has to be argued for here rather than added quietly.
+	allowedShapes := map[string]bool{"$JS.API.INFO": true, "$JS.API.STREAM.NAMES": true}
+	for _, s := range a2aProvisionedStreams {
+		allowedShapes["$JS.API.STREAM.CREATE."+s] = true
+		allowedShapes["$JS.API.STREAM.INFO."+s] = true
+	}
+	for _, grant := range a2aSeedJetStreamGrants() {
+		if !allowedShapes[grant] {
+			t.Errorf("seed holds JetStream API grant %q, which is neither account discovery "+
+				"nor CREATE/INFO on a provisioned stream", grant)
+		}
+	}
+}
