@@ -34,7 +34,7 @@ Minty's rule ConfigMap is mounted in-container at `/etc/minty/<GITHUB_ORG>`. A s
 ### GitHub App
 
 1. Create a new GitHub App, owned either by the organization or by your personal account.
-2. Assign permissions: `Contents: Read & write`, `Pull requests: Read & write`, `Issues: Read & write`.
+2. Assign permissions: `Contents: Read & write`, `Pull requests: Read & write`, `Issues: Read & write`, `Checks: Read-only`, `Commit statuses: Read-only`. The two read-only ones are what the update-pr sweep needs to see which checks are red; a token can only carry what the App holds, so granting them here is what makes the `checks: read` and `statuses: read` in the scope below mean anything.
 3. Note the **App ID**.
 4. Generate and download a **private key** (`.pem` file).
 5. Install the App on the target GitOps repo.
