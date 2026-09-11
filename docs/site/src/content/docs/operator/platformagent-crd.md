@@ -234,8 +234,10 @@ Sizing notes: `maxTurns` is consumed mostly by repository exploration, so scale 
 the agent has to read rather than how complex the request is. `apiMaxRetries` exists because
 Hermes' default of `3` assumes an interactive session where a human retries; a background worker
 has nobody to retry it, so a transient burst of upstream 429s or 503s simply ends the run. Raising
-`maxTurns` interacts with `maxInProgress`: a long-running worker holds its slot for the whole task
-and there are only `maxInProgress` of them, so raising one is a reason to reconsider the other.
+`maxTurns` interacts with `maxInProgress`: a worker doing the work holds its slot for the whole
+task and there are only `maxInProgress` of them, so raising one is a reason to reconsider the other.
+A coordinator waiting on work it fanned out is the exception — see
+[why dispatch is capped](#why-dispatch-is-capped-by-default).
 
 #### Why dispatch is capped by default
 
@@ -255,6 +257,12 @@ hold on the smallest pod anyone runs, and because the cost of being wrong is asy
 delays a delegated task, too high loses it silently. Raise it once you know your worker footprint
 and your model quota — that quota is the other shared resource, and for most deployments it binds
 before memory does.
+
+The cap counts running cards, not resident processes, and one case makes those differ: a coordinator
+waiting on work it fanned out is discounted, or it would hold the slot its own children need
+([`kanban_scheduling.py`](https://github.com/gke-labs/kube-agents/blob/main/deploy/docker/patches/kanban_scheduling.py)).
+Peak memory is therefore the cap plus however many coordinators are waiting, held down by the
+dispatcher's memory-pressure guard rather than by this number.
 
 ### `spec.harness.experimental`
 
